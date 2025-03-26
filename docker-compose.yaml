@@ -1,0 +1,10 @@
+services:
+  crawler:
+    build: ./Crawler
+    container_name: crawler_service
+    tty: true
+    stdin_open: true
+    volumes:
+      - ./Crawler:/app       # 👈 Montage en volume du dossier source
+      - ./shared:/app/shared # Pour les fichiers partagés
+    working_dir: /app
