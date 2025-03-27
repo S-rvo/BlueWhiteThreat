@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: votre-nom/web:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MONGO_URI
+              value: "mongodb://mongodb-service:27017/web_crawler_db"
+            - name: ELASTICSEARCH_HOST
+              value: "http://elasticsearch-service:9200"
+            - name: REDIS_HOST
+              value: "redis-service:6379"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi

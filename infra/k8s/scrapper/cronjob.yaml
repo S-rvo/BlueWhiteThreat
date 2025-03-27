@@ -1,0 +1,21 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scraper
+spec:
+  schedule: "0 */2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: scraper
+              image: votre-nom/scraper:latest
+              env:
+                - name: MONGO_URI
+                  value: "mongodb://mongodb-service:27017/cti_scraper_db"
+                - name: ELASTICSEARCH_HOST
+                  value: "http://elasticsearch-service:9200"
+                - name: REDIS_HOST
+                  value: "redis-service:6379"
+          restartPolicy: OnFailure
