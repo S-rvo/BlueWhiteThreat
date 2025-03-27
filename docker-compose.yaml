@@ -1,0 +1,12 @@
+services:
+  crawler:
+    build:
+      context: ./Crawler
+      dockerfile: Dockerfile.dev
+    container_name: crawler_service
+    tty: true
+    stdin_open: true
+    volumes:
+      - ./Crawler:/app
+    working_dir: /app
+    command: tail -f /dev/null
