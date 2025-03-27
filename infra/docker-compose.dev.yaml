@@ -1,7 +1,7 @@
 services:
   crawler:
     build:
-      context: ./Crawler
+      context: ./app/crawler
       dockerfile: Dockerfile.dev
     container_name: crawler_service
     tty: true

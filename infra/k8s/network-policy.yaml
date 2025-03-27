@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: restrict-inbound
+spec:
+  podSelector:
+    matchLabels:
+      app: crawler # Applique aussi au scraper avec ajustement
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: [] # Aucun trafic entrant autorisé
+  egress:
+    - to: # Autorise le trafic sortant vers Internet
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    - to: # Autorise l’accès à MongoDB
+        - podSelector:
+            matchLabels:
+              app: mongodb
+      ports:
+        - protocol: TCP
+          port: 27017
