@@ -1,12 +1,32 @@
 services:
+  tor:
+    image: dperson/torproxy
+    container_name: tor
+    restart: always
+    command: "-a"  # autoriser le proxy ouvert à d'autres conteneurs
+    ports:
+      - "9050:9050"
+    networks:
+      - tor_net
+
   crawler:
     build:
       context: ./Crawler
       dockerfile: Dockerfile.dev
-    container_name: crawler_service
+    container_name: go-crawler
     tty: true
     stdin_open: true
+    depends_on:
+      - tor
+    networks:
+      - tor_net
+    environment:
+      - TOR_PROXY=socks5://tor:9050
     volumes:
       - ./Crawler:/app
     working_dir: /app
     command: tail -f /dev/null
+
+networks:
+  tor_net:
+    driver: bridge
