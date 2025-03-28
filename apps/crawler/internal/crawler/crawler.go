@@ -2,15 +2,14 @@ package crawler
 
 import (
 	"fmt"
-	"io"
-	"log"
 	"net/http"
-	"os"
+	"net/url"
 
-	"github.com/gocolly/colly/v2"
-	"golang.org/x/net/proxy"
+	"github.com/gocolly/colly"
+	"github.com/gocolly/colly/proxy"
 )
 
+/*
 func TorClient() (string, error) {
 	proxyAddr := os.Getenv("TOR_PROXY")
 	if proxyAddr == "" {
@@ -39,32 +38,61 @@ func TorClient() (string, error) {
 
 	return string(body), nil
 }
+*/
 
-func scrapper() {
-	url := "http://6nhmgdpnyoljh5uzr5kwlatx2u3diou4ldeommfxjz3wkhalzgjqxzqd.onion/" // Remplace par l'URL cible
+func Crawler() ([]string, []string, int, error) {
+	c := colly.NewCollector()
 
-	// Crée un nouveau collecteur
-	c := colly.NewCollector(
-		colly.AllowedDomains("http://6nhmgdpnyoljh5uzr5kwlatx2u3diou4ldeommfxjz3wkhalzgjqxzqd.onion/"), // à adapter si nécessaire
-	)
+	proxyList := []string{
+		"socks5://172.18.0.2:9050",
+	}
 
-	var links []string
+	rp, err := proxy.RoundRobinProxySwitcher(proxyList...)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 
-	// Callback sur chaque lien trouvé
+	c.SetProxyFunc(func(req *http.Request) (*url.URL, error) {
+		proxyURL, err := rp(req)
+		if err == nil {
+			fmt.Println("🛡️  Proxy utilisé :", proxyURL.String())
+		}
+		return proxyURL, err
+	})
+
+	var visitedUrls []string
+	var foundLinks []string
+	var statusCode int
+
+	c.OnRequest(func(r *colly.Request) {
+		fmt.Println("🌐 Envoi de la requête vers :", r.URL.String())
+		visitedUrls = append(visitedUrls, r.URL.String())
+	})
+
+	c.OnResponse(func(r *colly.Response) {
+		statusCode = r.StatusCode
+		fmt.Println("📥 Statut HTTP :", r.StatusCode)
+	})
+
+	// 🔍 Extraction des liens <a href="...">
 	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
 		link := e.Attr("href")
-		links = append(links, link)
-		fmt.Println("Lien trouvé :", link)
+		absLink := e.Request.AbsoluteURL(link)
+		fmt.Printf("🔗 Lien trouvé: %q -> %s\n", e.Text, absLink)
+
+		// Ajouter au tableau si non vide
+		if absLink != "" {
+			foundLinks = append(foundLinks, absLink)
+		}
+
+		// (Optionnel) Visite automatique des liens internes
+		// c.Visit(absLink)
 	})
 
-	// Callback en cas d'erreur
-	c.OnError(func(_ *colly.Response, err error) {
-		log.Println("Erreur lors du scraping :", err)
-	})
-
-	// Lance la visite
-	err := c.Visit(url)
+	err = c.Visit("http://6nhmgdpnyoljh5uzr5kwlatx2u3diou4ldeommfxjz3wkhalzgjqxzqd.onion") // page HTML simple avec liens
 	if err != nil {
-		log.Fatal("Échec de la visite :", err)
+		return visitedUrls, foundLinks, statusCode, err
 	}
+
+	return visitedUrls, foundLinks, statusCode, nil
 }
