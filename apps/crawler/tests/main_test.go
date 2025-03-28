@@ -6,10 +6,13 @@ import (
 	crawler "github.com/S-rvo/BlueWhiteThreat/internal"
 )
 
-func TestHelloString(t *testing.T) {
-	got := crawler.Hello()
-	want := "Hello world"
-	if got != want {
-		t.Errorf("Hello() = %q; want %q", got, want)
+func TestStatus200Ok(t *testing.T) {
+	status, err := crawler.TorClient()
+	if err != nil {
+		t.Fatalf("TorClient() returned error: %v", err)
+	}
+	want := "200 OK"
+	if status != want {
+		t.Errorf("TorClient() = %q; want %q", status, want)
 	}
 }

@@ -7,5 +7,11 @@ import (
 )
 
 func main() {
-	fmt.Println(crawler.Hello())
+	content, err := crawler.TorClient()
+	if err != nil {
+		fmt.Println("Erreur:", err)
+		return
+	}
+	fmt.Println("Réponse via Tor:")
+	fmt.Println(content)
 }
