@@ -236,3 +236,285 @@ Intégration externe
     API pour l'intégration avec des outils SOAR
     Enrichissement automatique avec des sources OSINT
     Export au format STIX/TAXII pour le partage standardisé de CTI
+
+## Dans kube
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│                        Kubernetes Cluster                                 │
+│                                                                           │
+│  ┌─────────────────────────┐       ┌─────────────────────────┐            │
+│  │   Namespace: ingress    │       │ Namespace: monitoring   │            │
+│  │                         │       │                         │            │
+│  │  ┌───────────────────┐  │       │  ┌──────────────────┐   │            │
+│  │  │ Ingress Controller│  │       │  │ Prometheus       │   │            │
+│  │  └───────────────────┘  │       │  └──────────────────┘   │            │
+│  │  ┌───────────────────┐  │       │  ┌──────────────────┐   │            │
+│  │  │ Cert-Manager      │  │       │  │ Grafana          │   │            │
+│  │  └───────────────────┘  │       │  └──────────────────┘   │            │
+│  └─────────────────────────┘       │  ┌──────────────────┐   │            │
+│                                    │  │ Alert Manager    │   │            │
+│                                    │  └──────────────────┘   │            │
+│                                    └─────────────────────────┘            │
+│                                                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │                     Namespace: cti-darkweb                          │  │
+│  │                                                                     │  │
+│  │  ┌───────────────────┐  ┌───────────────────┐  ┌─────────────────┐  │  │
+│  │  │ StatefulSet:      │  │ StatefulSet:      │  │ StatefulSet:    │  │  │
+│  │  │ redis             │  │ mongodb           │  │ elasticsearch   │  │  │
+│  │  │                   │  │                   │  │                 │  │  │
+│  │  │ ┌─────────────┐   │  │ ┌─────────────┐   │  │ ┌─────────────┐ │  │  │
+│  │  │ │ Redis Master│   │  │ │ MongoDB     │   │  │ │ ES Master   │ │  │  │
+│  │  │ └─────────────┘   │  │ │ Primary     │   │  │ └─────────────┘ │  │  │
+│  │  │ ┌─────────────┐   │  │ └─────────────┘   │  │ ┌─────────────┐ │  │  │
+│  │  │ │Redis Replica│   │  │ ┌─────────────┐   │  │ │ ES Data     │ │  │  │
+│  │  │ └─────────────┘   │  │ │ MongoDB     │   │  │ └─────────────┘ │  │  │
+│  │  │                   │  │ │ Secondary   │   │  │                 │  │  │
+│  │  └───────────────────┘  │ └─────────────┘   │  └─────────────────┘  │  │
+│  │                         └───────────────────┘                       │  │
+│  │                                                                     │  │
+│  │  ┌───────────────────┐                      ┌───────────────────┐   │  │
+│  │  │ Deployment:       │                      │ Deployment:       │   │  │
+│  │  │ crawler           │                      │ filter            │   │  │
+│  │  │                   │                      │                   │   │  │
+│  │  │ ┌─────────────┐   │                      │ ┌─────────────┐   │   │  │
+│  │  │ │ Crawler Pod │   │                      │ │ Filter Pod  │   │   │  │
+│  │  │ │             │◄──┼──────────────────────┼─►             │   │   │  │
+│  │  │ └─────────────┘   │                      │ └─────────────┘   │   │  │
+│  │  │ ┌─────────────┐   │                      │ ┌─────────────┐   │   │  │
+│  │  │ │ Crawler Pod │   │                      │ │ Filter Pod  │   │   │  │
+│  │  │ │             │◄──┼──────────────────────┼─►             │   │   │  │
+│  │  │ └─────────────┘   │                      │ └─────────────┘   │   │  │
+│  │  │ ┌─────────────┐   │                      │ ┌─────────────┐   │   │  │
+│  │  │ │ Crawler Pod │   │                      │ │ Filter Pod  │   │   │  │
+│  │  │ │             │◄──┼──────────────────────┼─►             │   │   │  │
+│  │  │ └─────────────┘   │                      │ └─────────────┘   │   │  │
+│  │  └───────────────────┘                      └───────────────────┘   │  │
+│  │                                                                     │  │
+│  │  ┌───────────────────┐  ┌───────────────────┐  ┌─────────────────┐  │  │
+│  │  │ Deployment:       │  │ Deployment:       │  │ Deployment:     │  │  │
+│  │  │ api-backend       │  │ frontend          │  │ tor-proxy       │  │  │
+│  │  │                   │  │                   │  │                 │  │  │
+│  │  │ ┌─────────────┐   │  │ ┌─────────────┐   │  │ ┌─────────────┐ │  │  │
+│  │  │ │ API Pod     │   │  │ │ Frontend    │   │  │ │ TOR Pod     │ │  │  │
+│  │  │ │             │   │  │ │ Pod         │   │  │ │             │ │  │  │
+│  │  │ └─────────────┘   │  │ └─────────────┘   │  │ └─────────────┘ │  │  │
+│  │  │ ┌─────────────┐   │  │ ┌─────────────┐   │  │ ┌─────────────┐ │  │  │
+│  │  │ │ API Pod     │   │  │ │ Frontend    │   │  │ │ TOR Pod     │ │  │  │
+│  │  │ │             │   │  │ │ Pod         │   │  │ │             │ │  │  │
+│  │  │ └─────────────┘   │  │ └─────────────┘   │  │ └─────────────┘ │  │  │
+│  │  └───────────────────┘  └───────────────────┘  └─────────────────┘  │  │
+│  │                                                                     │  │
+│  │  ┌─────────────────────────┐  ┌───────────────────────────────┐     │  │
+│  │  │ ConfigMap:              │  │ Secrets:                      │     │  │
+│  │  │ - crawler-config        │  │ - mongodb-credentials         │     │  │
+│  │  │ - filter-config         │  │ - redis-credentials           │     │  │
+│  │  │ - api-config            │  │ - elasticsearch-credentials   │     │  │
+│  │  └─────────────────────────┘  │ - api-keys                    │     │  │
+│  │                               └───────────────────────────────┘     │  │
+│  │                                                                     │  │
+│  │  ┌─────────────────────────┐  ┌───────────────────────────────┐     │  │
+│  │  │ HPA (HorizontalPodAuto- │  │ NetworkPolicies:              │     │  │
+│  │  │ scaler):                │  │ - restrict-crawler-egress     │     │  │
+│  │  │ - crawler-hpa           │  │ - protect-database-access     │     │  │
+│  │  │ - filter-hpa            │  │ - isolate-tor-network         │     │  │
+│  │  │ - api-hpa               │  └───────────────────────────────┘     │  │
+│  │  └─────────────────────────┘                                        │  │
+│  │                                                                     │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│                                                                           │
+│  ┌─────────────────────────┐        ┌─────────────────────────┐           │
+│  │ PersistentVolumes:      │        │ Services:               │           │
+│  │ - mongodb-data          │        │ - redis-service         │           │
+│  │ - elasticsearch-data    │        │ - mongodb-service       │           │
+│  │ - redis-data            │        │ - elasticsearch-service │           │
+│  │                         │        │ - crawler-service       │           │
+│  └─────────────────────────┘        │ - filter-service        │           │
+│                                     │ - api-service           │           │
+│                                     │ - frontend-service      │           │
+│                                     │ - tor-proxy-service     │           │
+│                                     └─────────────────────────┘           │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+### Détails des composants Kubernetes
+
+Namespace: cti-darkweb
+
+Espace isolé pour tous les composants de la solution CTI Darkweb.
+StatefulSets
+
+redis
+
+    Service de file d'attente prioritaire et cache
+    Configuration en mode maître-réplique pour haute disponibilité
+    Volume persistant pour les données
+    Exposition de service uniquement en interne
+
+mongodb
+
+    Stockage persistant des données CTI structurées
+    Configuration avec réplication pour redondance
+    Volumes persistants pour les données
+    Sauvegardes automatisées via CronJob
+
+elasticsearch
+
+    Indexation et recherche avancée des données CTI
+    Cluster avec nœuds maître et de données
+    Volumes persistants pour les index
+    Configuration optimisée pour les recherches textuelles
+
+#### Deployments
+
+crawler
+
+    Pods scalables pour le crawling du darkweb
+    Tous les pods passent par le service tor-proxy
+    AutoScaling basé sur la taille de la file d'attente
+    Limites de ressources ajustées pour éviter la surconsommation
+    Affinité avec les nœuds disposant de plus de bande passante
+
+filter
+
+    Pods scalables pour l'analyse et le filtrage du contenu
+    AutoScaling basé sur la charge CPU/mémoire
+    Optimisé pour le traitement parallèle de données
+    Récupère le contenu des crawlers via un service interne
+
+tor-proxy
+
+    Service dédié pour gérer les connexions TOR
+    Rotation automatique des circuits
+    Isolation réseau stricte
+    Exposition d'un proxy SOCKS accessible uniquement aux crawlers
+
+api-backend
+
+    Service API RESTful pour accéder aux données CTI
+    Authentification et autorisation via JWT
+    Rate limiting pour éviter les abus
+    Cache Redis pour les requêtes fréquentes
+
+frontend
+
+    Interface utilisateur pour analyser les données CTI
+    Servie via NGINX
+    Build statique pour performance optimale
+    Configuration via ConfigMap
+
+Services
+
+redis-service
+
+    ClusterIP pour accès interne uniquement
+    Points d'accès pour les fonctions queue et cache
+
+mongodb-service
+
+    ClusterIP pour accès interne uniquement
+    Accès séparé pour lecture/écriture
+
+elasticsearch-service
+
+    ClusterIP pour accès interne uniquement
+    Points d'accès pour recherche et indexation
+
+crawler-service
+
+    ClusterIP pour accès interne uniquement
+    Service de découverte pour les crawlers
+
+filter-service
+
+    ClusterIP pour accès interne uniquement
+    Point d'entrée pour les données à analyser
+
+api-service
+
+    Service exposé via Ingress
+    Sécurisé avec TLS
+
+frontend-service
+
+    Service exposé via Ingress
+    Sécurisé avec TLS
+
+tor-proxy-service
+
+    ClusterIP pour accès interne uniquement
+    Exposition du proxy SOCKS aux crawlers
+
+ConfigMaps
+
+    crawler-config: Configuration des comportements de crawling
+    filter-config: Règles de filtrage et d'extraction d'IoCs
+    api-config: Configuration du service API
+
+Secrets
+
+    mongodb-credentials: Identifiants pour MongoDB
+    redis-credentials: Identifiants pour Redis
+    elasticsearch-credentials: Identifiants pour Elasticsearch
+    api-keys: Clés d'API pour l'authentification externe
+
+HorizontalPodAutoscalers
+
+    crawler-hpa: Scaling automatique basé sur la taille de queue Redis
+    filter-hpa: Scaling basé sur l'utilisation CPU/mémoire
+    api-hpa: Scaling basé sur le nombre de requêtes
+
+Ingress
+
+    Point d'entrée sécurisé pour les services frontend et API
+    Terminaison TLS gérée par cert-manager
+    Rate limiting pour éviter les abus
+
+NetworkPolicies
+
+    restrict-crawler-egress: Limite les sorties réseau des crawlers uniquement via tor-proxy
+    protect-database-access: Limite l'accès aux bases de données
+    isolate-tor-network: Isole le réseau TOR du reste de l'infrastructure
+
+PersistentVolumes
+
+    mongodb-data: Stockage persistant pour MongoDB
+    elasticsearch-data: Stockage persistant pour Elasticsearch
+    redis-data: Stockage persistant pour Redis
+
+Flux de données dans l'infrastructure Kubernetes
+
+    Les URLs seed sont initialement chargées dans Redis via un Job Kubernetes
+    Les pods crawler récupèrent les URLs de Redis et les traitent via le proxy TOR
+    Le contenu HTML récupéré est envoyé aux pods filter
+    Les filtres analysent le contenu et stockent les données pertinentes dans MongoDB
+    Les données sont également indexées dans Elasticsearch
+    Les nouvelles URLs découvertes sont renvoyées à Redis
+    L'API backend accède aux données via MongoDB et Elasticsearch
+    Le frontend interagit avec l'API pour afficher les données aux utilisateurs
+
+Monitoring et Observabilité
+
+    Prometheus: Collecte les métriques de tous les composants
+    Grafana: Visualise les métriques et alertes
+    AlertManager: Gère les alertes et notifications
+    Loki: Agrégation de logs centralisée
+    Jaeger: Traçage distribué pour suivre les requêtes
+
+Sécurité de l'Infrastructure
+
+    Isolation réseau stricte via NetworkPolicies
+    Tout le trafic des crawlers passe par TOR
+    Pods avec privilèges minimaux (non-root)
+    Secrets Kubernetes pour les informations sensibles
+    Mises à jour automatiques des images via processus CI/CD
+    Scans de vulnérabilités des conteneurs
+
+Résilience et Haute Disponibilité
+
+    StatefulSets avec réplication pour les bases de données
+    Déploiements multi-pods avec anti-affinité
+    Redémarrage automatique des pods défaillants
+    Liveness et Readiness probes pour tous les services
+    Backups automatisés via CronJobs
