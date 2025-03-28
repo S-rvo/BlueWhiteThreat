@@ -1,7 +1,7 @@
 services:
   tor:
     build: 
-      context: ./apps/proxy
+      context: ../apps/proxy
       dockerfile: Dockerfile.dev
     container_name: tor_proxy
     tty: true
@@ -11,13 +11,13 @@ services:
 
   crawler:
     build:
-      context: ./apps/crawler
+      context: ../apps/crawler
       dockerfile: Dockerfile.dev
     container_name: crawler_service
     tty: true
     stdin_open: true
     volumes:
-      - ./Crawler:/app
+      - ../apps/crawler:/app
     working_dir: /app
     command: tail -f /dev/null
     depends_on:
@@ -29,15 +29,15 @@ services:
       - ELASTICSEARCH_HOST=http://elasticsearch:9200
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-  scrapper:
+  scraper:
     build:
-      context: ./apps/scrapper
+      context: ../apps/scraper
       dockerfile: Dockerfile.dev
-    container_name: scrapper_service
+    container_name: scraper_service
     tty: true
     stdin_open: true
     volumes:
-      - ./scrapper:/app
+      - ../apps/scraper:/app
     working_dir: /app
     command: tail -f /dev/null
     depends_on:
@@ -45,7 +45,7 @@ services:
       - elasticsearch
       - redis
     environment:
-      - MONGO_URI=mongodb://mongodb:27017/web_scrapper_db
+      - MONGO_URI=mongodb://mongodb:27017/web_scraper_db
       - ELASTICSEARCH_HOST=http://elasticsearch:9200
       - REDIS_HOST=redis
       - REDIS_PORT=6379
