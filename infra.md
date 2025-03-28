@@ -1,3 +1,5 @@
+Architecture Fonctionnelle
+
 ```
 ┌─────────────────────────────┐
 │ Sources Darkweb (.onion)    │
@@ -26,8 +28,16 @@
 │ - Extrait nouvelles URLs    │
 └───────────────┬─────────────┘
                 │
-                │ Envoie le HTML et métadonnées
+                │ Publie HTML et métadonnées
+                ▼
+┌─────────────────────────────┐
+│ RabbitMQ / Kafka            │
+│ (File de pages à analyser)  │
+│ - Persistant                │
+│ - Hautement disponible      │
+└───────────────┬─────────────┘
                 │
+                │ Consomme les messages à son rythme
                 ▼
 ┌─────────────────────────────┐
 │ Filter/Analyseur CTI        │
@@ -75,79 +85,90 @@
 
 Flux de données détaillé
 
-1. Initialisation de la file d'attente
+1.  Initialisation de la file d'attente
 
-   Les URLs seeds sont chargées dans la file d'attente prioritaire Redis
-   Format: ZADD "crawler:url_queue" [score] [url_data_json]
-   Les scores plus élevés indiquent une priorité plus grande
+    Les URLs seeds sont chargées dans la file d'attente prioritaire Redis
+    Format: ZADD "crawler:url_queue" [score] [url_data_json]
+    Les scores plus élevés indiquent une priorité plus grande
 
-2. Extraction d'URL
+2.  Extraction d'URL
 
-   Le crawler vérifie si le taux de requête pour le domaine respecte les limites
-   Vérification si l'URL a déjà été visitée: SISMEMBER "crawler:visited_urls" [url]
-   Extraction de l'URL prioritaire: ZPOPMAX "crawler:url_queue" 1
-   Ajout de l'URL aux URLs visitées: SADD "crawler:visited_urls" [url]
+    Le crawler vérifie si le taux de requête pour le domaine respecte les limites
+    Vérification si l'URL a déjà été visitée: SISMEMBER "crawler:visited_urls" [url]
+    Extraction de l'URL prioritaire: ZPOPMAX "crawler:url_queue" 1
+    Ajout de l'URL aux URLs visitées: SADD "crawler:visited_urls" [url]
 
-3. Récupération de la page web
+3.  Récupération de la page web
 
-   Le crawler établit une connexion via TOR/I2P/VPN pour l'anonymat
-   Il envoie une requête HTTP GET avec des en-têtes aléatoires et user-agents variés
-   Gère les redirections, erreurs HTTP et timeouts
-   Respecte un délai aléatoire entre les requêtes pour éviter la détection
+    Le crawler établit une connexion via TOR/I2P/VPN pour l'anonymat
+    Il envoie une requête HTTP GET avec des en-têtes aléatoires et user-agents variés
+    Gère les redirections, erreurs HTTP et timeouts
+    Respecte un délai aléatoire entre les requêtes pour éviter la détection
 
-4. Analyse et filtrage du contenu
+4.  Publication dans la file d'attente RabbitMQ
 
-   Le filter extrait les données structurées pertinentes du HTML
-   Identifie automatiquement les IoCs (adresses IP, domaines, hashes, CVE, etc.)
-   Évalue la pertinence du contenu en fonction de mots-clés et patterns CTI
-   Détecte les doublons potentiels pour éviter la duplication de données
+    Le crawler, au lieu d'envoyer directement le contenu aux filters:
+    Crée un message contenant HTML, URL et métadonnées
+    Publie dans RabbitMQ avec des propriétés de persistance
+    Retourne immédiatement chercher une nouvelle URL
+    Format:
 
-5. Extraction de nouvelles URLs
+        {
+            "url": "http://darkforum.onion/thread/12345",
+            "html_content": "<!DOCTYPE html><html>...",
+            "headers": {"content-type": "text/html", ...},
+            "crawl_time": "2023-10-15T14:32:55Z",
+            "metadata": {
+            "ip": "unknown (Tor)",
+            "status_code": 200,
+            "response_time_ms": 1243
+            }
+        }
 
-   Le filter identifie les liens présents dans la page
-   Convertit les URLs relatives en URLs absolues
-   Filtre les URLs selon des règles prédéfinies (même domaine, patterns spécifiques)
-   Calcule un score de priorité pour chaque URL basé sur:
-   Profondeur de crawl
-   Pertinence contextuelle
-   Domaine source
-   Présence de mots-clés CTI dans l'URL
+5.  Consommation et traitement par les filters
 
-6. Stockage des données pertinentes
+    Les filters consomment les messages à leur propre rythme:
+    Chaque filter s'abonne à la file RabbitMQ
+    Traite le contenu HTML et extrait les données importantes
+    Confirme la réception uniquement après traitement réussi
+    En cas d'erreur, le message est remis en file ou envoyé dans une file d'erreur
 
-   Les données pertinentes sont formatées en documents MongoDB
-   Insertion ou mise à jour: db.ctidata.updateOne({url: [url]}, {$set: [data]}, {upsert: true})
-   Les données sont également indexées dans Elasticsearch pour des recherches avancées
-   Indexation: PUT /ctidata/\_doc/[url_encoded] [json_data]
+6.  Stockage des données pertinentes
 
-7. Mise à jour de la file d'attente
+    Les données pertinentes sont formatées en documents MongoDB
+    Insertion ou mise à jour: db.ctidata.updateOne({url: [url]}, {$set: [data]}, {upsert: true})
+    Les données sont également indexées dans Elasticsearch pour des recherches avancées
+    Indexation: PUT /ctidata/\_doc/[url_encoded] [json_data]
 
-   Les nouvelles URLs découvertes sont vérifiées:
-   Contre le set d'URLs déjà visitées
-   Pour leur pertinence CTI potentielle
-   Les URLs pertinentes sont ajoutées à la file prioritaire:
-   ZADD "crawler:url_queue" [score] [url_data_json]
+7.  Mise à jour de la file d'attente
 
-8. Accès aux données via API
+    Les nouvelles URLs découvertes sont vérifiées:
+    Contre le set d'URLs déjà visitées
+    Pour leur pertinence CTI potentielle
+    Les URLs pertinentes sont ajoutées à la file prioritaire:
+    ZADD "crawler:url_queue" [score] [url_data_json]
 
-   Le backend fournit des endpoints RESTful pour accéder aux données
-   Fonctionnalités de recherche avancée via Elasticsearch
-   Filtrage multi-critères (date, source, type d'IoC, score de pertinence)
-   Format de réponse structuré et normalisé
+8.  Accès aux données via API
 
-9. Visualisation et exploitation
+    Le backend fournit des endpoints RESTful pour accéder aux données
+    Fonctionnalités de recherche avancée via Elasticsearch
+    Filtrage multi-critères (date, source, type d'IoC, score de pertinence)
+    Format de réponse structuré et normalisé
 
-   Le frontend présente les données CTI de manière exploitable pour les analystes
-   Tableaux de bord interactifs pour le suivi des menaces
-   Visualisations des relations entre différents IoCs
-   Système d'alertes pour les menaces prioritaires
+9.  Visualisation et exploitation
 
-Structure des données
+    Le frontend présente les données CTI de manière exploitable pour les analystes
+    Tableaux de bord interactifs pour le suivi des menaces
+    Visualisations des relations entre différents IoCs
+    Système d'alertes pour les menaces prioritaires
+
+### Structure des données
+
 Document CTI dans MongoDB
 
 ```
 {
-    "\_id": "ObjectId()",
+    "_id": "ObjectId()",
     "url": "http://darkforum.onion/thread/12345",
     "source_type": "forum",
     "crawl_time": "2023-10-15T14:32:55Z",
@@ -185,7 +206,8 @@ Format d'URL dans la file Redis
 }
 ```
 
-Optimisation des performances
+### Optimisation des performances
+
 Stratégies de crawl intelligent
 
     Crawling adaptatif basé sur la fraîcheur et pertinence du contenu
@@ -207,7 +229,8 @@ Haute disponibilité
     Réplication MongoDB pour la sauvegarde des données
     Circuit-breakers pour isoler les composants défaillants
 
-Sécurité et conformité
+### Sécurité et conformité
+
 Protection de l'infrastructure
 
     Isolation réseau complète des nœuds de crawling
@@ -222,7 +245,8 @@ Anonymat et discrétion
     En-têtes HTTP randomisés
     User-agents diversifiés et mis à jour régulièrement
 
-Extensions futures
+### Extensions futures
+
 Intelligence artificielle
 
     Classification automatique des menaces par ML
@@ -237,105 +261,161 @@ Intégration externe
     Enrichissement automatique avec des sources OSINT
     Export au format STIX/TAXII pour le partage standardisé de CTI
 
-## Dans kube
+### Implémentation dans Kubernetes
 
 ```
-┌───────────────────────────────────────────────────────────────────────────┐
-│                        Kubernetes Cluster                                 │
-│                                                                           │
-│  ┌─────────────────────────┐       ┌─────────────────────────┐            │
-│  │   Namespace: ingress    │       │ Namespace: monitoring   │            │
-│  │                         │       │                         │            │
-│  │  ┌───────────────────┐  │       │  ┌──────────────────┐   │            │
-│  │  │ Ingress Controller│  │       │  │ Prometheus       │   │            │
-│  │  └───────────────────┘  │       │  └──────────────────┘   │            │
-│  │  ┌───────────────────┐  │       │  ┌──────────────────┐   │            │
-│  │  │ Cert-Manager      │  │       │  │ Grafana          │   │            │
-│  │  └───────────────────┘  │       │  └──────────────────┘   │            │
-│  └─────────────────────────┘       │  ┌──────────────────┐   │            │
-│                                    │  │ Alert Manager    │   │            │
-│                                    │  └──────────────────┘   │            │
-│                                    └─────────────────────────┘            │
-│                                                                           │
-│  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │                     Namespace: cti-darkweb                          │  │
-│  │                                                                     │  │
-│  │  ┌───────────────────┐  ┌───────────────────┐  ┌─────────────────┐  │  │
-│  │  │ StatefulSet:      │  │ StatefulSet:      │  │ StatefulSet:    │  │  │
-│  │  │ redis             │  │ mongodb           │  │ elasticsearch   │  │  │
-│  │  │                   │  │                   │  │                 │  │  │
-│  │  │ ┌─────────────┐   │  │ ┌─────────────┐   │  │ ┌─────────────┐ │  │  │
-│  │  │ │ Redis Master│   │  │ │ MongoDB     │   │  │ │ ES Master   │ │  │  │
-│  │  │ └─────────────┘   │  │ │ Primary     │   │  │ └─────────────┘ │  │  │
-│  │  │ ┌─────────────┐   │  │ └─────────────┘   │  │ ┌─────────────┐ │  │  │
-│  │  │ │Redis Replica│   │  │ ┌─────────────┐   │  │ │ ES Data     │ │  │  │
-│  │  │ └─────────────┘   │  │ │ MongoDB     │   │  │ └─────────────┘ │  │  │
-│  │  │                   │  │ │ Secondary   │   │  │                 │  │  │
-│  │  └───────────────────┘  │ └─────────────┘   │  └─────────────────┘  │  │
-│  │                         └───────────────────┘                       │  │
-│  │                                                                     │  │
-│  │  ┌───────────────────┐                      ┌───────────────────┐   │  │
-│  │  │ Deployment:       │                      │ Deployment:       │   │  │
-│  │  │ crawler           │                      │ filter            │   │  │
-│  │  │                   │                      │                   │   │  │
-│  │  │ ┌─────────────┐   │                      │ ┌─────────────┐   │   │  │
-│  │  │ │ Crawler Pod │   │                      │ │ Filter Pod  │   │   │  │
-│  │  │ │             │◄──┼──────────────────────┼─►             │   │   │  │
-│  │  │ └─────────────┘   │                      │ └─────────────┘   │   │  │
-│  │  │ ┌─────────────┐   │                      │ ┌─────────────┐   │   │  │
-│  │  │ │ Crawler Pod │   │                      │ │ Filter Pod  │   │   │  │
-│  │  │ │             │◄──┼──────────────────────┼─►             │   │   │  │
-│  │  │ └─────────────┘   │                      │ └─────────────┘   │   │  │
-│  │  │ ┌─────────────┐   │                      │ ┌─────────────┐   │   │  │
-│  │  │ │ Crawler Pod │   │                      │ │ Filter Pod  │   │   │  │
-│  │  │ │             │◄──┼──────────────────────┼─►             │   │   │  │
-│  │  │ └─────────────┘   │                      │ └─────────────┘   │   │  │
-│  │  └───────────────────┘                      └───────────────────┘   │  │
-│  │                                                                     │  │
-│  │  ┌───────────────────┐  ┌───────────────────┐  ┌─────────────────┐  │  │
-│  │  │ Deployment:       │  │ Deployment:       │  │ Deployment:     │  │  │
-│  │  │ api-backend       │  │ frontend          │  │ tor-proxy       │  │  │
-│  │  │                   │  │                   │  │                 │  │  │
-│  │  │ ┌─────────────┐   │  │ ┌─────────────┐   │  │ ┌─────────────┐ │  │  │
-│  │  │ │ API Pod     │   │  │ │ Frontend    │   │  │ │ TOR Pod     │ │  │  │
-│  │  │ │             │   │  │ │ Pod         │   │  │ │             │ │  │  │
-│  │  │ └─────────────┘   │  │ └─────────────┘   │  │ └─────────────┘ │  │  │
-│  │  │ ┌─────────────┐   │  │ ┌─────────────┐   │  │ ┌─────────────┐ │  │  │
-│  │  │ │ API Pod     │   │  │ │ Frontend    │   │  │ │ TOR Pod     │ │  │  │
-│  │  │ │             │   │  │ │ Pod         │   │  │ │             │ │  │  │
-│  │  │ └─────────────┘   │  │ └─────────────┘   │  │ └─────────────┘ │  │  │
-│  │  └───────────────────┘  └───────────────────┘  └─────────────────┘  │  │
-│  │                                                                     │  │
-│  │  ┌─────────────────────────┐  ┌───────────────────────────────┐     │  │
-│  │  │ ConfigMap:              │  │ Secrets:                      │     │  │
-│  │  │ - crawler-config        │  │ - mongodb-credentials         │     │  │
-│  │  │ - filter-config         │  │ - redis-credentials           │     │  │
-│  │  │ - api-config            │  │ - elasticsearch-credentials   │     │  │
-│  │  └─────────────────────────┘  │ - api-keys                    │     │  │
-│  │                               └───────────────────────────────┘     │  │
-│  │                                                                     │  │
-│  │  ┌─────────────────────────┐  ┌───────────────────────────────┐     │  │
-│  │  │ HPA (HorizontalPodAuto- │  │ NetworkPolicies:              │     │  │
-│  │  │ scaler):                │  │ - restrict-crawler-egress     │     │  │
-│  │  │ - crawler-hpa           │  │ - protect-database-access     │     │  │
-│  │  │ - filter-hpa            │  │ - isolate-tor-network         │     │  │
-│  │  │ - api-hpa               │  └───────────────────────────────┘     │  │
-│  │  └─────────────────────────┘                                        │  │
-│  │                                                                     │  │
-│  └─────────────────────────────────────────────────────────────────────┘  │
-│                                                                           │
-│  ┌─────────────────────────┐        ┌─────────────────────────┐           │
-│  │ PersistentVolumes:      │        │ Services:               │           │
-│  │ - mongodb-data          │        │ - redis-service         │           │
-│  │ - elasticsearch-data    │        │ - mongodb-service       │           │
-│  │ - redis-data            │        │ - elasticsearch-service │           │
-│  │                         │        │ - crawler-service       │           │
-│  └─────────────────────────┘        │ - filter-service        │           │
-│                                     │ - api-service           │           │
-│                                     │ - frontend-service      │           │
-│                                     │ - tor-proxy-service     │           │
-│                                     └─────────────────────────┘           │
-└───────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                              Kubernetes Cluster                                     │
+│                                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐    │
+│  │                        Namespace: cti-darkweb                               │    │
+│  │                                                                             │    │
+│  │                           Internet / Dark Web                               │    │
+│  │                                 │                                           │    │
+│  │                                 │                                           │    │
+│  │                                 ▼                                           │    │
+│  │  ┌────────────────────┐     ┌────────────────────┐                          │    │
+│  │  │   Deployment:      │     │   Deployment:      │                          │    │
+│  │  │   tor-proxy        │     │   vpn-gateway      │                          │    │
+│  │  │                    │     │                    │                          │    │
+│  │  │  ┌──────────────┐  │     │  ┌──────────────┐  │                          │    │
+│  │  │  │  TOR Pod     │  │     │  │   VPN Pod    │  │                          │    │
+│  │  │  └──────────────┘  │     │  └──────────────┘  │                          │    │
+│  │  │  ┌──────────────┐  │     │  ┌──────────────┐  │                          │    │
+│  │  │  │  TOR Pod     │  │     │  │   VPN Pod    │  │                          │    │
+│  │  │  └──────────────┘  │     │  └──────────────┘  │                          │    │
+│  │  │                    │     │                    │                          │    │
+│  │  └─────────┬──────────┘     └────────┬───────────┘                          │    │
+│  │            │                         │                                      │    │
+│  │            └─────────────┬───────────┘                                      │    │
+│  │                          │                                                  │    │
+│  │                          │                                                  │    │
+│  │                          ▼                                                  │    │
+│  │  ┌────────────────────────────────────────┐                                 │    │
+│  │  │         StatefulSet: redis             │     Stockage URLs prioritaires  │    │
+│  │  │                                        │                                 │    │
+│  │  │  ┌──────────────┐    ┌──────────────┐  │                                 │    │
+│  │  │  │ Redis Master │    │ Redis Replica│  │                                 │    │
+│  │  │  └──────────────┘    └──────────────┘  │                                 │    │
+│  │  │                                        │                                 │    │
+│  │  └───────────────────┬────────────────────┘                                 │    │
+│  │                      │                                                      │    │
+│  │                      │                                                      │    │
+│  │                      ▼                                                      │    │
+│  │  ┌──────────────────────────────────────────┐                               │    │
+│  │  │        Deployment: crawler               │                               │    │
+│  │  │                                          │                               │    │
+│  │  │   ┌────────────────┐ ┌────────────────┐  │                               │    │
+│  │  │   │ Crawler Pod    │ │ Crawler Pod    │  │                               │    │
+│  │  │   │ - HPA          │ │ - HPA          │  │                               │    │
+│  │  │   │ - PDB          │ │ - PDB          │  │                               │    │
+│  │  │   └────────────────┘ └────────────────┘  │                               │    │
+│  │  │   ┌────────────────┐ ┌────────────────┐  │                               │    │
+│  │  │   │ Crawler Pod    │ │ Crawler Pod    │  │                               │    │
+│  │  │   │ - HPA          │ │ - HPA          │  │                               │    │
+│  │  │   │ - PDB          │ │ - PDB          │  │                               │    │
+│  │  │   └────────────────┘ └────────────────┘  │                               │    │
+│  │  │                                          │                               │    │
+│  │  └─────────────────────┬────────────────────┘                               │    │
+│  │                        │                                                    │    │
+│  │                        │                                                    │    │
+│  │                        ▼                                                    │    │
+│  │  ┌────────────────────────────────────────┐                                 │    │
+│  │  │       StatefulSet: rabbitmq            │     File de messages HTML       │    │
+│  │  │                                        │                                 │    │
+│  │  │  ┌──────────────┐  ┌──────────────┐    │                                 │    │
+│  │  │  │ RabbitMQ     │  │ RabbitMQ     │    │                                 │    │
+│  │  │  │ Node 1       │  │ Node 2       │    │                                 │    │
+│  │  │  └──────────────┘  └──────────────┘    │                                 │    │
+│  │  │  ┌──────────────┐                      │                                 │    │
+│  │  │  │ RabbitMQ     │                      │                                 │    │
+│  │  │  │ Node 3       │                      │                                 │    │
+│  │  │  └──────────────┘                      │                                 │    │
+│  │  │                                        │                                 │    │
+│  │  └───────────────────┬────────────────────┘                                 │    │
+│  │                      │                                                      │    │
+│  │                      │                                                      │    │
+│  │                      ▼                                                      │    │
+│  │  ┌──────────────────────────────────────────┐                               │    │
+│  │  │        Deployment: filter                │                               │    │
+│  │  │                                          │                               │    │
+│  │  │   ┌────────────────┐ ┌────────────────┐  │                               │    │
+│  │  │   │ Filter Pod     │ │ Filter Pod     │  │                               │    │
+│  │  │   │ - HPA          │ │ - HPA          │  │                               │    │
+│  │  │   │ - PDB          │ │ - PDB          │  │                               │    │
+│  │  │   └────────────────┘ └────────────────┘  │                               │    │
+│  │  │   ┌────────────────┐ ┌────────────────┐  │                               │    │
+│  │  │   │ Filter Pod     │ │ Filter Pod     │  │                               │    │
+│  │  │   │ - HPA          │ │ - HPA          │  │                               │    │
+│  │  │   │ - PDB          │ │ - PDB          │  │                               │    │
+│  │  │   └────────────────┘ └────────────────┘  │                               │    │
+│  │  │                      │                   │                               │    │
+│  │  └──────────────────────┼───────────────────┘                               │    │
+│  │                         │                                                   │    │
+│  │      ┌──────────────────┼──────────────────────┐                            │    │
+│  │      │                  │                      │                            │    │
+│  │      ▼                  │                      ▼                            │    │
+│  │  ┌─────────────────┐    │               ┌─────────────────────┐             │    │
+│  │  │ StatefulSet:    │    │               │   StatefulSet:      │             │    │
+│  │  │ mongodb         │◄───┼───────────────┤   elasticsearch     │             │    │
+│  │  │                 │    │               │                     │             │    │
+│  │  │ ┌─────────────┐ │    │               │  ┌─────────────┐    │             │    │
+│  │  │ │MongoDB Prim.│ │    │               │  │ES Master    │    │             │    │
+│  │  │ └─────────────┘ │    │               │  └─────────────┘    │             │    │
+│  │  │ ┌─────────────┐ │    │               │  ┌─────────────┐    │             │    │
+│  │  │ │MongoDB Sec. │ │    │               │  │ES Data Node │    │             │    │
+│  │  │ └─────────────┘ │    │               │  └─────────────┘    │             │    │
+│  │  │                 │    │               │  ┌─────────────┐    │             │    │
+│  │  │                 │    │               │  │ES Data Node │    │             │    │
+│  │  │                 │    │               │  └─────────────┘    │             │    │
+│  │  └────────┬────────┘    │               └──────────┬──────────┘             │    │
+│  │           │             │                          │                        │    │
+│  │           │             │                          │                        │    │
+│  │           │             │                          │                        │    │
+│  │           └─────────────┼──────────────────────────┘                        │    │
+│  │                         │                                                   │    │
+│  │                         │                                                   │    │
+│  │                         ▼                                                   │    │
+│  │  ┌────────────────────────────────────────┐                                 │    │
+│  │  │        Deployment: api-backend         │                                 │    │
+│  │  │                                        │                                 │    │
+│  │  │   ┌────────────────┐ ┌────────────────┐│                                 │    │
+│  │  │   │ API Pod        │ │ API Pod        ││                                 │    │
+│  │  │   │                │ │                ││                                 │    │
+│  │  │   └────────────────┘ └────────────────┘│                                 │    │
+│  │  │                                        │                                 │    │
+│  │  └───────────────────┬────────────────────┘                                 │    │
+│  │                      │                                                      │    │
+│  │                      │                                                      │    │
+│  │                      ▼                                                      │    │
+│  │  ┌────────────────────────────────────────┐                                 │    │
+│  │  │        Deployment: frontend            │                                 │    │
+│  │  │                                        │                                 │    │
+│  │  │   ┌────────────────┐ ┌────────────────┐│                                 │    │
+│  │  │   │ Frontend Pod   │ │ Frontend Pod   ││                                 │    │
+│  │  │   │                │ │                ││                                 │    │
+│  │  │   └────────────────┘ └────────────────┘│                                 │    │
+│  │  │                                        │                                 │    │
+│  │  └────────────────────────────────────────┘                                 │    │
+│  │                                                                             │    │
+│  │                                                                             │    │
+│  │  ┌────────────────────────────────────────┐                                 │    │
+│  │  │         Horizontals & Services         │                                 │    │
+│  │  │                                        │                                 │    │
+│  │  │ • HPA: Crawler & Filter pods           │                                 │    │
+│  │  │ • Service: TOR/VPN proxy               │                                 │    │
+│  │  │ • Service: RabbitMQ                    │                                 │    │
+│  │  │ • Service: Redis                       │                                 │    │
+│  │  │ • Service: MongoDB                     │                                 │    │
+│  │  │ • Service: Elasticsearch               │                                 │    │
+│  │  │ • Service: API-Backend                 │                                 │    │
+│  │  │ • Ingress: Frontend Dashboard          │                                 │    │
+│  │  │                                        │                                 │    │
+│  │  └────────────────────────────────────────┘                                 │    │
+│  │                                                                             │    │
+│  └─────────────────────────────────────────────────────────────────────────────┘    │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Détails des composants Kubernetes
@@ -343,23 +423,31 @@ Intégration externe
 Namespace: cti-darkweb
 
 Espace isolé pour tous les composants de la solution CTI Darkweb.
-StatefulSets
 
-redis
+#### StatefulSets
+
+Redis
 
     Service de file d'attente prioritaire et cache
     Configuration en mode maître-réplique pour haute disponibilité
     Volume persistant pour les données
     Exposition de service uniquement en interne
 
-mongodb
+RabbitMQ
+
+    File d'attente persistante entre les crawlers et les filters
+    Configuration en cluster avec 3 nodes pour haute disponibilité
+    Garantit la livraison des messages même en cas de panne temporaire
+    Mécanisme d'acknowledgment pour assurer le traitement des messages
+
+MongoDB
 
     Stockage persistant des données CTI structurées
     Configuration avec réplication pour redondance
     Volumes persistants pour les données
     Sauvegardes automatisées via CronJob
 
-elasticsearch
+Elasticsearch
 
     Indexation et recherche avancée des données CTI
     Cluster avec nœuds maître et de données
@@ -368,7 +456,7 @@ elasticsearch
 
 #### Deployments
 
-crawler
+Crawler
 
     Pods scalables pour le crawling du darkweb
     Tous les pods passent par le service tor-proxy
@@ -376,125 +464,82 @@ crawler
     Limites de ressources ajustées pour éviter la surconsommation
     Affinité avec les nœuds disposant de plus de bande passante
 
-filter
+Filter
 
     Pods scalables pour l'analyse et le filtrage du contenu
-    AutoScaling basé sur la charge CPU/mémoire
+    AutoScaling basé sur la taille de la file d'attente RabbitMQ
     Optimisé pour le traitement parallèle de données
-    Récupère le contenu des crawlers via un service interne
+    Consomme les messages de RabbitMQ à son propre rythme
 
-tor-proxy
+Tor-proxy
 
     Service dédié pour gérer les connexions TOR
     Rotation automatique des circuits
     Isolation réseau stricte
     Exposition d'un proxy SOCKS accessible uniquement aux crawlers
 
-api-backend
+API-backend
 
     Service API RESTful pour accéder aux données CTI
     Authentification et autorisation via JWT
     Rate limiting pour éviter les abus
     Cache Redis pour les requêtes fréquentes
 
-frontend
+Frontend
 
     Interface utilisateur pour analyser les données CTI
     Servie via NGINX
     Build statique pour performance optimale
     Configuration via ConfigMap
 
-Services
+#### Services
 
-redis-service
+    redis-service: ClusterIP pour accès interne uniquement, points d'accès pour les fonctions queue et cache
+    rabbitmq-service: ClusterIP pour accès interne uniquement, service de file d'attente entre crawlers et filters
+    mongodb-service: ClusterIP pour accès interne uniquement, accès séparé pour lecture/écriture
+    elasticsearch-service: ClusterIP pour accès interne uniquement, points d'accès pour recherche et indexation
+    crawler-service: ClusterIP pour accès interne uniquement, service de découverte pour les crawlers
+    filter-service: ClusterIP pour accès interne uniquement, point d'entrée pour les données à analyser
+    api-service: Service exposé via Ingress, sécurisé avec TLS
+    frontend-service: Service exposé via Ingress, sécurisé avec TLS
+    tor-proxy-service: ClusterIP pour accès interne uniquement, exposition du proxy SOCKS aux crawlers
 
-    ClusterIP pour accès interne uniquement
-    Points d'accès pour les fonctions queue et cache
+#### ConfigMaps, Secrets et HPA
 
-mongodb-service
+    ConfigMaps: Configuration des comportements de crawling, règles de filtrage, configuration API
+    Secrets: Identifiants pour MongoDB, Redis, RabbitMQ, Elasticsearch, et clés API
+    HorizontalPodAutoscalers:
+        crawler-hpa: Scaling basé sur la taille de queue Redis
+        filter-hpa: Scaling basé sur la taille de queue RabbitMQ
+        api-hpa: Scaling basé sur le nombre de requêtes
 
-    ClusterIP pour accès interne uniquement
-    Accès séparé pour lecture/écriture
-
-elasticsearch-service
-
-    ClusterIP pour accès interne uniquement
-    Points d'accès pour recherche et indexation
-
-crawler-service
-
-    ClusterIP pour accès interne uniquement
-    Service de découverte pour les crawlers
-
-filter-service
-
-    ClusterIP pour accès interne uniquement
-    Point d'entrée pour les données à analyser
-
-api-service
-
-    Service exposé via Ingress
-    Sécurisé avec TLS
-
-frontend-service
-
-    Service exposé via Ingress
-    Sécurisé avec TLS
-
-tor-proxy-service
-
-    ClusterIP pour accès interne uniquement
-    Exposition du proxy SOCKS aux crawlers
-
-ConfigMaps
-
-    crawler-config: Configuration des comportements de crawling
-    filter-config: Règles de filtrage et d'extraction d'IoCs
-    api-config: Configuration du service API
-
-Secrets
-
-    mongodb-credentials: Identifiants pour MongoDB
-    redis-credentials: Identifiants pour Redis
-    elasticsearch-credentials: Identifiants pour Elasticsearch
-    api-keys: Clés d'API pour l'authentification externe
-
-HorizontalPodAutoscalers
-
-    crawler-hpa: Scaling automatique basé sur la taille de queue Redis
-    filter-hpa: Scaling basé sur l'utilisation CPU/mémoire
-    api-hpa: Scaling basé sur le nombre de requêtes
-
-Ingress
-
-    Point d'entrée sécurisé pour les services frontend et API
-    Terminaison TLS gérée par cert-manager
-    Rate limiting pour éviter les abus
-
-NetworkPolicies
+#### Sécurité et NetworkPolicies
 
     restrict-crawler-egress: Limite les sorties réseau des crawlers uniquement via tor-proxy
     protect-database-access: Limite l'accès aux bases de données
     isolate-tor-network: Isole le réseau TOR du reste de l'infrastructure
+    protect-queue-access: Contrôle l'accès à RabbitMQ
 
-PersistentVolumes
+#### PersistentVolumes
 
     mongodb-data: Stockage persistant pour MongoDB
     elasticsearch-data: Stockage persistant pour Elasticsearch
     redis-data: Stockage persistant pour Redis
+    rabbitmq-data: Stockage persistant pour RabbitMQ
 
-Flux de données dans l'infrastructure Kubernetes
+#### Flux de données dans l'infrastructure Kubernetes
 
     Les URLs seed sont initialement chargées dans Redis via un Job Kubernetes
     Les pods crawler récupèrent les URLs de Redis et les traitent via le proxy TOR
-    Le contenu HTML récupéré est envoyé aux pods filter
+    Le contenu HTML récupéré est publié dans la file d'attente RabbitMQ
+    Les pods filter consomment les messages de RabbitMQ à leur propre rythme
     Les filtres analysent le contenu et stockent les données pertinentes dans MongoDB
     Les données sont également indexées dans Elasticsearch
     Les nouvelles URLs découvertes sont renvoyées à Redis
     L'API backend accède aux données via MongoDB et Elasticsearch
     Le frontend interagit avec l'API pour afficher les données aux utilisateurs
 
-Monitoring et Observabilité
+#### Monitoring et Observabilité
 
     Prometheus: Collecte les métriques de tous les composants
     Grafana: Visualise les métriques et alertes
@@ -502,19 +547,12 @@ Monitoring et Observabilité
     Loki: Agrégation de logs centralisée
     Jaeger: Traçage distribué pour suivre les requêtes
 
-Sécurité de l'Infrastructure
+#### Avantages de cette architecture
 
-    Isolation réseau stricte via NetworkPolicies
-    Tout le trafic des crawlers passe par TOR
-    Pods avec privilèges minimaux (non-root)
-    Secrets Kubernetes pour les informations sensibles
-    Mises à jour automatiques des images via processus CI/CD
-    Scans de vulnérabilités des conteneurs
-
-Résilience et Haute Disponibilité
-
-    StatefulSets avec réplication pour les bases de données
-    Déploiements multi-pods avec anti-affinité
-    Redémarrage automatique des pods défaillants
-    Liveness et Readiness probes pour tous les services
-    Backups automatisés via CronJobs
+    Découplage entre composants: Les crawlers et les filters peuvent fonctionner à des rythmes différents sans blocage grâce à RabbitMQ
+    Haute disponibilité: Réplication pour toutes les bases de données et file d'attente
+    Scalabilité dynamique: Scaling automatique basé sur la charge réelle des composants
+    Sécurité renforcée: Isolation réseau stricte, tout le trafic passant par TOR
+    Résilience: Capacité à reprendre après des pannes sans perte de données
+    Observabilité complète: Monitoring détaillé de chaque composant du système
+    Performance optimisée: Distribution de charge et parallélisme pour un traitement efficace
