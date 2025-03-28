@@ -1,5 +1,13 @@
 FROM golang:1.24
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    iputils-ping \
+    curl \
+    vim \
+    net-tools && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY go.mod go.sum ./
