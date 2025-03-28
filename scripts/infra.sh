@@ -6,8 +6,8 @@ GREEN='\033[0;32m'
 NC='\033[0m' # Pas de couleur
 
 # Variables
-NAMESPACE="crawler-service"
-DOCKER_REGISTRY="localhost:5000" # Pour un registre local avec Orbstack
+NAMESPACE="bluewhitethreat"
+DOCKER_REGISTRY="localhost:5000"
 
 # Fonction pour vérifier une commande
 check_command() {
@@ -22,31 +22,28 @@ echo "Vérification des prérequis..."
 check_command "docker"
 check_command "kubectl"
 
-echo "Orbstack est installé et gère Docker."
-
-# Étape 2 : Vérifier le fonctionnement de Docker avec Orbstack
+# Étape 2 : Vérifier le fonctionnement de Docker
 echo "Vérification du service Docker..."
 if ! docker info &> /dev/null; then
-    echo -e "${RED}Erreur : Docker ne fonctionne pas avec Orbstack.${NC}"
+    echo -e "${RED}Erreur : Docker ne fonctionne pas.${NC}"
     exit 1
 fi
-echo -e "${GREEN}Docker fonctionne correctement sous Orbstack.${NC}"
+echo -e "${GREEN}Docker fonctionne correctement.${NC}"
 
-# Étape 3 : Vérifier si Kubernetes est actif avec Orbstack
-echo "Vérification de Kubernetes sous Orbstack..."
+# Étape 3 : Vérifier si Kubernetes est actif
+echo "Vérification de Kubernetes..."
 kubectl cluster-info &> /dev/null
 if [ $? -ne 0 ]; then
-    echo -e "${RED}Erreur : Kubernetes ne fonctionne pas sous Orbstack.${NC}"
+    echo -e "${RED}Erreur : Kubernetes ne fonctionne.${NC}"
     exit 1
 fi
-echo -e "${GREEN}Kubernetes est actif sous Orbstack.${NC}"
+echo -e "${GREEN}Kubernetes est actif.${NC}"
 
 # Étape 4 : Construire les images Docker
 echo "Construction des images Docker..."
-for app in "Crawler" "Web" "Scraper"; do
+for app in "crawler" "scrapper"; do
     echo "Construction de $app..."
-    app_lower=$(echo "$app" | tr '[:upper:]' '[:lower:]')
-    docker build -f "../$app/Dockerfile.dev" -t "${DOCKER_REGISTRY}/${app_lower}:latest" "./$app"
+    docker build -f "../apps/$app/Dockerfile.dev" -t "$app:latest" "../apps/$app"
     if [ $? -ne 0 ]; then
         echo -e "${RED}Erreur : Échec de la construction de $app.${NC}"
         exit 1
@@ -69,16 +66,16 @@ fi
 # Étape 6 : Appliquer les manifests Kubernetes
 echo "Déploiement des manifests Kubernetes..."
 for dir in "mongodb" "redis" "elasticsearch" "web" "crawler" "scraper"; do
-    if [ -d "infra/$dir" ]; then
+    if [ -d "../infra/k8s/$dir" ]; then
         echo "Déploiement de $dir..."
-        kubectl apply -f "infra/$dir/" --namespace="$NAMESPACE"
+        kubectl apply -f "../infra/k8s/$dir/" --namespace="$NAMESPACE"
         if [ $? -ne 0 ]; then
             echo -e "${RED}Erreur : Échec du déploiement de $dir.${NC}"
             exit 1
         fi
         echo -e "${GREEN}$dir déployé avec succès.${NC}"
     else
-        echo -e "${RED}Avertissement : Le dossier infra/$dir est introuvable. Skipping.${NC}"
+        echo -e "${RED}Avertissement : Le dossier infra/k8s/$dir est introuvable. Skipping.${NC}"
     fi
 
 done
@@ -97,8 +94,18 @@ kubectl get pods --namespace="$NAMESPACE"
 
 # Étape 9 : Accéder au service Web
 echo "Récupération de l’URL du service Web..."
-kubectl get svc web-service -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "Aucune IP externe détectée."
-echo "Si aucune IP externe, utilisez : kubectl port-forward svc/web-service 8080:80 -n $NAMESPACE"
+if [ "$(uname)" == "Darwin" ]; then
+    # macOS
+    IP=$(kubectl get svc web-service -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+else
+    # Linux
+    IP=$(kubectl get svc web-service -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+fi
+echo "IP du service Web : $IP"
+if [ -z "$IP" ]; then
+    echo "Aucune IP externe détectée."
+    echo "Utilisez : kubectl port-forward svc/web-service 8080:80 -n $NAMESPACE"
+fi
 
 echo -e "${GREEN}Déploiement terminé ! Accédez au site via l’URL ci-dessus.${NC}"
 
