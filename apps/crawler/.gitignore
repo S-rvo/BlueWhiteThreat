@@ -1,1 +1,3 @@
-crawler
+.env
+.env.local
+.env.prod

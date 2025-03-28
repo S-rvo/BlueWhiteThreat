@@ -1,13 +1,13 @@
 services:
-  tor:
-    build: 
-      context: ../apps/proxy
-      dockerfile: Dockerfile.dev
-    container_name: tor_proxy
-    tty: true
-    stdin_open: true
-    ports:
-      - 9050:9051
+  # tor:
+  #   build:
+  #     context: ../apps/proxy
+  #     dockerfile: Dockerfile.dev
+  #   container_name: tor_proxy
+  #   tty: true
+  #   stdin_open: true
+  #   ports:
+  #     - 9050:9051
 
   crawler:
     build:

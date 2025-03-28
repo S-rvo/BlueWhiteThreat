@@ -3,7 +3,7 @@ package crawler_test
 import (
 	"testing"
 
-	crawler "github.com/S-rvo/BlueWhiteThreat/internal"
+	"github.com/S-rvo/BlueWhiteThreat/internal/crawler"
 )
 
 func TestStatus200Ok(t *testing.T) {
