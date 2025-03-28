@@ -1,7 +1,17 @@
 services:
+  tor:
+    build: 
+      context: ./apps/proxy
+      dockerfile: Dockerfile.dev
+    container_name: tor_proxy
+    tty: true
+    stdin_open: true
+    ports:
+      - 9050:9051
+
   crawler:
     build:
-      context: ./app/crawler
+      context: ./apps/crawler
       dockerfile: Dockerfile.dev
     container_name: crawler_service
     tty: true
@@ -21,7 +31,7 @@ services:
       - REDIS_PORT=6379
   scrapper:
     build:
-      context: ./scrapper
+      context: ./apps/scrapper
       dockerfile: Dockerfile.dev
     container_name: scrapper_service
     tty: true
