@@ -1,1 +1,3 @@
-scrapper
+.env
+.env.local
+.env.prod

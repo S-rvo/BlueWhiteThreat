@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	crawler "github.com/S-rvo/BlueWhiteThreat/internal"
+	crawler "github.com/S-rvo/BlueWhiteThreat/internal/crawler"
 )
 
 func main() {
