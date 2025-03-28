@@ -41,7 +41,7 @@ echo -e "${GREEN}Kubernetes est actif.${NC}"
 
 # Étape 4 : Construire les images Docker
 echo "Construction des images Docker..."
-for app in "crawler" "scrapper"; do
+for app in "crawler" "scraper"; do
     echo "Construction de $app..."
     docker build -f "../apps/$app/Dockerfile.dev" -t "$app:latest" "../apps/$app"
     if [ $? -ne 0 ]; then
@@ -65,7 +65,7 @@ fi
 
 # Étape 6 : Appliquer les manifests Kubernetes
 echo "Déploiement des manifests Kubernetes..."
-for dir in "mongodb" "redis" "elasticsearch" "web" "crawler" "scraper"; do
+for dir in "mongodb" "redis" "elasticsearch"; do
     if [ -d "../infra/k8s/$dir" ]; then
         echo "Déploiement de $dir..."
         kubectl apply -f "../infra/k8s/$dir/" --namespace="$NAMESPACE"
@@ -80,7 +80,7 @@ for dir in "mongodb" "redis" "elasticsearch" "web" "crawler" "scraper"; do
 
 done
 
-# Étape 7 : Appliquer la NetworkPolicy (si présente)
+# Étape 7 : Appliquer la NetworkPolicy
 if [ -f "infra/network-policy.yaml" ]; then
     echo "Application de la NetworkPolicy..."
     kubectl apply -f "infra/network-policy.yaml" --namespace="$NAMESPACE"
