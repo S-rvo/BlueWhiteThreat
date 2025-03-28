@@ -2,24 +2,26 @@ package main
 
 import (
 	"fmt"
+	"log"
 
 	crawler "github.com/S-rvo/BlueWhiteThreat/internal/crawler"
 )
 
 func main() {
-	content, err := crawler.TorClient()
+	visited, links, statusCode, err := crawler.Crawler()
 	if err != nil {
-		fmt.Println("Erreur:", err)
-		return
+		log.Fatalf("Erreur dans le crawler : %v", err)
 	}
-	fmt.Println("Réponse via Tor:")
-	fmt.Println(content)
 
-	content2, err := crawler.scrapper()
-	if err != nil {
-		fmt.Println("Erreur:", err)
-		return
+	fmt.Println("Code HTTP :", statusCode)
 
+	fmt.Println("URLs visitées :")
+	for _, url := range visited {
+		fmt.Println(" -", url)
 	}
-	fmt.Println(content2)
+
+	fmt.Println("Liens trouvés sur la page :")
+	for _, link := range links {
+		fmt.Println(" →", link)
+	}
 }
