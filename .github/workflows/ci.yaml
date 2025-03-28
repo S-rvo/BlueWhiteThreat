@@ -1,0 +1,29 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, develops]
+  pull_request:
+    branches: [main, develops]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: "1.24"
+
+      - name: Run tests for scrapper
+        run: |
+          cd apps/scrapper
+          go test -v ./...
+
+      - name: Run tests for crawler
+        run: |
+          cd apps/crawler
+          go test -v ./...
