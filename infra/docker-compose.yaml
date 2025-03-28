@@ -19,7 +19,7 @@ services:
       - ELASTICSEARCH_HOST=http://elasticsearch:9200
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-scrapper:
+  scrapper:
     build:
       context: ./scrapper
       dockerfile: Dockerfile.dev
