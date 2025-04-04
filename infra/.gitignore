@@ -1,0 +1,5 @@
+.env
+.env.local
+.env.prod
+infra/db/mongodb/
+infra/db/redis/
