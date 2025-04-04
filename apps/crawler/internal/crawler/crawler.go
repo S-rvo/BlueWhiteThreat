@@ -4,95 +4,97 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 
 	"github.com/gocolly/colly"
 	"github.com/gocolly/colly/proxy"
 )
 
-/*
-func TorClient() (string, error) {
-	proxyAddr := os.Getenv("TOR_PROXY")
-	if proxyAddr == "" {
-		proxyAddr = "socks5://172.18.0.2:9050"
-	}
+func Crawler(startURL string, depthMax int) ([]string, []string, int, error) {
+	var visitedUrls []string
+	var foundLinks []string
+	var statusCode int
 
-	dialer, err := proxy.SOCKS5("tcp", "172.18.0.2:9050", nil, proxy.Direct)
-	if err != nil {
-		panic(err)
-	}
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			Dial: dialer.Dial,
-		},
-	}
-
-	resp, err := client.Get("http://6nhmgdpnyoljh5uzr5kwlatx2u3diou4ldeommfxjz3wkhalzgjqxzqd.onion/")
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Println(string(body))
-
-	return string(body), nil
-}
-*/
-
-func Crawler() ([]string, []string, int, error) {
-	c := colly.NewCollector()
+	//verrouiller l’accès concurrent à visitedMap, visitedUrls et foundLinks.
+	visitedMap := make(map[string]bool)
+	var mu sync.Mutex
+	//synchroniser les goroutines attend la fin de toutes les visites
+	var wg sync.WaitGroup
 
 	proxyList := []string{
-		"socks5://172.18.0.2:9050",
+		"socks5://tor1:9050",
+		"socks5://tor2:9050",
+		"socks5://tor3:9050",
 	}
-
+	// Rotation des proxy
 	rp, err := proxy.RoundRobinProxySwitcher(proxyList...)
 	if err != nil {
 		return nil, nil, 0, err
 	}
 
-	c.SetProxyFunc(func(req *http.Request) (*url.URL, error) {
-		proxyURL, err := rp(req)
-		if err == nil {
-			fmt.Println("🛡️  Proxy utilisé :", proxyURL.String())
-		}
-		return proxyURL, err
-	})
+	var crawl func(targetURL string, depth int)
+	crawl = func(targetURL string, depth int) {
+		defer wg.Done()
 
-	var visitedUrls []string
-	var foundLinks []string
-	var statusCode int
-
-	c.OnRequest(func(r *colly.Request) {
-		fmt.Println("🌐 Envoi de la requête vers :", r.URL.String())
-		visitedUrls = append(visitedUrls, r.URL.String())
-	})
-
-	c.OnResponse(func(r *colly.Response) {
-		statusCode = r.StatusCode
-		fmt.Println("📥 Statut HTTP :", r.StatusCode)
-	})
-
-	// 🔍 Extraction des liens <a href="...">
-	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
-		link := e.Attr("href")
-		absLink := e.Request.AbsoluteURL(link)
-		fmt.Printf("🔗 Lien trouvé: %q -> %s\n", e.Text, absLink)
-
-		// Ajouter au tableau si non vide
-		if absLink != "" {
-			foundLinks = append(foundLinks, absLink)
+		if depth > depthMax {
+			return
 		}
 
-		// (Optionnel) Visite automatique des liens internes
-		// c.Visit(absLink)
-	})
+		mu.Lock()
+		if visitedMap[targetURL] {
+			mu.Unlock()
+			return
+		}
+		visitedMap[targetURL] = true
+		mu.Unlock()
 
-	err = c.Visit("http://6nhmgdpnyoljh5uzr5kwlatx2u3diou4ldeommfxjz3wkhalzgjqxzqd.onion") // page HTML simple avec liens
-	if err != nil {
-		return visitedUrls, foundLinks, statusCode, err
+		c := colly.NewCollector()
+
+		c.SetProxyFunc(func(req *http.Request) (*url.URL, error) {
+			proxyURL, err := rp(req)
+			if err == nil {
+				fmt.Println("Proxy utilisé :", proxyURL.String())
+			}
+			return proxyURL, err
+		})
+
+		c.OnRequest(func(r *colly.Request) {
+			fmt.Println("Request to:", r.URL.String())
+			mu.Lock()
+			visitedUrls = append(visitedUrls, r.URL.String())
+			mu.Unlock()
+		})
+
+		c.OnResponse(func(r *colly.Response) {
+			statusCode = r.StatusCode
+			fmt.Println("Statut HTTP :", r.StatusCode)
+		})
+
+		c.OnHTML("a[href]", func(e *colly.HTMLElement) {
+			link := e.Attr("href")
+			absLink := e.Request.AbsoluteURL(link)
+
+			if absLink != "" {
+				mu.Lock()
+				foundLinks = append(foundLinks, absLink)
+				mu.Unlock()
+
+				wg.Add(1)
+				go crawl(absLink, depth+1)
+			}
+		})
+
+		err := c.Visit(targetURL)
+		if err != nil {
+			fmt.Println("Erreur de visite :", err)
+			return
+		}
 	}
+
+	wg.Add(1)
+	go crawl(startURL, 0)
+
+	wg.Wait()
 
 	return visitedUrls, foundLinks, statusCode, nil
 }

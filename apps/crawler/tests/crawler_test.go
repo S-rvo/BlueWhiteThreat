@@ -7,7 +7,10 @@ import (
 )
 
 func TestCrawlerReturns200(t *testing.T) {
-	visited, links, statusCode, err := crawler.Crawler()
+	startURL := "http://6nhmgdpnyoljh5uzr5kwlatx2u3diou4ldeommfxjz3wkhalzgjqxzqd.onion"
+	depth := 1
+
+	visited, links, statusCode, err := crawler.Crawler(startURL, depth)
 	if err != nil {
 		t.Fatalf("Crawler() returned error: %v", err)
 	}
