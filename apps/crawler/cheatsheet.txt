@@ -1,0 +1,22 @@
+# 1. Voir toutes les clés dans la base de données
+KEYS *
+
+# 2. Vérifier le contenu des ensembles de ton crawler
+SMEMBERS urls_crawled                 # Voir les URLs crawlées
+SMEMBERS urls_to_crawl                # Voir les URLs en file d'attente
+SCARD urls_crawled                    # Nombre d'URLs crawlées
+SCARD urls_to_crawl                   # Nombre d'URLs en file d'attente
+
+# 3. Voir les statistiques du crawler (si tu utilises un hash pour stocker les stats)
+HGETALL crawler:stats
+
+# 4. Vérifier si une URL spécifique a été crawlée (remplace avec l'URL que tu veux vérifier)
+SISMEMBER urls_crawled "http://example.onion/page"
+
+# 5. Voir un échantillon aléatoire des URLs crawlées (limite à 5)
+SRANDMEMBER urls_crawled 5
+
+# 6. Vérifier les types des différentes clés
+TYPE urls_crawled
+TYPE urls_to_crawl
+TYPE crawler:stats
