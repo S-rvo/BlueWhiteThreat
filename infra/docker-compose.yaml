@@ -34,70 +34,35 @@ services:
       context: ../apps/crawler
       dockerfile: Dockerfile.dev
     container_name: crawler_service
-    tty: true
-    stdin_open: true
     volumes:
       - ../apps/crawler:/app
-    working_dir: /app
-    command: tail -f /dev/null
     depends_on:
-      - mongodb
-      - elasticsearch
       - redis
     environment:
-      - MONGO_URI=mongodb://mongodb:27017/web_crawler_db
-      - ELASTICSEARCH_HOST=http://elasticsearch:9200
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-  scraper:
-    build:
-      context: ../apps/scraper
-      dockerfile: Dockerfile.dev
-    container_name: scraper_service
-    tty: true
-    stdin_open: true
-    volumes:
-      - ../apps/scraper:/app
-    working_dir: /app
-    command: tail -f /dev/null
-    depends_on:
-      - mongodb
-      - elasticsearch
-      - redis
-    environment:
-      - MONGO_URI=mongodb://mongodb:27017/web_scraper_db
-      - ELASTICSEARCH_HOST=http://elasticsearch:9200
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-  mongodb:
-    image: mongo:latest
-    container_name: mongodb_service
-    volumes:
-      - ./db/mongodb:/data/db
-    ports:
-      - "27017:27017"
 
-  elasticsearch:
-    image: elasticsearch:8.12.0
-    container_name: elasticsearch_service
-    environment:
-      - discovery.type=single-node # Mode standalone pour dev
-      - xpack.security.enabled=false # Désactive la sécurité pour simplifier en dev
-    volumes:
-      - ./db/elasticsearch:/usr/share/elasticsearch/data # Persistance des données
-    ports:
-      - "9200:9200"
-      - "9300:9300"
-
+  # scraper:
+  #   build:
+  #     context: ../apps/scraper
+  #     dockerfile: Dockerfile.dev
+  #   container_name: scraper_service
+  #   tty: true
+  #   stdin_open: true
+  #   volumes:
+  #     - ../apps/scraper:/app
+  #   working_dir: /app
+  #   command: tail -f /dev/null
+  #   depends_on:
+  #     - redis
   redis:
     image: redis:latest
     container_name: redis_service
     volumes:
-      - ./db/redis:/data # Persistance des données
+      - ./db/redis:/data
     ports:
       - "6379:6379"
 
 volumes:
   mongodb_data:
-  elasticsearch_data:
   redis_data:
