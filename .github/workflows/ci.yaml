@@ -1,29 +1,62 @@
-name: CI/CD
+name: BlueWhiteThreat Pipeline
 
 on:
   push:
     branches: [main, develops]
   pull_request:
-    branches: [main, develops]
+    branches: [main]
 
 jobs:
-  test-and-build:
+  security-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
-      - name: Set up Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: "1.24"
-
-      - name: Run tests for scrapper
-        run: |
-          cd apps/scrapper
-          go test -v ./...
-
-      - name: Run tests for crawler
+      # Scan code statique
+      - name: Go Security Scan
         run: |
           cd apps/crawler
-          go test -v ./...
+          curl -sfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
+          $(go env GOPATH)/bin/gosec ./...
+
+      # Scan secrets
+      - name: Find secrets
+        uses: gitleaks/gitleaks-action@v2
+
+      # Scan Docker images
+      - name: Scan Docker images
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "table"
+
+  build-test-crawler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+
+      - name: Build crawler
+        run: |
+          cd apps/crawler
+          go build -o bin/crawler cmd/main.go
+
+      - name: Build Docker crawler
+        run: |
+          cd apps/crawler
+          docker build -t bwt-crawler:${{ github.sha }} -f Dockerfile.dev .
+
+  deploy-infra:
+    needs: [security-scan, build-test-crawler]
+    if: github.ref == 'refs/heads/develops'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # - name: Deploy to dev with docker-compose
+      #   run: |
+      #     cd infra
