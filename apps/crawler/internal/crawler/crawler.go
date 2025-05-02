@@ -31,7 +31,7 @@ func Crawler(startURL string, depthMax int) ([]string, []string, int, error) {
 	if err != nil {
 		return nil, nil, 0, err
 	}
-
+	//Appelle de la fonction récursivement
 	var crawl func(targetURL string, depth int)
 	crawl = func(targetURL string, depth int) {
 		defer wg.Done()
@@ -69,7 +69,7 @@ func Crawler(startURL string, depthMax int) ([]string, []string, int, error) {
 			statusCode = r.StatusCode
 			fmt.Println("Statut HTTP :", r.StatusCode)
 		})
-
+		// Scrap tous les liens
 		c.OnHTML("a[href]", func(e *colly.HTMLElement) {
 			link := e.Attr("href")
 			absLink := e.Request.AbsoluteURL(link)
