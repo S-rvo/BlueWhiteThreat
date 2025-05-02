@@ -62,6 +62,20 @@ services:
       - ./db/redis:/data
     ports:
       - "6379:6379"
+  
+  mongodb:
+    image: bitnami/mongodb:8.0.9
+    container_name: mongodb_service
+    ports:
+      - "27017:27017"
+    env_file:
+      - ../apps/crawler/.env
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME
+      - MONGO_INITDB_ROOT_PASSWORD
+    volumes:
+      - ./db/mongodb:/data
+      - ./logs/mongodb:/var/log/mongodb
 
 volumes:
   mongodb_data:
