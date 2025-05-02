@@ -1,12 +1,12 @@
 package db
 
 import (
-    "context"
-    "log"
-    "os"
-    "time"
+	"context"
+	"log"
+	"os"
+	"time"
 
-    "github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9"
 )
 
 var (
@@ -39,6 +39,12 @@ func InitRedis() error {
     if err != nil {
         return err
     }
+
+    // Supprime toute la base
+    if err := RedisClient.FlushDB(ctx).Err(); err != nil {
+        return err
+    }
+    log.Println("Redis database flushed on startup")
 
     log.Printf("Connected to Redis: %s:%s", redisHost, redisPort)
     return nil
