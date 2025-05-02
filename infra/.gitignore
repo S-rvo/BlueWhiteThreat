@@ -1,5 +1,0 @@
-.env
-.env.local
-.env.prod
-db/mongodb/*
-db/redis/*
