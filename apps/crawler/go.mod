@@ -4,8 +4,8 @@ go 1.24
 
 require (
 	github.com/gocolly/colly v1.2.0
-	github.com/joho/godotenv v1.5.1
 	github.com/redis/go-redis/v9 v9.7.3
+	go.mongodb.org/mongo-driver v1.17.3
 )
 
 // toolchain go1.23.7
@@ -31,7 +31,6 @@ require (
 	github.com/xdg-go/scram v1.1.2 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
-	go.mongodb.org/mongo-driver v1.17.3 // indirect
 	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/sync v0.12.0 // indirect
