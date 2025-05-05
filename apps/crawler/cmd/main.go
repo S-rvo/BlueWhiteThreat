@@ -48,7 +48,7 @@ func main() {
     }()
 
     // Configuration du crawler
-    maxDepth := 2
+    maxDepth := 1
     
     // Boucle principale du crawler - continue jusqu'à ce que la file d'attente soit vide
     for {
