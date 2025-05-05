@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sync"
 
 	"github.com/gocolly/colly"
@@ -15,7 +16,7 @@ func Crawler(startURL string, depthMax int) ([]string, []string, int, error) {
 	var foundLinks []string
 	var statusCode int
 
-	//verrouiller l’accès concurrent à visitedMap, visitedUrls et foundLinks.
+	//verrouiller l'accès concurrent à visitedMap, visitedUrls et foundLinks.
 	visitedMap := make(map[string]bool)
 	var mu sync.Mutex
 	//synchroniser les goroutines attend la fin de toutes les visites
@@ -69,12 +70,13 @@ func Crawler(startURL string, depthMax int) ([]string, []string, int, error) {
 			statusCode = r.StatusCode
 			fmt.Println("Statut HTTP :", r.StatusCode)
 		})
-		// Scrap tous les liens
+		onionRegex := regexp.MustCompile(`\.onion$`) // pour toute url qui contient un vrai .onion
 		c.OnHTML("a[href]", func(e *colly.HTMLElement) {
 			link := e.Attr("href")
 			absLink := e.Request.AbsoluteURL(link)
 
-			if absLink != "" {
+			// Ajouter seulement si c'est un lien .onion
+			if absLink != "" && onionRegex.MatchString(absLink) {
 				mu.Lock()
 				foundLinks = append(foundLinks, absLink)
 				mu.Unlock()
