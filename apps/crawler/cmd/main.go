@@ -36,17 +36,6 @@ func main() {
         }
     }
 
-    // Configuration pour capturer Ctrl+C
-    c := make(chan os.Signal, 1)
-    signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-    
-    go func() {
-        <-c
-        fmt.Println("\nShutting down gracefully...")
-        db.CloseRedis()
-        os.Exit(0)
-    }()
-
     // Configuration du crawler
     maxDepth := 1
     
