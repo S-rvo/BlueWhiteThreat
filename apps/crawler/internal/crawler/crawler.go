@@ -76,7 +76,7 @@ func Crawler(startURL string, depthMax int) ([]string, []string, int, error) {
 			absLink := e.Request.AbsoluteURL(link)
 
 			// Ajouter seulement si c'est un lien .onion
-			if absLink != "" && onionRegex.MatchString(absLink) {
+			if onionRegex.MatchString(absLink) {
 				mu.Lock()
 				foundLinks = append(foundLinks, absLink)
 				mu.Unlock()
