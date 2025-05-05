@@ -1,11 +1,7 @@
 package main
 
 import (
-	"fmt"
 	"log"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/internal/crawler"
@@ -29,23 +25,12 @@ func main() {
 		log.Fatalf("Error setting up Redis queues: %v", err)
 	}
 
-	// Ajouter les URLs de départ à la file d'attente Redis
-	for _, url := range startURLs {
-		if err := db.AddURLToQueue(url); err != nil {
-			log.Printf("Error adding start URL to queue: %v", err)
-		}
-	}
-
-	// Configuration pour capturer Ctrl+C
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-c
-		fmt.Println("\nShutting down gracefully...")
-		db.CloseRedis()
-		os.Exit(0)
-	}()
+    // Ajouter les URLs de départ à la file d'attente Redis
+    for _, url := range startURLs {
+        if err := db.AddURLToQueue(url); err != nil {
+            log.Printf("Error adding start URL to queue: %v", err)
+        }
+    }
 
 	// Configuration du crawler
 	maxDepth := 1
