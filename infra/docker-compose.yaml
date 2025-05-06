@@ -78,7 +78,7 @@ services:
 #      - ./logs/mongodb:/var/log/mongodb
 
   neo4j:
-    image: neo4j:community-bullseye
+    image: neo4j:5.26.5-community-bullseye
     container_name: neo4j_service
     ports:
       - "7474:7474"
