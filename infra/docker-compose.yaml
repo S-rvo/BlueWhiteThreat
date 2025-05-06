@@ -77,6 +77,16 @@ services:
       - ./db/mongodb:/data
       - ./logs/mongodb:/var/log/mongodb
 
+  neo4j:
+    image: neo4j:community-bullseye
+    container_name: neo4j_service
+    ports:
+      - "7474:7474"
+    volumes:
+      - ./db/neo4j:/data
+      - ./logs/neo4j:/var/log/neo4j
+
 volumes:
   mongodb_data:
   redis_data:
+  neo4j_data:
