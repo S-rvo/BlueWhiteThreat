@@ -63,19 +63,19 @@ services:
     ports:
       - "6379:6379"
 
-  mongodb:
-    image: mongo:8.0.9
-    container_name: mongodb_service
-    ports:
-      - "27017:27017"
-    env_file:
-      - ../apps/crawler/.env
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME
-      - MONGO_INITDB_ROOT_PASSWORD
-    volumes:
-      - ./db/mongodb:/data
-      - ./logs/mongodb:/var/log/mongodb
+#  mongodb:
+#    image: mongo:8.0.9
+#    container_name: mongodb_service
+#    ports:
+#      - "27017:27017"
+#    env_file:
+#      - ../apps/crawler/.env
+#    environment:
+#      - MONGO_INITDB_ROOT_USERNAME
+#      - MONGO_INITDB_ROOT_PASSWORD
+#    volumes:
+#      - ./db/mongodb:/data
+#      - ./logs/mongodb:/var/log/mongodb
 
   neo4j:
     image: neo4j:community-bullseye
