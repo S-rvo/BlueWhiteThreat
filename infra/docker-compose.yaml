@@ -63,20 +63,30 @@ services:
     ports:
       - "6379:6379"
 
-  mongodb:
-    image: mongo:8.0.9
-    container_name: mongodb_service
+#  mongodb:
+#    image: mongo:8.0.9
+#    container_name: mongodb_service
+#    ports:
+#      - "27017:27017"
+#    env_file:
+#      - ../apps/crawler/.env
+#    environment:
+#      - MONGO_INITDB_ROOT_USERNAME
+#      - MONGO_INITDB_ROOT_PASSWORD
+#    volumes:
+#      - ./db/mongodb:/data
+#      - ./logs/mongodb:/var/log/mongodb
+
+  neo4j:
+    image: neo4j:5.26.5-community-bullseye
+    container_name: neo4j_service
     ports:
-      - "27017:27017"
-    env_file:
-      - ../apps/crawler/.env
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME
-      - MONGO_INITDB_ROOT_PASSWORD
+      - "7474:7474"
     volumes:
-      - ./db/mongodb:/data
-      - ./logs/mongodb:/var/log/mongodb
+      - ./db/neo4j:/data
+      - ./logs/neo4j:/var/log/neo4j
 
 volumes:
   mongodb_data:
   redis_data:
+  neo4j_data:
