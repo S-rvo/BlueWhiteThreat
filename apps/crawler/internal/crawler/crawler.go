@@ -70,7 +70,7 @@ func Crawler(startURL string, depthMax int) ([]string, []string, int, error) {
 			statusCode = r.StatusCode
 			fmt.Println("Statut HTTP :", r.StatusCode)
 		})
-		onionRegex := regexp.MustCompile(`\.onion$`) // pour toute url qui contient un vrai .onion
+		onionRegex := regexp.MustCompile(`\.onion(?:\/(?:[^\s?#]+\.html|[^\s?#]+\.php)?)?`) // pour toute url qui contient un vrai .onion
 		c.OnHTML("a[href]", func(e *colly.HTMLElement) {
 			link := e.Attr("href")
 			absLink := e.Request.AbsoluteURL(link)
