@@ -3,3 +3,5 @@
 *.env.prod
 infra/db/*
 infra/logs/*
+*crawler
+*scrapper
