@@ -1,37 +1,16 @@
-# Utilisation de l'image de base Go
-FROM golang:1.24 AS builder
+# Dockerfile
+FROM golang:1.24 as builder
 
-# Définition du répertoire de travail
 WORKDIR /app
-
-# Copie des fichiers de dépendances
 COPY go.mod go.sum ./
-
-# Téléchargement des dépendances
 RUN go mod download
+COPY . .
+RUN go build -o scraper ./cmd/main.go
 
-# Copie des dossiers cmd et internal
-COPY cmd ./cmd
-COPY internal ./internal
-
-# Construction de l'application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o scraper .
-
-# Utilisation d'une image de base légère pour l'exécution
 FROM alpine:latest
-
-# Mise à jour des paquets et ajout de certificats SSL nécessaires
-RUN apk --no-cache update && apk --no-cache add ca-certificates && rm -rf /var/cache/apk/*
-
-# Création d'un utilisateur non-root
+RUN apk --no-cache add ca-certificates
 RUN adduser -D -g '' scraperuser
 USER scraperuser
-
-# Définition du répertoire de travail
 WORKDIR /home/scraperuser
-
-# Copie du binaire construit depuis l'étape de build
 COPY --from=builder /app/scraper .
-
-# Commande pour exécuter l'application
-CMD ["./scraper"]
+ENTRYPOINT [ "./scraper" ]
