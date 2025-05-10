@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -26,10 +27,12 @@ func InitMongoDB() (*MongoDB, error) {
 	dbName := os.Getenv("MONGO_DBNAME")
 	if dbName == "" {
 		dbName = "dbname"
+		log.Println(dbName)
 	}
 	uri := os.Getenv("MONGO_URI")
 	if uri == "" {
-		uri = "mongodb://localhost:27017"
+		uri = "mongodb://mongodb_service:27017"
+		log.Println(uri)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -40,11 +43,6 @@ func InitMongoDB() (*MongoDB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
-
-	// Vérifie la connexion
-	//if err := client.Ping(ctx, nil); err != nil {
-	//	return nil, fmt.Errorf("failed to ping MongoDB: %w", err)
-	//}
 
 	db := client.Database(dbName)
 	collection := db.Collection(collectionName)
@@ -75,4 +73,18 @@ func (m *MongoDB) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return m.Client.Disconnect(ctx)
+}
+
+// Méthode pour créer un index unique sur url_crawled dans MongoDB
+func (m *MongoDB) EnsureUniqueIndex() error {
+	indexModel := mongo.IndexModel{
+		Keys:    bson.M{"url_crawled": 1},
+		Options: options.Index().SetUnique(true),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := m.Collection.Indexes().CreateOne(ctx, indexModel)
+	return err
 }
