@@ -1,0 +1,286 @@
+package deepdarkCTI
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+)
+
+// Helper pour lire SCRAP_FILES depuis l'env (ou ALL)
+func getFilesToScrape() []string {
+    files := os.Getenv("SCRAP_FILES")
+    if files == "" || files == "ALL" {
+        // liste complète par défaut
+        return []string{
+            "commercial_services.md", "cve_most_exploited.md", "defacement.md",
+            "discord.md", "exploits.md", "forum.md", "maas.md", "markets.md",
+            "methods.md", "others.md", "phishing.md", "ransomware_gang.md",
+            "rat.md", "search_engines.md", "telegram_infostealer.md", "telegram_threat_actors.md",
+        }
+    }
+    // clean/trim
+    list := strings.Split(files, ",")
+    res := make([]string, 0, len(list))
+    for _, f := range list {
+        name := strings.TrimSpace(f)
+        if name != "" {
+            res = append(res, name)
+        }
+    }
+    return res
+}
+
+// ScrapeAll renvoie un *seul* tableau enrichi des ajouts PR
+func ScrapeAll() ([]TableEntry, error) {
+    files := getFilesToScrape()
+    allEntries := []TableEntry{}
+    for _, file := range files {
+        log.Printf("Scraping file: %s", file)
+        url := fmt.Sprintf("https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/%s", file)
+        entries, err := ParseMarkdownTable(url, file)
+        if err != nil {
+            log.Printf("Erreur scraping %s : %v", file, err)
+            continue
+        }
+        allEntries = append(allEntries, entries...)
+    }
+
+    // Tentative d'enrichissement via PR : si ça foire, on log mais on retourne quand même allEntries
+    var enriched []TableEntry
+    defer func() {
+        if r := recover(); r != nil {
+            log.Printf("Panic lors de l'enrichissement PR (ignoré): %v", r)
+        }
+    }()
+    // Gérer les erreurs éventuelles de enrichWithPullRequests proprement
+    func() {
+        defer func() {
+            if r := recover(); r != nil {
+                log.Printf("Panic lors de l'enrichissement PR: %v (on continue avec les données brutes)", r)
+            }
+        }()
+        enriched = enrichWithPullRequests(allEntries, files)
+    }()
+    if len(enriched) == 0 {
+        log.Printf("Avertissement : enrichissement PR impossible, on retourne uniquement le contenu des fichiers.")
+        return allEntries, nil
+    }
+    return enriched, nil
+}
+
+// ParseMarkdownTable lit un fichier markdown et parse la table
+func ParseMarkdownTable(url, sourceFile string) ([]TableEntry, error) {
+    resp, err := http.Get(url)
+    if err != nil {
+        return nil, fmt.Errorf("get %s : %w", url, err)
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != 200 {
+        return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
+    }
+
+    return parseMarkdownTableFromReader(resp.Body, sourceFile)
+}
+
+func extractNameAndUrl(cell string) (string, string) { // TODO: le faire en regexp (deja essayé, trop dur)
+    // Recherche les positions des crochets et parenthèses
+    startName := strings.Index(cell, "[")
+    endName := strings.Index(cell, "]")
+    startUrl := strings.Index(cell, "(")
+    endUrl := strings.Index(cell, ")")
+
+    if startName != -1 && endName != -1 && startUrl != -1 && endUrl != -1 && endName < startUrl {
+        name := cell[startName+1 : endName]
+        url := cell[startUrl+1 : endUrl]
+        return name, url
+    }
+
+    fmt.Println("Aucune correspondance trouvée")
+    return "", ""
+}
+
+// Coupe en cellules, en gardant les vides et retire le premier & dernier "" si la ligne commence/finit par |
+func parseMarkdownColumns(line string) []string {
+    cells := strings.Split(line, "|")
+    // On retire la cellule vide de début/fin de ligne s'il y a, car markdown crée souvent |cell|cell|cell|
+    if len(cells) > 0 && strings.TrimSpace(cells[0]) == "" {
+        cells = cells[1:]
+    }
+    if len(cells) > 0 && strings.TrimSpace(cells[len(cells)-1]) == "" {
+        cells = cells[:len(cells)-1]
+    }
+    // On TRIM chaque cellule mais on garde les vides :
+    for i := range cells {
+        cells[i] = strings.TrimSpace(cells[i])
+    }
+    return cells
+}
+
+func parseMarkdownTableFromReader(r io.Reader, sourceFile string) ([]TableEntry, error) {
+    scanner := bufio.NewScanner(r)
+    entries := []TableEntry{}
+    for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		// Ignore header et séparateur de colonne, toujours :
+		if strings.HasPrefix(line, "|---") || strings.Contains(line, "-----") {
+			continue
+		}
+		// Ignore l'entête (1ère ligne) si "Name|Status" etc (adapte si tes titres changent)
+		if strings.HasPrefix(line, "|Name|Status|Description|") {
+			continue
+		}
+		if strings.HasPrefix(line, "|") {
+			cells := parseMarkdownColumns(line)
+			// On remplit en tolérant les champs vides comme il faut
+			name, url, status, description := "", "", "", ""
+			if len(cells) > 0 {
+				name, url = extractNameAndUrl(cells[0])
+			}
+			if len(cells) > 1 {
+				status = cells[1]
+			}
+			if len(cells) > 2 {
+				description = cells[2]
+			}
+			// NE GÈRE que les vraies données (pas lignes vides/séparateurs)
+			if name != "" {
+				entries = append(entries, TableEntry{
+					Name:        name,
+					URL:         url,
+					Status:      status,
+					Description: description,
+					SourceFile:  sourceFile,
+				})				
+			}
+		}
+	}
+    if err := scanner.Err(); err != nil {
+        return nil, err
+    }
+    return entries, nil
+}
+
+// Ajoute les ajouts des PR, sans supprimer d'existant et sans doublons
+func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []TableEntry {
+	existing := make(map[string]struct{})
+    for _, e := range entries {
+        key := e.Name + e.URL
+        existing[key] = struct{}{}
+    }
+
+    url := "https://api.github.com/repos/fastfire/deepdarkCTI/pulls?state=open"
+    req, _ := http.NewRequest("GET", url, nil)
+    req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; deepdarkCTI-bot/1.0)")
+    resp, err := http.DefaultClient.Do(req)
+    if err != nil {
+        log.Printf("Erreur récupération PR : %v", err)
+        return entries
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != 200 {
+        // Lis tout le body erreur pour debug
+        b, _ := io.ReadAll(resp.Body)
+        log.Printf("Erreur PR GitHub (HTTP %d): %s", resp.StatusCode, b)
+        return entries
+    }
+
+    var prs []struct {
+        Number int    `json:"number"`
+        Title  string `json:"title"`
+    }
+    if err := json.NewDecoder(resp.Body).Decode(&prs); err != nil {
+        log.Printf("Erreur decode PR : %v", err)
+        return entries
+    }
+
+    for _, pr := range prs {
+        files, diffs := getPRFilesAndDiffs(pr.Number, whitelistFiles)
+        for i, diff := range diffs {
+            for _, added := range diff.AddedLines {
+                cells := parseMarkdownColumns(added)
+                for i := range cells {
+                    cells[i] = strings.TrimSpace(cells[i])
+                }
+                if len(cells) < 4 {
+                    continue
+                }
+                if cells[0] == "" && cells[1] == "" && cells[2] == "" && cells[3] == "" {
+                    continue
+                }
+                sourceFile := diff.FileName
+                if sourceFile == "" && i < len(files) {
+                    sourceFile = files[i]
+                }
+                entry := TableEntry{
+                    Name:        cells[0],
+                    URL:        cells[1],
+                    Status:      cells[2],
+                    Description: cells[3],
+                    SourceFile:  sourceFile,
+                }
+                key := entry.Name + entry.URL
+                if _, ok := existing[key]; !ok {
+                    entries = append(entries, entry)
+                    existing[key] = struct{}{}
+                }
+            }
+        }
+    }
+    return entries
+}
+
+func getPRFilesAndDiffs(prNumber int, whitelistFiles []string) ([]string, []PRDiff) {
+    filesURL := fmt.Sprintf("https://api.github.com/repos/fastfire/deepdarkCTI/pulls/%d/files", prNumber)
+    resp, err := http.Get(filesURL)
+    if err != nil {
+        return nil, nil
+    }
+    defer resp.Body.Close()
+    var data []struct {
+        Filename string `json:"filename"`
+        Patch    string `json:"patch"`
+    }
+    if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+        return nil, nil
+    }
+    var files []string
+    var diffs []PRDiff
+    for _, f := range data {
+        for _, wanted := range whitelistFiles {
+            if strings.HasSuffix(f.Filename, wanted) {
+                files = append(files, f.Filename)
+                added, _ := parsePatch(f.Patch)
+                diffs = append(diffs, PRDiff{
+                    FileName:   f.Filename,
+                    AddedLines: added,
+                })
+                break
+            }
+        }
+    }
+    return files, diffs
+}
+
+func parsePatch(patch string) (added, removed []string) {
+    scanner := bufio.NewScanner(strings.NewReader(patch))
+    for scanner.Scan() {
+        line := scanner.Text()
+        if strings.HasPrefix(line, "+|") && !strings.HasPrefix(line, "+++") {
+            added = append(added, strings.TrimPrefix(line, "+"))
+        }
+        if strings.HasPrefix(line, "-|") && !strings.HasPrefix(line, "---") {
+            removed = append(removed, strings.TrimPrefix(line, "-"))
+        }
+    }
+    return
+}

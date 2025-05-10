@@ -10,7 +10,7 @@ fi
 
 # Étape 2 : Compiler l'application si les tests passent
 echo "Tests passed. Building the application..."
-go build -o scrapper ./cmd/main.go
+go build -o scraper ./cmd/main.go
 if [ $? -ne 0 ]; then
     echo "Build failed. Aborting."
     exit 1
@@ -18,4 +18,4 @@ fi
 
 # Étape 3 : Lancer le programme compilé
 echo "Build successful. Starting the program..."
-./scrapper
+./scraper
