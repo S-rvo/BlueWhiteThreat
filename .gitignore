@@ -4,4 +4,4 @@
 infra/db/*
 infra/logs/*
 *crawler
-*scrapper
+*scraper
