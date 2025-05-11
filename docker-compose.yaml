@@ -71,7 +71,6 @@ services:
       - ./apps/scraper/.env
     volumes:
       - mongodb_data:/data/db
-      - ./logs/mongodb:/var/log/mongodb
 
   mongo-express:
     image: mongo-express:1.0.2-20-alpine3.19
