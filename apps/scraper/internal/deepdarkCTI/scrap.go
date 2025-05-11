@@ -74,7 +74,7 @@ func ScrapeAll() ([]TableEntry, error) {
 
 // ParseMarkdownTable lit un fichier markdown et parse la table
 func ParseMarkdownTable(url, sourceFile string) ([]TableEntry, error) {
-    resp, err := http.Get(url)
+    resp, err := utils.SafeGetURL(url)
     if err != nil {
         return nil, fmt.Errorf("get %s : %w", url, err)
     }
@@ -291,8 +291,7 @@ func fetchOpenPRs() (*http.Response, error) {
         log.Println("ATTENTION: Pas de GITHUB_TOKEN dans les variables d'environnement (quotas très faibles).")
     }
 
-    resp, err := http.DefaultClient.Do(req)
-    log.Printf("Code de statut de la réponse PR: %d", resp.StatusCode)
+    resp, err := utils.HttpClient.Do(req)
     if err != nil {
         return nil, err
     }
@@ -311,21 +310,7 @@ func fetchOpenPRs() (*http.Response, error) {
 
 func getPRFilesAndDiffs(prNumber int, whitelistFiles []string) ([]string, []PRDiff) {
     filesURL := fmt.Sprintf("https://api.github.com/repos/fastfire/deepdarkCTI/pulls/%d/files", prNumber)
-    req, err := http.NewRequest("GET", filesURL, nil)
-    if err != nil {
-        log.Printf("Erreur création requête fichiers PR: %v", err)
-        return nil, nil
-    }
-
-    req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; deepdarkCTI-bot/1.0)")
-    req.Header.Set("Accept", "application/vnd.github+json")
-
-    token := utils.GetEnvOrDefault("GITHUB_TOKEN", "")
-    if token != "" {
-        req.Header.Set("Authorization", "Bearer "+token)
-    }
-
-    resp, err := http.DefaultClient.Do(req)
+    resp, err := utils.SafeGetURL(filesURL)
     if err != nil {
         log.Printf("Erreur requête fichiers PR: %v", err)
         return nil, nil

@@ -1,0 +1,49 @@
+name: CI Crawler
+
+on:
+  push:
+    branches:
+      - main
+      - develops
+      - "crawler-*"
+  pull_request:
+    branches:
+      - main
+      - "crawler-*"
+
+jobs:
+  test-and-security-crawler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # Test Crawler
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.24"
+      - name: Test crawler
+        run: |
+          cd apps/crawler
+          go mod tidy
+          go test ./...
+
+      # Go Security Scan (code statique)
+      - name: Go Security Scan (crawler)
+        run: |
+          cd apps/crawler
+          curl -sfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
+          $(go env GOPATH)/bin/gosec ./...
+
+      # Secrets Scan
+      - name: Find secrets (crawler)
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          paths: apps/crawler
+
+      # Docker Scan (Trivy)
+      - name: Scan Docker images (crawler)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "apps/crawler"
+          format: "table"
