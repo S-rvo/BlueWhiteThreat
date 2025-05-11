@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/S-rvo/BlueWhiteThreat/internal/utils"
 )
 
 // Helper pour lire SCRAP_FILES depuis l'env (ou ALL)
@@ -171,16 +173,13 @@ func parseMarkdownTableFromReader(r io.Reader, sourceFile string) ([]TableEntry,
 
 // Ajoute les ajouts des PR, sans supprimer d'existant et sans doublons
 func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []TableEntry {
-	existing := make(map[string]struct{})
+    existing := make(map[string]struct{})
     for _, e := range entries {
         key := e.Name + e.URL
         existing[key] = struct{}{}
     }
 
-    url := "https://api.github.com/repos/fastfire/deepdarkCTI/pulls?state=open"
-    req, _ := http.NewRequest("GET", url, nil)
-    req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; deepdarkCTI-bot/1.0)")
-    resp, err := http.DefaultClient.Do(req)
+    resp, err := fetchOpenPRs()
     if err != nil {
         log.Printf("Erreur récupération PR : %v", err)
         return entries
@@ -188,9 +187,14 @@ func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []Tab
     defer resp.Body.Close()
 
     if resp.StatusCode != 200 {
-        // Lis tout le body erreur pour debug
         b, _ := io.ReadAll(resp.Body)
         log.Printf("Erreur PR GitHub (HTTP %d): %s", resp.StatusCode, b)
+        return entries
+    }
+
+    // Optionnel : bloquer si plus de quota
+    if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+        log.Println("RATE LIMIT atteint, désactivez ou ralentissez, ou ajoutez un token !")
         return entries
     }
 
@@ -223,7 +227,7 @@ func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []Tab
                 }
                 entry := TableEntry{
                     Name:        cells[0],
-                    URL:        cells[1],
+                    URL:         cells[1],
                     Status:      cells[2],
                     Description: cells[3],
                     SourceFile:  sourceFile,
@@ -238,6 +242,38 @@ func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []Tab
     }
     return entries
 }
+
+// Appel GitHub AUTH avec gestion token + logs quota.
+func fetchOpenPRs() (*http.Response, error) {
+    url := "https://api.github.com/repos/fastfire/deepdarkCTI/pulls?state=open&per_page=100"
+    req, err := http.NewRequest("GET", url, nil)
+    if err != nil {
+        return nil, err
+    }
+
+    req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; deepdarkCTI-bot/1.0)")
+    req.Header.Set("Accept", "application/vnd.github+json")
+
+    token := utils.GetEnvOrDefault("GITHUB_TOKEN", "")
+    log.Printf("token: %s", token)
+    if token != "" {
+        req.Header.Set("Authorization", "token "+token)
+    } else {
+        log.Println("ATTENTION: Pas de GITHUB_TOKEN dans les variables d'environnement (quotas très faibles).")
+    }
+
+    resp, err := http.DefaultClient.Do(req)
+    if err != nil {
+        return nil, err
+    }
+
+    log.Printf("X-RateLimit-Remaining: %s / X-RateLimit-Limit: %s",
+        resp.Header.Get("X-RateLimit-Remaining"),
+        resp.Header.Get("X-RateLimit-Limit"))
+
+    return resp, nil
+}
+
 
 func getPRFilesAndDiffs(prNumber int, whitelistFiles []string) ([]string, []PRDiff) {
     filesURL := fmt.Sprintf("https://api.github.com/repos/fastfire/deepdarkCTI/pulls/%d/files", prNumber)

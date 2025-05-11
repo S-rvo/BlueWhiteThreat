@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"github.com/S-rvo/BlueWhiteThreat/internal/db"
 	"github.com/S-rvo/BlueWhiteThreat/internal/deepdarkCTI"
 	"github.com/S-rvo/BlueWhiteThreat/internal/utils"
@@ -14,6 +16,11 @@ import (
 var DefaultInterval = 30 // 30 min par défaut
 
 func main() {
+    err := godotenv.Load()
+    if err != nil {
+        log.Println("Aucun .env trouvé ou problème de lecture.")
+    }
+
     if i, err := strconv.Atoi(os.Getenv("SCRAPER_INTERVAL_MIN")); err == nil && i > 0 {
         DefaultInterval = i
     }
