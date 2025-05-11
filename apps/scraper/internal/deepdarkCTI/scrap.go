@@ -19,10 +19,7 @@ func getFilesToScrape() []string {
     if files == "" || files == "ALL" {
         // liste complète par défaut
         return []string{
-            "commercial_services.md", "cve_most_exploited.md", "defacement.md",
-            "discord.md", "exploits.md", "forum.md", "maas.md", "markets.md",
-            "methods.md", "others.md", "phishing.md", "ransomware_gang.md",
-            "rat.md", "search_engines.md", "telegram_infostealer.md", "telegram_threat_actors.md",
+            "defacement.md", "discord.md", "exploits.md", "others.md","phishing.md",
         }
     }
     // clean/trim
@@ -96,7 +93,6 @@ func extractNameAndUrl(cell string) (string, string) { // TODO: le faire en rege
     endName := strings.Index(cell, "]")
     startUrl := strings.Index(cell, "(")
     endUrl := strings.Index(cell, ")")
-
     if startName != -1 && endName != -1 && startUrl != -1 && endUrl != -1 && endName < startUrl {
         name := cell[startName+1 : endName]
         url := cell[startUrl+1 : endUrl]
@@ -179,6 +175,7 @@ func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []Tab
         existing[key] = struct{}{}
     }
 
+    log.Printf("Vérification des PR")
     resp, err := fetchOpenPRs()
     if err != nil {
         log.Printf("Erreur récupération PR : %v", err)
@@ -187,8 +184,8 @@ func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []Tab
     defer resp.Body.Close()
 
     if resp.StatusCode != 200 {
-        b, _ := io.ReadAll(resp.Body)
-        log.Printf("Erreur PR GitHub (HTTP %d): %s", resp.StatusCode, b)
+        body, _ := io.ReadAll(resp.Body)
+        log.Printf("Erreur GitHub API: %s", string(body))
         return entries
     }
 
@@ -209,27 +206,59 @@ func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []Tab
 
     for _, pr := range prs {
         files, diffs := getPRFilesAndDiffs(pr.Number, whitelistFiles)
+        // log.Printf("Nombre de diffs trouvés : %d", len(diffs))
         for i, diff := range diffs {
+            // log.Printf("Traitement du diff %d, fichier: %s", i, diff.FileName)
+            // log.Printf("Nombre de lignes ajoutées: %d", len(diff.AddedLines))
             for _, added := range diff.AddedLines {
+                // log.Printf("Ligne brute ajoutée: %s", added)
                 cells := parseMarkdownColumns(added)
+                // log.Printf("Nombre de cellules après parsing: %d", len(cells))
                 for i := range cells {
                     cells[i] = strings.TrimSpace(cells[i])
                 }
-                if len(cells) < 4 {
+                // Vérifie si toutes les cellules sont vides
+                allEmpty := true
+                for _, cell := range cells {
+                    if cell != "" {
+                        allEmpty = false
+                        break
+                    }
+                }
+                if allEmpty {
+                    log.Printf("Ignoré: toutes les cellules sont vides")
                     continue
                 }
-                if cells[0] == "" && cells[1] == "" && cells[2] == "" && cells[3] == "" {
+
+                // Remplit les champs avec les cellules disponibles
+                name, url, status, description := "", "", "", ""
+                if len(cells) > 0 {
+                    name, url = extractNameAndUrl(cells[0])
+                }
+                if len(cells) > 1 {
+                    status = cells[1]
+                }
+                if len(cells) > 2 {
+                    description = cells[2]
+                }
+
+                // Continue seulement si on a au moins un nom
+                if name == "" {
+                    log.Printf("Ignoré: pas de nom trouvé")
                     continue
                 }
+
+                // log.Printf("Cellules trouvées: [%s] [%s] [%s] [%s]", name, url, status, description)
                 sourceFile := diff.FileName
                 if sourceFile == "" && i < len(files) {
                     sourceFile = files[i]
                 }
+                // log.Printf("%s", name)
                 entry := TableEntry{
-                    Name:        cells[0],
-                    URL:         cells[1],
-                    Status:      cells[2],
-                    Description: cells[3],
+                    Name:        name,
+                    URL:         url,
+                    Status:      status,
+                    Description: description,
                     SourceFile:  sourceFile,
                 }
                 key := entry.Name + entry.URL
@@ -254,9 +283,10 @@ func fetchOpenPRs() (*http.Response, error) {
     req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; deepdarkCTI-bot/1.0)")
     req.Header.Set("Accept", "application/vnd.github+json")
 
-    token := utils.GetEnvOrDefault("GITHUB_TOKEN", "")
+    token := utils.GetEnvOrDefault("API_GITHUB_TOKEN", "")
     if token != "" {
-        req.Header.Set("Authorization", "token "+token)
+        req.Header.Set("Authorization", "Bearer "+token)
+        log.Printf("Token GitHub configuré (longueur: %d)", len(token))
     } else {
         log.Println("ATTENTION: Pas de GITHUB_TOKEN dans les variables d'environnement (quotas très faibles).")
     }
@@ -264,6 +294,11 @@ func fetchOpenPRs() (*http.Response, error) {
     resp, err := utils.HttpClient.Do(req)
     if err != nil {
         return nil, err
+    }
+    if resp.StatusCode != 200 {
+        body, _ := io.ReadAll(resp.Body)
+        log.Printf("Erreur GitHub API: %s", string(body))
+        return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
     }
 
     log.Printf("X-RateLimit-Remaining: %s / X-RateLimit-Limit: %s",
@@ -273,21 +308,30 @@ func fetchOpenPRs() (*http.Response, error) {
     return resp, nil
 }
 
-
 func getPRFilesAndDiffs(prNumber int, whitelistFiles []string) ([]string, []PRDiff) {
     filesURL := fmt.Sprintf("https://api.github.com/repos/fastfire/deepdarkCTI/pulls/%d/files", prNumber)
     resp, err := utils.SafeGetURL(filesURL)
     if err != nil {
+        log.Printf("Erreur requête fichiers PR: %v", err)
         return nil, nil
     }
     defer resp.Body.Close()
+
+    if resp.StatusCode != 200 {
+        body, _ := io.ReadAll(resp.Body)
+        log.Printf("Erreur GitHub API fichiers PR (HTTP %d): %s", resp.StatusCode, string(body))
+        return nil, nil
+    }
+
     var data []struct {
         Filename string `json:"filename"`
         Patch    string `json:"patch"`
     }
     if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+        log.Printf("Erreur décodage fichiers PR: %v", err)
         return nil, nil
     }
+
     var files []string
     var diffs []PRDiff
     for _, f := range data {
