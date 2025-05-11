@@ -283,7 +283,7 @@ func fetchOpenPRs() (*http.Response, error) {
     req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; deepdarkCTI-bot/1.0)")
     req.Header.Set("Accept", "application/vnd.github+json")
 
-    token := utils.GetEnvOrDefault("GITHUB_TOKEN", "")
+    token := utils.GetEnvOrDefault("API_GITHUB_TOKEN", "")
     if token != "" {
         req.Header.Set("Authorization", "Bearer "+token)
         log.Printf("Token GitHub configuré (longueur: %d)", len(token))
