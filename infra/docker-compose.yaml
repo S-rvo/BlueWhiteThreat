@@ -42,19 +42,6 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
 
-  # scraper:
-  #   build:
-  #     context: ../apps/scraper
-  #     dockerfile: Dockerfile.dev
-  #   container_name: scraper_service
-  #   tty: true
-  #   stdin_open: true
-  #   volumes:
-  #     - ../apps/scraper:/app
-  #   working_dir: /app
-  #   command: tail -f /dev/null
-  #   depends_on:
-  #     - redis
   redis:
     image: redis:8.0-rc1-alpine
     container_name: redis_service
@@ -63,28 +50,44 @@ services:
     ports:
       - "6379:6379"
 
-#  mongodb:
-#    image: mongo:8.0.9
-#    container_name: mongodb_service
-#    ports:
-#      - "27017:27017"
-#    env_file:
-#      - ../apps/crawler/.env
-#    environment:
-#      - MONGO_INITDB_ROOT_USERNAME
-#      - MONGO_INITDB_ROOT_PASSWORD
-#    volumes:
-#      - ./db/mongodb:/data
-#      - ./logs/mongodb:/var/log/mongodb
-
-  neo4j:
-    image: neo4j:5.26.5-community-bullseye
-    container_name: neo4j_service
-    ports:
-      - "7474:7474"
+  scraper:
+    build:
+      context: ../apps/scraper
+      dockerfile: Dockerfile.dev
+    container_name: scraper_service
     volumes:
-      - ./db/neo4j:/data
-      - ./logs/neo4j:/var/log/neo4j
+      - ../apps/scraper:/app
+    depends_on:
+      - mongodb
+    env_file:
+      - ../apps/scraper/.env
+
+  mongodb:
+    image: mongo:8.0.9
+    container_name: mongodb_service
+    ports:
+      - "27017:27017"
+    env_file:
+      - ../apps/scraper/.env
+    volumes:
+      - mongodb_data:/data/db
+      - ./logs/mongodb:/var/log/mongodb
+
+  mongo-express:
+    image: mongo-express:1.0.2-20-alpine3.19
+    container_name: mongo_express
+    ports:
+      - "8081:8081"
+    env_file:
+      - ../apps/scraper/.env
+    environment:
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=root
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=root
+      - ME_CONFIG_MONGODB_SERVER=mongodb
+      - ME_CONFIG_BASICAUTH_USERNAME=user
+      - ME_CONFIG_BASICAUTH_PASSWORD=user
+    depends_on:
+      - mongodb
 
 volumes:
   mongodb_data:
