@@ -255,7 +255,6 @@ func fetchOpenPRs() (*http.Response, error) {
     req.Header.Set("Accept", "application/vnd.github+json")
 
     token := utils.GetEnvOrDefault("GITHUB_TOKEN", "")
-    log.Printf("token: %s", token)
     if token != "" {
         req.Header.Set("Authorization", "token "+token)
     } else {
