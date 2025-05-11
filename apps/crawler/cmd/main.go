@@ -58,9 +58,17 @@ func initDatabases() {
 
 // startAPI lance l'API HTTP
 func startAPI() {
+
 	router := api.NewRouter()
+	srv := &http.Server{
+		Addr:         ":8080",
+		Handler:      router,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 	log.Println("API listening at http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", router))
+	log.Fatal(srv.ListenAndServe())
 }
 
 // startCrawler gère la boucle principale de crawling
