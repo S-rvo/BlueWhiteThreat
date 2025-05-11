@@ -1,7 +1,7 @@
 services:
   tor1:
     build:
-      context: ../apps/proxy
+      context: ./apps/proxy
       dockerfile: Dockerfile.dev
     container_name: tor_proxy_1
     ports:
@@ -11,7 +11,7 @@ services:
 
   tor2:
     build:
-      context: ../apps/proxy
+      context: ./apps/proxy
       dockerfile: Dockerfile.dev
     container_name: tor_proxy_2
     ports:
@@ -21,7 +21,7 @@ services:
 
   tor3:
     build:
-      context: ../apps/proxy
+      context: ./apps/proxy
       dockerfile: Dockerfile.dev
     container_name: tor_proxy_3
     ports:
@@ -31,11 +31,11 @@ services:
 
   crawler:
     build:
-      context: ../apps/crawler
+      context: ./apps/crawler
       dockerfile: Dockerfile.dev
     container_name: crawler_service
     volumes:
-      - ../apps/crawler:/app
+      - ./apps/crawler:/app
     depends_on:
       - redis
     environment:
@@ -52,15 +52,15 @@ services:
 
   scraper:
     build:
-      context: ../apps/scraper
+      context: ./apps/scraper
       dockerfile: Dockerfile.dev
     container_name: scraper_service
     volumes:
-      - ../apps/scraper:/app
+      - ./apps/scraper:/app
     depends_on:
       - mongodb
     env_file:
-      - ../apps/scraper/.env
+      - ./apps/scraper/.env
 
   mongodb:
     image: mongo:8.0.9
@@ -68,7 +68,7 @@ services:
     ports:
       - "27017:27017"
     env_file:
-      - ../apps/scraper/.env
+      - ./apps/scraper/.env
     volumes:
       - mongodb_data:/data/db
       - ./logs/mongodb:/var/log/mongodb
@@ -79,7 +79,7 @@ services:
     ports:
       - "8081:8081"
     env_file:
-      - ../apps/scraper/.env
+      - ./apps/scraper/.env
     environment:
       - ME_CONFIG_MONGODB_ADMINUSERNAME=root
       - ME_CONFIG_MONGODB_ADMINPASSWORD=root
