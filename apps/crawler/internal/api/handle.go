@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/S-rvo/BlueWhiteThreat/internal/db"
@@ -11,7 +12,9 @@ import (
 func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+		log.Printf("Error encoding health check response: %v", err)
+	}
 }
 
 // GetGraphHandler retourne toutes les relations URL -> URL du graphe Neo4j
@@ -25,7 +28,9 @@ func GetGraphHandler() http.HandlerFunc {
 			return
 		}
 
-		json.NewEncoder(w).Encode(graph)
+		if err := json.NewEncoder(w).Encode(graph); err != nil {
+			log.Printf("Error encoding graph response: %v", err)
+		}
 	}
 }
 
@@ -40,7 +45,9 @@ func GetAllURLsHandler() http.HandlerFunc {
 			return
 		}
 
-		json.NewEncoder(w).Encode(urls)
+		if err := json.NewEncoder(w).Encode(urls); err != nil {
+			log.Printf("Error encoding URLs response: %v", err)
+		}
 	}
 }
 
@@ -55,6 +62,8 @@ func GetCrawlerStatsHandler() http.HandlerFunc {
 			return
 		}
 
-		json.NewEncoder(w).Encode(stats)
+		if err := json.NewEncoder(w).Encode(stats); err != nil {
+			log.Printf("Error encoding stats response: %v", err)
+		}
 	}
 }

@@ -22,7 +22,9 @@ func InitNeo4j(uri, user, password string) error {
 // CloseNeo4j ferme proprement la connexion Neo4j
 func CloseNeo4j() {
 	if driver != nil {
-		driver.Close(context.Background())
+		if err := driver.Close(context.Background()); err != nil {
+			log.Printf("Error closing Neo4j driver: %v", err)
+		}
 	}
 }
 
