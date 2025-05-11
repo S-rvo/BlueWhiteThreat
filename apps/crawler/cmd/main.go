@@ -111,7 +111,9 @@ func processURL(url string, maxDepth int) {
 	_, links, statusCode, err := crawler.Crawler(url, maxDepth)
 	if err != nil {
 		log.Printf("Error crawling URL %s: %v", url, err)
-		db.MarkURLAsCrawled(url)
+		if err := db.MarkURLAsCrawled(url); err != nil {
+			log.Printf("Error marking URL as crawled: %v", err)
+		}
 		return
 	}
 
