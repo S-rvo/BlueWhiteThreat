@@ -1,0 +1,18 @@
+@import "./base.css";
+
+body {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  width: 100vw;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+}

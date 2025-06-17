@@ -1,0 +1,52 @@
+# Étape de build - Construction de l'application
+FROM node:18-alpine AS builder
+
+# Définir le répertoire de travail
+WORKDIR /app
+
+# Copier les fichiers de dépendances
+COPY apps/target/package*.json ./
+
+# Installer toutes les dépendances (dev + prod pour le build)
+RUN npm ci
+
+# Copier le code source
+COPY apps/target/ ./
+
+# Construire l'application pour la production
+RUN npm run build
+
+# Étape de production - Serveur léger
+FROM nginx:alpine AS production
+
+# Copier la configuration nginx personnalisée
+COPY apps/target/nginx.conf /etc/nginx/nginx.conf
+
+# Copier les fichiers construits depuis l'étape de build
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Créer un utilisateur non-root pour la sécurité
+RUN addgroup -g 1001 -S nginx-user
+RUN adduser -S nginx-user -u 1001
+
+# Changer les permissions
+RUN chown -R nginx-user:nginx-user /usr/share/nginx/html
+RUN chown -R nginx-user:nginx-user /var/cache/nginx
+RUN chown -R nginx-user:nginx-user /var/log/nginx
+RUN chown -R nginx-user:nginx-user /etc/nginx/conf.d
+
+# Changer vers l'utilisateur non-root
+USER nginx-user
+
+# Exposer le port
+EXPOSE 80
+
+# Variables d'environnement
+ENV NODE_ENV=production
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://localhost/health || exit 1
+
+# Commande de démarrage
+CMD ["nginx", "-g", "daemon off;"] 
