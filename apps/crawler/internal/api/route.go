@@ -5,14 +5,13 @@ import (
 )
 
 // NewRouter configure et retourne toutes les routes de l'API
-func NewRouter() *http.ServeMux {
+func NewRouter() http.Handler {
 	mux := http.NewServeMux()
 
-	// Routes API
 	mux.HandleFunc("/health", HealthCheckHandler)
 	mux.HandleFunc("/graph", GetGraphHandler())
 	mux.HandleFunc("/urls", GetAllURLsHandler())
 	mux.HandleFunc("/stats", GetCrawlerStatsHandler())
 
-	return mux
+	return CORSMiddleware(mux) // <----- Ici on enveloppe avec CORS
 }
