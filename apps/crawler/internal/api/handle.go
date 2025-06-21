@@ -17,14 +17,15 @@ func HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GetGraphHandler retourne toutes les relations URL -> URL du graphe Neo4j
+// GetGraphHandler retourne toutes les relations principales (URLs nettoyées) du graphe Neo4j
 func GetGraphHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		graph, err := db.FetchGraphRelations()
 		if err != nil {
-			http.Error(w, `{"error":"Neo4j error"}`, http.StatusInternalServerError)
+			log.Printf("Error fetching graph relations from Neo4j: %v", err)
+			http.Error(w, `{"error":"Neo4j error fetching graph relations"}`, http.StatusInternalServerError)
 			return
 		}
 
@@ -34,13 +35,14 @@ func GetGraphHandler() http.HandlerFunc {
 	}
 }
 
-// GetAllURLsHandler retourne toutes les URLs du graphe
+// GetAllURLsHandler retourne toutes les URLs principales (nettoyées)
 func GetAllURLsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		urls, err := db.FetchAllURLs()
 		if err != nil {
+			log.Printf("Error fetching URLs from Neo4j: %v", err)
 			http.Error(w, `{"error":"Neo4j error fetching URLs"}`, http.StatusInternalServerError)
 			return
 		}
@@ -58,7 +60,8 @@ func GetCrawlerStatsHandler() http.HandlerFunc {
 
 		stats, err := db.FetchCrawlerStats()
 		if err != nil {
-			http.Error(w, `{"error":"Redis error fetching stats"}`, http.StatusInternalServerError)
+			log.Printf("Error fetching crawler stats from Redis: %v", err)
+			http.Error(w, `{"error":"Redis error fetching crawler stats"}`, http.StatusInternalServerError)
 			return
 		}
 
