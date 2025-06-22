@@ -45,15 +45,6 @@ api --> front
 api --> neo4j[(Neo4j DB)] --> api
 
 redis[(Redis cache)]
-Mongo[(Mongo DB)]
-
-Scraper["Scraper container"]
-
-Scraper --> .onion
-Scraper --> Mongo
-
-api --> Mongo --> api
-
 
 ```
 
