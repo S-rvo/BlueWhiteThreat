@@ -19,7 +19,7 @@ Le système repose sur une architecture modulaire intégrant plusieurs mécanism
 
 Ce projet vise à fournir un outil de veille automatisée sur les menaces issues du darkweb, et à faciliter leur analyse contextuelle à travers une visualisation graphique et interactive.
 
-#### Schémas Fonctionnel :
+#### Schémas Fonctionnel Crawler:
 ```mermaid
 flowchart TB
 crawler["Crawler container"]
@@ -48,7 +48,7 @@ redis[(Redis cache)]
 
 ```
 
-#### Scraping, Parsing :
+#### Schémas Fonctionnel Scraping, Parsing :
 
 ```mermaid
 flowchart TB

@@ -1,9 +1,16 @@
 export default defineNuxtConfig({
-  css: ['~/assets/css/app.css'],
+  css: ['@/assets/css/tailwind.css'],
+
+  postcss: {
+    plugins: {
+      tailwindcss: {},
+      autoprefixer: {},
+    },
+  },
+
   modules: [
-    '@nuxt/ui',
     '@nuxt/eslint',
     '@nuxt/fonts',
-    '@nuxt/icon'
-  ]
+    '@nuxt/icon',
+  ],
 })
