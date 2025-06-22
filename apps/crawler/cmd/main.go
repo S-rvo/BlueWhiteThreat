@@ -47,7 +47,7 @@ func initDatabases() {
 	}
 
 	// Initialiser Neo4j
-	if err := db.InitNeo4j(
+	if err := db.InitNeo4jDriver(
 		os.Getenv("NEO4J_URI"),
 		os.Getenv("NEO4J_USER"),
 		os.Getenv("NEO4J_PASSWORD"),
