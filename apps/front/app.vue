@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen flex flex-col">
     <HeaderBar />
-    <main class="bg-[#fffff] flex-1">
+    <main class="home flex-1">
       <NuxtPage />
     </main>
     <FooterBar />
@@ -14,4 +14,8 @@
 
 <style scoped>
 
+
+.home{
+  background-color:  #0f172b;
+}
 </style>
