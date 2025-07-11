@@ -1,4 +1,4 @@
-package scraper
+package sites
 
 import (
 	"context"
@@ -9,10 +9,10 @@ import (
 	"strings"
 
 	//"time"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/chromedp/chromedp" //pour l'exécution de JS
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Post struct {
