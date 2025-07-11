@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/scraper/internal/sites"
 	"github.com/joho/godotenv"
 )
 
@@ -29,7 +30,7 @@ func main() {
 		select {
 		case <-ticker.C:
 			log.Printf("⏰ Exécution programmée du scraper à %s", time.Now().Format("15:04:05"))
-			// Appel de la fonction de scraping
+			sites.DarkThreat()
 		}
 	}
 }

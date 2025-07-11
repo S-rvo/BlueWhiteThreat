@@ -22,7 +22,7 @@ type Post struct {
 	Content  string `json:"content"`
 }
 
-func main() {
+func DarkThreat() {
 	//ctx, cancel := chromedp.NewContext(context.Background()) trop long
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),                        // pas d'interface
