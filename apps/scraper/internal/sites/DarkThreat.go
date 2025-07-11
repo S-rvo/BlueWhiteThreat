@@ -1,4 +1,4 @@
-package main
+package scraper
 
 import (
 	"context"
@@ -9,7 +9,8 @@ import (
 	"strings"
 
 	//"time"
-
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/chromedp/chromedp" //pour l'exécution de JS
 )
@@ -77,4 +78,51 @@ func main() {
 	encoder.Encode(posts)
 
 	fmt.Println("JS exécuté et output.json généré !")
+
+		// Connexion à MongoDB
+	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI("mongodb://localhost:27017"))
+	if err != nil {
+		log.Fatal("Erreur de connexion MongoDB:", err)
+	}
+	defer client.Disconnect(context.Background())
+
+	// Choisir base + collection
+	collection := client.Database("scrapeDB").Collection("posts")
+
+	// Lire le fichier JSON généré
+	fileContent, err := os.ReadFile("internal/db/output.json")
+	if err != nil {
+		log.Fatal("Erreur lecture JSON:", err)
+	}
+
+	var postsFromFile []interface{}
+	err = json.Unmarshal(fileContent, &postsFromFile)
+	if err != nil {
+		log.Fatal("Erreur parsing JSON:", err)
+	}
+
+	// Insérer les documents dans MongoDB
+	result, err := collection.InsertMany(context.Background(), postsFromFile)
+	if err != nil {
+		log.Fatal("Erreur insertion Mongo:", err)
+	}
+
+	fmt.Printf("✅ %d documents insérés dans MongoDB\n", len(result.InsertedIDs))
+
+
+	var buf []byte
+	err = chromedp.Run(ctx,
+		chromedp.FullScreenshot(&buf, 90),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = os.WriteFile("screenshot.png", buf, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Screenshot enregistré sous screenshot.png")
 }
+
