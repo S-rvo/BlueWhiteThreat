@@ -1,0 +1,28 @@
+# Dockerfile pour le développement Vue.js + Vite - avec hot-reload
+FROM node:18-alpine
+
+# Définir le répertoire de travail
+WORKDIR /app
+
+# Installer les dépendances globales utiles pour le développement
+RUN npm install -g nodemon
+
+# Copier les fichiers de dépendances
+COPY apps/target/package*.json ./
+
+# Installer toutes les dépendances (dev + prod)
+RUN npm install
+
+# Copier le code source
+COPY apps/target/ ./
+
+# Exposer le port de développement Vite
+EXPOSE 5173
+
+# Variables d'environnement pour le développement
+ENV NODE_ENV=development
+ENV HOST=0.0.0.0
+ENV PORT=5173
+
+# Commande de démarrage avec hot-reload Vite
+CMD ["npm", "run", "dev"] 
