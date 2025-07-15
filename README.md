@@ -52,8 +52,6 @@ redis[(Redis cache)]
 
 ```mermaid
 flowchart TB
-scraper["Scraper DeepDarkCTI"]
-parser["Parser target"]
-front["Front end"]
-
+scraper["Scraper Container"] --> main.go --> AllScrap["All Scrap"] --> Mongo[(Mongo DB)]
+--> API --> front
 ```

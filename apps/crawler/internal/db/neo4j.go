@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"log"
+	"net/url"
+	"strings"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
@@ -56,4 +58,13 @@ func CloseNeo4j() {
 			log.Printf("Error closing Neo4j driver: %v", err)
 		}
 	}
+}
+
+func cleanOnionURL(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }

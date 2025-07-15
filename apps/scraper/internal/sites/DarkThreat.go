@@ -79,7 +79,7 @@ func DarkThreat() {
 
 	fmt.Println("JS exécuté et output.json généré !")
 
-		// Connexion à MongoDB
+	// Connexion à MongoDB
 	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI("mongodb://localhost:27017"))
 	if err != nil {
 		log.Fatal("Erreur de connexion MongoDB:", err)
@@ -109,7 +109,6 @@ func DarkThreat() {
 
 	fmt.Printf("✅ %d documents insérés dans MongoDB\n", len(result.InsertedIDs))
 
-
 	var buf []byte
 	err = chromedp.Run(ctx,
 		chromedp.FullScreenshot(&buf, 90),
@@ -125,4 +124,3 @@ func DarkThreat() {
 
 	fmt.Println("Screenshot enregistré sous screenshot.png")
 }
-
