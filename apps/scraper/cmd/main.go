@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/sites"
 	"github.com/joho/godotenv"
-	"github.com/S-rvo/BlueWhiteThreat/internal/sites"
 )
 
 var DefaultInterval = 1 // 30 min par défaut
@@ -26,14 +26,8 @@ func main() {
 	ticker := time.NewTicker(time.Duration(DefaultInterval) * time.Minute)
 	defer ticker.Stop()
 
-	sites.RunScraper()
-
-	for {
-		select {
-		case <-ticker.C:
-			log.Printf("⏰ Exécution programmée du scraper à %s", time.Now().Format("15:04:05"))
-			sites.RunScraper()
-			// Appel de la fonction de scraping
-		}
+	for range ticker.C {
+		log.Printf("⏰ Exécution programmée du scraper à %s", time.Now().Format("15:04:05"))
+		sites.RunScraper()
 	}
 }
