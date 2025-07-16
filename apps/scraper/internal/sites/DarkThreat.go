@@ -60,6 +60,7 @@ func RunScraper() {
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
 
+	log.Println("chromedp context:", ctx)
 	// Navigation et extraction HTML
 	var html string
 	err := chromedp.Run(ctx,
@@ -70,6 +71,7 @@ func RunScraper() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Println("html:", html)
 
 	// Parsing DOM avec GoQuery
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
