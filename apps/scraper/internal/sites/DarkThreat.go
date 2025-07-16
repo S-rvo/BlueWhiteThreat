@@ -2,17 +2,16 @@ package sites
 
 import (
 	"context"
-	"encoding/json"
+//	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 
-	//"time"
-	"github.com/PuerkitoBio/goquery"
-	"github.com/chromedp/chromedp" //pour l'exécution de JS
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"github.com/PuerkitoBio/goquery"
+	"github.com/chromedp/chromedp"
 )
 
 type Post struct {
@@ -22,13 +21,36 @@ type Post struct {
 	Content  string `json:"content"`
 }
 
-func DarkThreat() {
-	//ctx, cancel := chromedp.NewContext(context.Background()) trop long
+func getMongoURI() string {
+	user := os.Getenv("MONGO_INITDB_ROOT_USERNAME")
+	pass := os.Getenv("MONGO_INITDB_ROOT_PASSWORD")
+	host := os.Getenv("MONGO_HOST")
+	port := os.Getenv("MONGO_PORT")
+
+	if user == "" {
+		user = "root"
+	}
+	if pass == "" {
+		pass = "root"
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	if port == "" {
+		port = "27017"
+	}
+
+	return fmt.Sprintf("mongodb://%s:%s@%s:%s/?authSource=admin", user, pass, host, port)
+}
+
+
+func RunScraper() {
+	// Configuration de chromedp
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),                        // pas d'interface
-		chromedp.Flag("disable-gpu", true),                     // pas de rendu matériel
-		chromedp.Flag("blink-settings", "imagesEnabled=false"), // pas d'images
-		chromedp.Flag("no-sandbox", true),                      // plus stable en conteneur
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("blink-settings", "imagesEnabled=false"),
+		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
 	)
 
@@ -38,18 +60,18 @@ func DarkThreat() {
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	// Lancer la page
+	// Navigation et extraction HTML
 	var html string
 	err := chromedp.Run(ctx,
-		chromedp.Navigate("http://localhost:5173"),
-		chromedp.WaitVisible(`div.card`, chromedp.ByQuery), // attendre le rendu JS
+		chromedp.Navigate("http://site:5173"),
+		chromedp.WaitVisible(`div.card`, chromedp.ByQuery),
 		chromedp.OuterHTML("body", &html),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Parse avec GoQuery (DOM)
+	// Parsing DOM avec GoQuery
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		log.Fatal(err)
@@ -70,45 +92,31 @@ func DarkThreat() {
 		})
 	})
 
-	// Sauvegarde JSON
-	file, _ := os.Create("internal/db/output.json")
-	defer file.Close()
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	encoder.Encode(posts)
-
-	fmt.Println("JS exécuté et output.json généré !")
-
 	// Connexion à MongoDB
-	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI("mongodb://localhost:27017"))
+	mongoURI := getMongoURI()
+	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
 	if err != nil {
 		log.Fatal("Erreur de connexion MongoDB:", err)
 	}
 	defer client.Disconnect(context.Background())
 
-	// Choisir base + collection
 	collection := client.Database("scrapeDB").Collection("posts")
 
-	// Lire le fichier JSON généré
-	fileContent, err := os.ReadFile("internal/db/output.json")
-	if err != nil {
-		log.Fatal("Erreur lecture JSON:", err)
+	// Conversion []Post → []interface{}
+	var postsAsInterface []interface{}
+	for _, post := range posts {
+		postsAsInterface = append(postsAsInterface, post)
 	}
 
-	var postsFromFile []interface{}
-	err = json.Unmarshal(fileContent, &postsFromFile)
-	if err != nil {
-		log.Fatal("Erreur parsing JSON:", err)
-	}
-
-	// Insérer les documents dans MongoDB
-	result, err := collection.InsertMany(context.Background(), postsFromFile)
+	// Insertion dans MongoDB
+	result, err := collection.InsertMany(context.Background(), postsAsInterface)
 	if err != nil {
 		log.Fatal("Erreur insertion Mongo:", err)
 	}
 
-	fmt.Printf("✅ %d documents insérés dans MongoDB\n", len(result.InsertedIDs))
+	fmt.Printf("%d documents insérés dans MongoDB\n", len(result.InsertedIDs))
 
+	// Screenshot
 	var buf []byte
 	err = chromedp.Run(ctx,
 		chromedp.FullScreenshot(&buf, 90),
@@ -124,3 +132,4 @@ func DarkThreat() {
 
 	fmt.Println("Screenshot enregistré sous screenshot.png")
 }
+
