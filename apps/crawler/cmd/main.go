@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/S-rvo/BlueWhiteThreat/internal/api"
-	"github.com/S-rvo/BlueWhiteThreat/internal/crawler"
-	"github.com/S-rvo/BlueWhiteThreat/internal/db"
+	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/api"
+	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/crawler"
+	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/db"
 )
 
 func main() {

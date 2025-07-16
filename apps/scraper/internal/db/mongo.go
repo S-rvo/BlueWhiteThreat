@@ -8,8 +8,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"github.com/S-rvo/BlueWhiteThreat/internal/deepdarkCTI"
-	"github.com/S-rvo/BlueWhiteThreat/internal/utils"
+	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/deepdarkCTI"
+	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/utils"
 )
 
 // Connexion MongoDB centralisée
