@@ -2,16 +2,16 @@ package sites
 
 import (
 	"context"
-//	"encoding/json"
+	//	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/chromedp/chromedp"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Post struct {
@@ -127,7 +127,7 @@ func RunScraper() {
 		log.Fatal(err)
 	}
 
-	err = os.WriteFile("screenshot.png", buf, 0644)
+	err = os.WriteFile("screenshot.png", buf, 0600)
 	if err != nil {
 		log.Fatal(err)
 	}
