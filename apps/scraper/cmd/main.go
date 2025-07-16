@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/S-rvo/BlueWhiteThreat/scraper/internal/sites"
+	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/sites"
 	"github.com/joho/godotenv"
 )
 

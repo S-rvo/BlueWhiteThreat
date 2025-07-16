@@ -1,4 +1,4 @@
-module github.com/S-rvo/BlueWhiteThreat/scraper
+module github.com/S-rvo/BlueWhiteThreat/apps/scraper
 
 go 1.24
 

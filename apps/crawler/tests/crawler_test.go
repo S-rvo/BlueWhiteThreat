@@ -1,9 +1,9 @@
-package crawler_test
+package crawler_tests
 
 import (
 	"testing"
 
-	"github.com/S-rvo/BlueWhiteThreat/internal/crawler"
+	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/crawler"
 )
 
 func TestCrawlerInitialization(t *testing.T) {

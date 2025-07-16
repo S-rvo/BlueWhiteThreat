@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/S-rvo/BlueWhiteThreat/internal/db"
+	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/db"
 )
 
 // HealthCheckHandler vérifie si l'API est up

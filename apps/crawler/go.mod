@@ -1,4 +1,4 @@
-module github.com/S-rvo/BlueWhiteThreat
+module github.com/S-rvo/BlueWhiteThreat/apps/crawler
 
 go 1.24
 

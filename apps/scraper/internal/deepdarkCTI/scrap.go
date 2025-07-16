@@ -10,11 +10,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/S-rvo/BlueWhiteThreat/internal/utils"
+	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/utils"
 )
 
 // Helper pour lire SCRAP_FILES depuis l'env (ou ALL)
-func getFilesToScrape() []string {
+func GetFilesToScrape() []string {
     files := os.Getenv("SCRAP_FILES")
     if files == "" || files == "ALL" {
         // liste complète par défaut
@@ -36,7 +36,7 @@ func getFilesToScrape() []string {
 
 // ScrapeAll renvoie un *seul* tableau enrichi des ajouts PR
 func ScrapeAll() ([]TableEntry, error) {
-    files := getFilesToScrape()
+    files := GetFilesToScrape()
     allEntries := []TableEntry{}
     for _, file := range files {
         log.Printf("Scraping file: %s", file)
@@ -63,7 +63,7 @@ func ScrapeAll() ([]TableEntry, error) {
                 log.Printf("Panic lors de l'enrichissement PR: %v (on continue avec les données brutes)", r)
             }
         }()
-        enriched = enrichWithPullRequests(allEntries, files)
+        enriched = EnrichWithPullRequests(allEntries, files)
     }()
     if len(enriched) == 0 {
         log.Printf("Avertissement : enrichissement PR impossible, on retourne uniquement le contenu des fichiers.")
@@ -84,10 +84,10 @@ func ParseMarkdownTable(url, sourceFile string) ([]TableEntry, error) {
         return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
     }
 
-    return parseMarkdownTableFromReader(resp.Body, sourceFile)
+    return ParseMarkdownTableFromReader(resp.Body, sourceFile)
 }
 
-func extractNameAndUrl(cell string) (string, string) { // TODO: le faire en regexp (deja essayé, trop dur)
+func ExtractNameAndUrl(cell string) (string, string) { // TODO: le faire en regexp (deja essayé, trop dur)
     // Recherche les positions des crochets et parenthèses
     startName := strings.Index(cell, "[")
     endName := strings.Index(cell, "]")
@@ -104,7 +104,7 @@ func extractNameAndUrl(cell string) (string, string) { // TODO: le faire en rege
 }
 
 // Coupe en cellules, en gardant les vides et retire le premier & dernier "" si la ligne commence/finit par |
-func parseMarkdownColumns(line string) []string {
+func ParseMarkdownColumns(line string) []string {
     cells := strings.Split(line, "|")
     // On retire la cellule vide de début/fin de ligne s'il y a, car markdown crée souvent |cell|cell|cell|
     if len(cells) > 0 && strings.TrimSpace(cells[0]) == "" {
@@ -120,7 +120,7 @@ func parseMarkdownColumns(line string) []string {
     return cells
 }
 
-func parseMarkdownTableFromReader(r io.Reader, sourceFile string) ([]TableEntry, error) {
+func ParseMarkdownTableFromReader(r io.Reader, sourceFile string) ([]TableEntry, error) {
     scanner := bufio.NewScanner(r)
     entries := []TableEntry{}
     for scanner.Scan() {
@@ -137,11 +137,11 @@ func parseMarkdownTableFromReader(r io.Reader, sourceFile string) ([]TableEntry,
 			continue
 		}
 		if strings.HasPrefix(line, "|") {
-			cells := parseMarkdownColumns(line)
+			cells := ParseMarkdownColumns(line)
 			// On remplit en tolérant les champs vides comme il faut
 			name, url, status, description := "", "", "", ""
 			if len(cells) > 0 {
-				name, url = extractNameAndUrl(cells[0])
+				name, url = ExtractNameAndUrl(cells[0])
 			}
 			if len(cells) > 1 {
 				status = cells[1]
@@ -168,7 +168,7 @@ func parseMarkdownTableFromReader(r io.Reader, sourceFile string) ([]TableEntry,
 }
 
 // Ajoute les ajouts des PR, sans supprimer d'existant et sans doublons
-func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []TableEntry {
+func EnrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []TableEntry {
     existing := make(map[string]struct{})
     for _, e := range entries {
         key := e.Name + e.URL
@@ -176,7 +176,7 @@ func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []Tab
     }
 
     log.Printf("Vérification des PR")
-    resp, err := fetchOpenPRs()
+    resp, err := FetchOpenPRs()
     if err != nil {
         log.Printf("Erreur récupération PR : %v", err)
         return entries
@@ -205,14 +205,14 @@ func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []Tab
     }
 
     for _, pr := range prs {
-        files, diffs := getPRFilesAndDiffs(pr.Number, whitelistFiles)
+        files, diffs := GetPRFilesAndDiffs(pr.Number, whitelistFiles)
         // log.Printf("Nombre de diffs trouvés : %d", len(diffs))
         for i, diff := range diffs {
             // log.Printf("Traitement du diff %d, fichier: %s", i, diff.FileName)
             // log.Printf("Nombre de lignes ajoutées: %d", len(diff.AddedLines))
             for _, added := range diff.AddedLines {
                 // log.Printf("Ligne brute ajoutée: %s", added)
-                cells := parseMarkdownColumns(added)
+                cells := ParseMarkdownColumns(added)
                 // log.Printf("Nombre de cellules après parsing: %d", len(cells))
                 for i := range cells {
                     cells[i] = strings.TrimSpace(cells[i])
@@ -233,7 +233,7 @@ func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []Tab
                 // Remplit les champs avec les cellules disponibles
                 name, url, status, description := "", "", "", ""
                 if len(cells) > 0 {
-                    name, url = extractNameAndUrl(cells[0])
+                    name, url = ExtractNameAndUrl(cells[0])
                 }
                 if len(cells) > 1 {
                     status = cells[1]
@@ -273,7 +273,7 @@ func enrichWithPullRequests(entries []TableEntry, whitelistFiles []string) []Tab
 }
 
 // Appel GitHub AUTH avec gestion token + logs quota.
-func fetchOpenPRs() (*http.Response, error) {
+func FetchOpenPRs() (*http.Response, error) {
     url := "https://api.github.com/repos/fastfire/deepdarkCTI/pulls?state=open&per_page=100"
     req, err := http.NewRequest("GET", url, nil)
     if err != nil {
@@ -308,7 +308,7 @@ func fetchOpenPRs() (*http.Response, error) {
     return resp, nil
 }
 
-func getPRFilesAndDiffs(prNumber int, whitelistFiles []string) ([]string, []PRDiff) {
+func GetPRFilesAndDiffs(prNumber int, whitelistFiles []string) ([]string, []PRDiff) {
     filesURL := fmt.Sprintf("https://api.github.com/repos/fastfire/deepdarkCTI/pulls/%d/files", prNumber)
     resp, err := utils.SafeGetURL(filesURL)
     if err != nil {
@@ -338,7 +338,7 @@ func getPRFilesAndDiffs(prNumber int, whitelistFiles []string) ([]string, []PRDi
         for _, wanted := range whitelistFiles {
             if strings.HasSuffix(f.Filename, wanted) {
                 files = append(files, f.Filename)
-                added, _ := parsePatch(f.Patch)
+                added, _ := ParsePatch(f.Patch)
                 diffs = append(diffs, PRDiff{
                     FileName:   f.Filename,
                     AddedLines: added,
@@ -350,7 +350,7 @@ func getPRFilesAndDiffs(prNumber int, whitelistFiles []string) ([]string, []PRDi
     return files, diffs
 }
 
-func parsePatch(patch string) (added, removed []string) {
+func ParsePatch(patch string) (added, removed []string) {
     scanner := bufio.NewScanner(strings.NewReader(patch))
     for scanner.Scan() {
         line := scanner.Text()
