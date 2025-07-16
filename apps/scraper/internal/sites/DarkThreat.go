@@ -63,7 +63,7 @@ func RunScraper() {
 	// Navigation et extraction HTML
 	var html string
 	err := chromedp.Run(ctx,
-		chromedp.Navigate("http://site:5173"),
+		chromedp.Navigate("http://localhost:8081"),
 		chromedp.WaitVisible(`div.card`, chromedp.ByQuery),
 		chromedp.OuterHTML("body", &html),
 	)

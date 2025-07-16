@@ -19,4 +19,4 @@ RUN apt-get update && \
 # Build du binaire pour le contrôle
 RUN go build -o scraper ./cmd/main.go
 
-CMD ["sh", "./start-dev.sh"]
+CMD ["go", "run", "cmd/main.go"]
