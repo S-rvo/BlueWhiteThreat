@@ -1,0 +1,51 @@
+name: CI Scraper
+
+on:
+  push:
+    branches:
+      - main
+      - develops
+      - "scraper-*"
+  pull_request:
+    branches:
+      - main
+      - "scraper-*"
+
+jobs:
+  test-and-security-scraper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # Test Scraper
+      - uses: actions/setup-go@v4
+        with:
+          go-version: "1.24"
+      - name: Test scraper
+        run: |
+          cd apps/scraper
+          go mod tidy
+          go test ./...
+
+      # Go Security Scan (code statique)
+      - name: Go Security Scan (scraper)
+        run: |
+          cd apps/scraper
+          curl -sfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
+          $(go env GOPATH)/bin/gosec ./...
+
+      # Secrets Scan
+      - name: Find secrets (scraper)
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          paths: apps/scraper
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Docker Scan (Trivy)
+      - name: Scan Docker images (scraper)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "apps/scraper"
+          format: "table"

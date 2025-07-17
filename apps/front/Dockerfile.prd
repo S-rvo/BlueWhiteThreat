@@ -1,0 +1,23 @@
+# Build de l'app Nuxt
+FROM node:22-alpine AS builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm install
+
+COPY . .
+RUN npm run build
+
+# Serveur nginx pour servir le site statique
+FROM nginx:alpine
+
+# Copier le build statique généré par Nuxt
+COPY --from=builder /app/.output/public /usr/share/nginx/html
+
+# Copier une config nginx custom si besoin (optionnel)
+# COPY nginx.conf /etc/nginx/nginx.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

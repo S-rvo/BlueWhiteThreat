@@ -1,0 +1,151 @@
+services:
+  tor1:
+    build:
+      context: ./apps/proxy
+      dockerfile: Dockerfile.dev
+    container_name: tor_proxy_1
+    ports:
+      - "9051:9050"
+    tty: true
+    stdin_open: true
+
+  tor2:
+    build:
+      context: ./apps/proxy
+      dockerfile: Dockerfile.dev
+    container_name: tor_proxy_2
+    ports:
+      - "9052:9050"
+    tty: true
+    stdin_open: true
+
+  tor3:
+    build:
+      context: ./apps/proxy
+      dockerfile: Dockerfile.dev
+    container_name: tor_proxy_3
+    ports:
+      - "9053:9050"
+    tty: true
+    stdin_open: true
+
+  crawler:
+    build:
+      context: ./apps/crawler
+      dockerfile: Dockerfile.dev
+    container_name: crawler_service
+    volumes:
+      - ./apps/crawler:/app
+    depends_on:
+      - redis
+      - neo4j
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+
+  redis:
+    image: redis:8.0-rc1-alpine
+    container_name: redis_service
+    volumes:
+      - ./db/redis:/data
+    ports:
+      - "6379:6379"
+
+  scraper:
+    build:
+      context: ./apps/scraper
+      dockerfile: Dockerfile.dev
+    container_name: scraper_service
+    volumes:
+      - ./apps/scraper:/app
+    depends_on:
+      - mongodb
+    env_file:
+      - ./apps/scraper/.env
+
+  target:
+    build:
+      context: ./apps/target
+      dockerfile: Dockerfile.dev
+    container_name: target
+    depends_on:
+      - scraper
+    volumes:
+      - ./apps/target:/app
+      - /app/node_modules
+    ports:
+      - "8081:8081"
+
+  front:
+    build:
+      context: ./apps/front
+      dockerfile: Dockerfile.dev
+    container_name: frontend
+    depends_on:
+      - scraper
+    volumes:
+      - ./apps/front:/app
+      - /app/node_modules
+    ports:
+      - "8080:8080"
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.dev
+    container_name: api_service
+    depends_on:
+      - mongodb
+    volumes:
+      - ./apps/api:/app
+    ports:
+      - "8083:8083"
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017
+
+  mongodb:
+    image: mongo:8.0.9
+    container_name: mongodb_service
+    ports:
+      - "27017:27017"
+    env_file:
+      - ./apps/scraper/.env
+    volumes:
+      - mongodb_data:/data/db
+
+  mongo-express:
+    image: mongo-express:1.0.2-20-alpine3.19
+    container_name: mongo_express
+    ports:
+      - "8082:8082"
+    env_file:
+      - ./apps/scraper/.env
+    environment:
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=root
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=root
+      - ME_CONFIG_MONGODB_SERVER=mongodb
+      - ME_CONFIG_BASICAUTH_USERNAME=user
+      - ME_CONFIG_BASICAUTH_PASSWORD=user
+    depends_on:
+      - mongodb
+
+  neo4j:
+    image: neo4j:5.19
+    container_name: neo4j_service
+    ports:
+      - "7474:7474" # Interface web Neo4j Browser
+      - "7687:7687" # Connexion Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_dbms_security_auth__enabled=true
+    volumes:
+      - neo4j_data:/data
+    restart: unless-stopped
+
+volumes:
+  mongodb_data:
+  redis_data:
+  neo4j_data:

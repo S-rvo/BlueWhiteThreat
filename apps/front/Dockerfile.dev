@@ -1,0 +1,23 @@
+# Utilise une image Node officielle
+FROM node:22-alpine
+
+# Définir le répertoire de travail
+WORKDIR /app
+
+# Copier les fichiers de dépendances et installer pendant le build (fiable avec volume anonyme)
+COPY package.json package-lock.json* ./
+RUN npm install
+
+# Copier le reste du code source (sera overwrité par volume pour hot-reload)
+COPY . .
+
+# Exposer le port par défaut de Nuxt
+EXPOSE 8080
+
+# Variables d'environnement pour dev
+ENV NODE_ENV=development
+ENV HOST=0.0.0.0
+ENV PORT=8080
+
+# Commande de développement : Utilise npx pour lancer directement Nuxt avec --host
+CMD ["npx", "nuxt", "dev", "--host"]
