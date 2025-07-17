@@ -92,6 +92,20 @@ services:
     ports:
       - "8080:8080"
 
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.dev
+    container_name: api_service
+    depends_on:
+      - mongodb
+    volumes:
+      - ./apps/api:/app
+    ports:
+      - "8083:8083"
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017
+
   mongodb:
     image: mongo:8.0.9
     container_name: mongodb_service

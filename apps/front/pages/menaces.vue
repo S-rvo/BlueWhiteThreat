@@ -1,7 +1,6 @@
 <template>
   <div class="articles-cards">
     <div v-for="article in articles" :key="article.id" class="card group">
-      <img :src="article.image" alt="Article image" class="card-image" />
       <div class="card-content">
         <h2 class="card-title">
           <span>{{ article.title }}</span>
@@ -20,9 +19,10 @@ const articles = ref([]);
 
 const fetchArticles = async () => {
   try {
-    const response = await fetch("http://localhost:8083/api/articles");
+    const response = await fetch("http://localhost:8083/data");
     if (!response.ok)
       throw new Error("Erreur lors de la récupération des articles");
+    console.log(response);
     const data = await response.json();
     articles.value = data;
   } catch (error) {
