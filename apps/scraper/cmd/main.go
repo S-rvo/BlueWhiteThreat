@@ -10,7 +10,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-var DefaultInterval = 1 // 30 min par défaut
+var DefaultInterval = 30 // 30 min par défaut
 
 func main() {
 	err := godotenv.Load()
