@@ -1,0 +1,22 @@
+# Dockerfile.dev
+FROM golang:1.24
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# Run unit/integration tests. Faille si test KO !
+RUN go test ./...
+
+#pour chromdp
+RUN apt-get update && \
+    apt-get install -y chromium && \
+    rm -rf /var/lib/apt/lists/*
+
+# Build du binaire pour le contrôle
+RUN go build -o scraper ./cmd/main.go
+
+CMD ["go", "run", "cmd/main.go"]
