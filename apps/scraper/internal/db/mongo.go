@@ -2,13 +2,15 @@ package db
 
 import (
 	"context"
+	"fmt"
+	"reflect"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
-	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/deepdarkCTI"
 	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/utils"
 )
 
@@ -27,22 +29,47 @@ func ConnectMongo() (*mongo.Client, error) {
 }
 
 // Pour enregistrer chaque TableEntry individuellement en upsert
-func SaveAllEntries(base, collection string, entries []deepdarkCTI.TableEntry) error {
+func SaveAllEntries(base, collection string, entries interface{}, uniqueFields []string) (int, error) {
     client, err := ConnectMongo()
     if err != nil {
-        return err
+        return 0, err
     }
     defer client.Disconnect(context.TODO())
     coll := client.Database(base).Collection(collection)
 
-    for _, entry := range entries {
-        // Exemple de clé unique sur Name+URL
-        filter := bson.M{"name": entry.Name, "url": entry.URL}
+    // On convertit entries en slice de valeurs
+    slice := []interface{}{}
+    val := reflect.ValueOf(entries)
+    if val.Kind() == reflect.Slice {
+        for i := 0; i < val.Len(); i++ {
+            slice = append(slice, val.Index(i).Interface())
+        }
+    } else {
+        return 0, fmt.Errorf("entries doit être un slice")
+    }
+
+    inserted := 0
+    for _, entry := range slice {
+        filter := bson.M{}
+        // On construit le filtre unique dynamiquement
+        for _, field := range uniqueFields {
+            // On utilise la réflexion pour lire la valeur du champ
+            val := reflect.ValueOf(entry)
+            if val.Kind() == reflect.Struct {
+                f := val.FieldByName(field)
+                if f.IsValid() {
+                    filter[strings.ToLower(field)] = f.Interface()
+                }
+            }
+        }
         update := bson.M{"$set": entry}
-        _, err := coll.UpdateOne(context.TODO(), filter, update, options.Update().SetUpsert(true))
+        res, err := coll.UpdateOne(context.TODO(), filter, update, options.Update().SetUpsert(true))
         if err != nil {
-            return err
+            return inserted, err
+        }
+        if res.MatchedCount == 0 && res.UpsertedCount == 1 {
+            inserted++
         }
     }
-    return nil
+    return inserted, nil
 }
