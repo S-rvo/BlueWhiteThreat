@@ -63,6 +63,11 @@ services:
       - ./apps/scraper:/app
     depends_on:
       - mongodb
+      - redis
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MONGO_HOST=mongodb
     env_file:
       - ./apps/scraper/.env
 
