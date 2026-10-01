@@ -13,6 +13,7 @@ import (
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/classify"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/tfidf"
+	"github.com/joho/godotenv"
 )
 
 const (
@@ -25,6 +26,10 @@ const (
 )
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env found or unreadable, continuing with existing environment.")
+	}
+
 	inputPath := getEnvOrDefault("TRAINING_DATA", "training_data.csv")
 	outputPath := getEnvOrDefault("MODEL_PATH", "model.json")
 
