@@ -22,6 +22,11 @@ func torProxies() []string {
 	return []string{"tor1:9050", "tor2:9050", "tor3:9050"}
 }
 
+// fetchTimeout borne la durée d'un fetch (login + navigation) sur une URL :
+// un circuit Tor mort ou un onion service qui ne répond jamais ne doit pas
+// bloquer indéfiniment le tick courant.
+const fetchTimeout = 90 * time.Second
+
 // RunDarkwebScraper traite toutes les URLs découvertes par le crawler et pas
 // encore scrapées : récupère leur contenu via Tor, puis les persiste en Mongo.
 func RunDarkwebScraper() {
@@ -70,7 +75,10 @@ func scrapeOne(ctx context.Context, targetURL string, configs map[string]SiteCon
 		cfg = &c
 	}
 
-	allocCtx, cancelAlloc := newChromedpContext(ctx, rotator.Next())
+	fetchCtx, cancelTimeout := context.WithTimeout(ctx, fetchTimeout)
+	defer cancelTimeout()
+
+	allocCtx, cancelAlloc := newChromedpContext(fetchCtx, rotator.Next())
 	defer cancelAlloc()
 
 	content, err := FetchPage(allocCtx, targetURL, cfg)
