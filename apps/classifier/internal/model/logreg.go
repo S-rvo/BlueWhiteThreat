@@ -18,6 +18,14 @@ func sigmoid(z float64) float64 {
 
 // Predict returns the sigmoid-activated probability that x belongs to the
 // positive class, given the current Weights/Bias.
+//
+// If len(x) != len(Weights), only the overlapping prefix is used; this is
+// intentional (no panic, no error) so that Predict stays safe to call on a
+// zero-value LogisticRegression{}. Callers are responsible for ensuring x's
+// dimensionality matches Weights before calling Predict — e.g. a future
+// Classifier orchestrator should validate len(vectorizer.Vocabulary) ==
+// len(model.Weights) at load time rather than relying on Predict to catch
+// a mismatch.
 func (lr *LogisticRegression) Predict(x []float64) float64 {
 	z := lr.Bias
 	for i, w := range lr.Weights {
