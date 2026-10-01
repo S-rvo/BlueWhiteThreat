@@ -21,6 +21,7 @@ const (
 	learningRate    = 0.1
 	l2              = 0.001
 	threshold       = 0.5
+	splitSeed       = 42
 )
 
 func main() {
@@ -36,7 +37,7 @@ func main() {
 	}
 
 	trainTexts, trainLabels, evalTexts, evalLabels := split(texts, labels, trainSplitRatio)
-	log.Printf("Training on %d examples, evaluating on %d", len(trainTexts), len(evalTexts))
+	log.Printf("Training on %d examples, evaluating on %d (split seed: %d)", len(trainTexts), len(evalTexts), splitSeed)
 
 	vectorizer := tfidf.Fit(trainTexts)
 
@@ -80,23 +81,30 @@ func readLabeledCSV(path string) (texts []string, labels []float64, err error) {
 		return nil, nil, fmt.Errorf("expected a header row plus at least one data row")
 	}
 
+	skipped := 0
 	for _, row := range rows[1:] { // skip header
 		if len(row) != 2 {
+			skipped++
 			continue
 		}
 		label, err := strconv.ParseFloat(row[1], 64)
 		if err != nil {
+			skipped++
 			continue
 		}
 		texts = append(texts, row[0])
 		labels = append(labels, label)
+	}
+	if skipped > 0 {
+		log.Printf("skipped %d malformed rows out of %d", skipped, len(rows)-1)
 	}
 	return texts, labels, nil
 }
 
 func split(texts []string, labels []float64, trainRatio float64) (trainTexts []string, trainLabels []float64, evalTexts []string, evalLabels []float64) {
 	n := len(texts)
-	indices := rand.Perm(n)
+	rng := rand.New(rand.NewSource(splitSeed))
+	indices := rng.Perm(n)
 	cut := int(float64(n) * trainRatio)
 
 	for i, idx := range indices {
