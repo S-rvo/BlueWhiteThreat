@@ -66,6 +66,18 @@ services:
     env_file:
       - ./apps/scraper/.env
 
+  classifier:
+    build:
+      context: ./apps/classifier
+      dockerfile: Dockerfile.dev
+    container_name: classifier_service
+    volumes:
+      - ./apps/classifier:/app
+    depends_on:
+      - mongodb
+    env_file:
+      - ./apps/classifier/.env
+
   target:
     build:
       context: ./apps/target
