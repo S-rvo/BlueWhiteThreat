@@ -3,6 +3,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -29,7 +30,11 @@ func Connect(ctx context.Context) (*mongo.Client, error) {
 	uri := "mongodb://" + user + ":" + pass + "@" + host + ":" + port + "/"
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	if err != nil {
+		return nil, fmt.Errorf("db: connect: %w", err)
+	}
+	return client, nil
 }
 
 // ArticleContent is the minimal projection needed for scoring: the article's
@@ -49,13 +54,13 @@ func articleCollection(client *mongo.Client) *mongo.Collection {
 func FetchAllContent(ctx context.Context, client *mongo.Client) ([]ArticleContent, error) {
 	cursor, err := articleCollection(client).Find(ctx, bson.M{})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("db: fetch all content: %w", err)
 	}
 	defer cursor.Close(ctx)
 
 	var results []ArticleContent
 	if err := cursor.All(ctx, &results); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("db: fetch all content: %w", err)
 	}
 	return results, nil
 }
@@ -67,13 +72,13 @@ func FetchUnclassified(ctx context.Context, client *mongo.Client) ([]ArticleCont
 	filter := bson.M{"relevance": bson.M{"$exists": false}}
 	cursor, err := articleCollection(client).Find(ctx, filter)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("db: fetch unclassified: %w", err)
 	}
 	defer cursor.Close(ctx)
 
 	var results []ArticleContent
 	if err := cursor.All(ctx, &results); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("db: fetch unclassified: %w", err)
 	}
 	return results, nil
 }
@@ -92,5 +97,8 @@ func UpdateRelevance(ctx context.Context, client *mongo.Client, id interface{}, 
 		bson.M{"_id": id},
 		bson.M{"$set": bson.M{"relevance": r}},
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("db: update relevance for %v: %w", id, err)
+	}
+	return nil
 }
