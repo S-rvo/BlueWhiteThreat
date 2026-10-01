@@ -34,6 +34,18 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSaveNilModel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "model.json")
+
+	if err := Save(path, nil); err == nil {
+		t.Fatal("Save() with nil model returned nil error, want non-nil")
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("Save() with nil model unexpectedly created a file at %s", path)
+	}
+}
+
 func TestLoadNonexistentFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "does-not-exist.json")
 

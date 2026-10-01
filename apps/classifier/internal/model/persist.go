@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // Model bundles everything needed to reconstruct a working classifier:
@@ -20,16 +21,42 @@ type Model struct {
 	Version    string         `json:"version"`
 }
 
-// Save serializes m as JSON and writes it to path, creating or
-// truncating the file as needed.
+// Save serializes m as JSON and writes it to path. The write is atomic:
+// it writes to a temp file in the same directory as path and then renames
+// it into place, so a crash or failed write never leaves a corrupted or
+// truncated file at path.
 func Save(path string, m *Model) error {
+	if m == nil {
+		return fmt.Errorf("model: save: model is nil")
+	}
+
 	data, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("model: marshal: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("model: create temp file for %s: %w", path, err)
+	}
+	tmpPath := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("model: write %s: %w", path, err)
 	}
+
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("model: close temp file for %s: %w", path, err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("model: rename %s: %w", path, err)
+	}
+
 	return nil
 }
 
