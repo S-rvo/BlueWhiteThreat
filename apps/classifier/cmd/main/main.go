@@ -52,7 +52,9 @@ func main() {
 }
 
 func runOnce(classifier *classify.Classifier) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
 	client, err := db.Connect(ctx)
 	if err != nil {
 		log.Printf("failed to connect to MongoDB, will retry next tick: %v", err)
