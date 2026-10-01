@@ -1,7 +1,11 @@
 // apps/classifier/internal/bootstrap/label_test.go
 package bootstrap
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestLabelByKeywords(t *testing.T) {
 	keywords := []string{"ransomware", "leaked", "exploit"}
@@ -45,5 +49,32 @@ func TestLoadKeywords(t *testing.T) {
 	}
 	if len(keywords) == 0 {
 		t.Fatal("expected a non-empty keyword list")
+	}
+}
+
+func TestLoadKeywordsNonexistentFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "does-not-exist.json")
+
+	keywords, err := LoadKeywords(path)
+	if err == nil {
+		t.Fatal("LoadKeywords() on nonexistent file returned nil error, want non-nil")
+	}
+	if keywords != nil {
+		t.Fatalf("LoadKeywords() on nonexistent file returned non-nil keywords: %+v", keywords)
+	}
+}
+
+func TestLoadKeywordsInvalidJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid.json")
+	if err := os.WriteFile(path, []byte("not valid json{{{"), 0o644); err != nil {
+		t.Fatalf("failed to set up test fixture: %v", err)
+	}
+
+	keywords, err := LoadKeywords(path)
+	if err == nil {
+		t.Fatal("LoadKeywords() on invalid JSON returned nil error, want non-nil")
+	}
+	if keywords != nil {
+		t.Fatalf("LoadKeywords() on invalid JSON returned non-nil keywords: %+v", keywords)
 	}
 }
