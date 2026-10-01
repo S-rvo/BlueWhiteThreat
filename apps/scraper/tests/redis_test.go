@@ -25,7 +25,8 @@ func testRedisClient(t *testing.T) *redis.Client {
 func TestGetUnscrapedURLs_ReturnsOnlyNewURLs(t *testing.T) {
 	ctx := context.Background()
 	client := testRedisClient(t)
-	defer client.FlushDB(ctx)
+	client.Del(ctx, "urls_crawled", "urls_scraped")
+	defer client.Del(ctx, "urls_crawled", "urls_scraped")
 
 	client.SAdd(ctx, "urls_crawled", "http://a.onion", "http://b.onion", "http://c.onion")
 	client.SAdd(ctx, "urls_scraped", "http://a.onion")
@@ -49,7 +50,8 @@ func TestGetUnscrapedURLs_ReturnsOnlyNewURLs(t *testing.T) {
 func TestMarkURLScraped_AddsToScrapedSet(t *testing.T) {
 	ctx := context.Background()
 	client := testRedisClient(t)
-	defer client.FlushDB(ctx)
+	client.Del(ctx, "urls_scraped")
+	defer client.Del(ctx, "urls_scraped")
 
 	if err := db.MarkURLScraped(ctx, client, "http://a.onion"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
