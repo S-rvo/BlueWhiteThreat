@@ -55,3 +55,25 @@ func TestClassify_AllZeroVector(t *testing.T) {
 		t.Fatalf("expected relevant=false for all-zero vector, got score=%f", result.Score)
 	}
 }
+
+func TestClassify_ScoreEqualsThreshold(t *testing.T) {
+	// An empty vocabulary always yields a zero vector, so the score is
+	// exactly sigmoid(Bias). With Bias=0, sigmoid(0)==0.5 exactly, landing
+	// precisely on Threshold=0.5. Classify documents Relevant as true when
+	// score >= threshold, so this exact-boundary case must be relevant.
+	m := &model.Model{
+		Vocabulary: map[string]int{},
+		IDF:        []float64{},
+		Weights:    []float64{},
+		Bias:       0,
+		Threshold:  0.5,
+		Version:    "unit-test",
+	}
+
+	c := New(m)
+
+	result := c.Classify("any text at all")
+	if !result.Relevant {
+		t.Fatalf("expected relevant=true when score==threshold, got score=%f", result.Score)
+	}
+}
