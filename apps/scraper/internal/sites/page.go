@@ -1,6 +1,8 @@
 package sites
 
 import (
+	"fmt"
+	"log"
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/db"
@@ -16,6 +18,11 @@ type ScrapedPage struct {
 }
 
 // SaveScrapedPage upsert une page scrapée dans MongoDB.article, par URL unique.
+// Les pages indexant du CSAM sont rejetées avant toute écriture.
 func SaveScrapedPage(page ScrapedPage) (int, error) {
+	if ContainsBlockedContent(page.Content) {
+		log.Printf("Contenu bloqué (CSAM) détecté sur %s — page rejetée, non persistée", page.URL)
+		return 0, fmt.Errorf("contenu bloqué: %s", page.URL)
+	}
 	return db.SaveAllEntries("BlueWhiteThreat", "article", []ScrapedPage{page}, []string{"URL"})
 }
