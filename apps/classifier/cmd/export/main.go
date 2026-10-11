@@ -118,6 +118,9 @@ func main() {
 		// Highest model score first: a heuristic negative the model is most
 		// confident is actually relevant is the highest-value thing to review.
 		sort.SliceStable(negatives, func(i, j int) bool { return negatives[i].ModelScore > negatives[j].ModelScore })
+		// Lowest model score first: a heuristic positive the model is most
+		// confident is actually not relevant is the mirror-image disagreement.
+		sort.SliceStable(positives, func(i, j int) bool { return positives[i].ModelScore < positives[j].ModelScore })
 	} else {
 		rng := rand.New(rand.NewSource(seed))
 		rng.Shuffle(len(negatives), func(i, j int) { negatives[i], negatives[j] = negatives[j], negatives[i] })
