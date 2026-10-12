@@ -33,6 +33,15 @@ const (
 	// set, we keep the one with the best recall. If no threshold reaches it,
 	// we fall back to the threshold that maximizes F1.
 	targetPrecision = 0.99
+	// minRecall rejects a targetPrecision-meeting threshold whose recall is
+	// degenerate — on a small, imbalanced validation set, the precision
+	// floor can be reachable only at an extreme threshold supported by a
+	// handful of positives, which is a worse real-world operating point
+	// than a lower threshold with better-rounded precision/recall that
+	// never quite reaches the floor. When the best floor-meeting candidate
+	// falls under minRecall, pickThreshold falls back to the F1-maximizing
+	// threshold instead.
+	minRecall = 0.15
 )
 
 func main() {
@@ -224,6 +233,12 @@ func pickThreshold(scores []float64, labels []float64) float64 {
 		if c.f1 > candidates[bestByF1].f1 {
 			bestByF1 = i
 		}
+	}
+
+	if bestByPrecisionFloor != -1 && candidates[bestByPrecisionFloor].recall < minRecall {
+		log.Printf("Threshold %.2f reaches target precision %.2f but its recall (%.3f) is below minRecall %.2f; treating the precision floor as unreachable",
+			candidates[bestByPrecisionFloor].threshold, targetPrecision, candidates[bestByPrecisionFloor].recall, minRecall)
+		bestByPrecisionFloor = -1
 	}
 
 	if bestByPrecisionFloor != -1 {
