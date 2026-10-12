@@ -1,4 +1,3 @@
-// apps/classifier/internal/tfidf/vectorizer_test.go
 package tfidf
 
 import (
@@ -7,6 +6,10 @@ import (
 	"testing"
 )
 
+func zeros(n int) []float64 {
+	return make([]float64, n)
+}
+
 func TestFitTransformRoundTrip(t *testing.T) {
 	docs := []string{
 		"malware attack network",
@@ -14,30 +17,41 @@ func TestFitTransformRoundTrip(t *testing.T) {
 		"network defense security",
 	}
 
-	v := Fit(docs)
+	v := Fit(docs, zeros(len(docs)))
 
 	for _, tok := range []string{"malware", "attack", "network", "ransomware", "defense", "security"} {
 		if _, ok := v.Vocabulary[tok]; !ok {
 			t.Fatalf("expected vocabulary to contain %q, vocab=%v", tok, v.Vocabulary)
 		}
 	}
+	// Adjacent-pair bigrams are also indexed.
+	if _, ok := v.Vocabulary["malware_attack"]; !ok {
+		t.Fatalf("expected vocabulary to contain bigram %q", "malware_attack")
+	}
 
 	// "malware" appears in docs 0 and 1 (df=2), n=3.
-	// idf = log((3+1)/(2+1)) + 1
 	wantIDF := math.Log(4.0/3.0) + 1
 	idx := v.Vocabulary["malware"]
 	if math.Abs(v.IDF[idx]-wantIDF) > 1e-9 {
 		t.Fatalf("idf for malware = %v, want %v", v.IDF[idx], wantIDF)
 	}
 
-	// Transform doc0: "malware attack network" -> tf=1 for each of its tokens.
 	vec := v.Transform(docs[0])
-	wantVal := 1.0 * wantIDF
-	if math.Abs(vec[idx]-wantVal) > 1e-9 {
-		t.Fatalf("transform value for malware in doc0 = %v, want %v", vec[idx], wantVal)
-	}
 	if len(vec) != len(v.Vocabulary) {
 		t.Fatalf("vector length = %d, want %d", len(vec), len(v.Vocabulary))
+	}
+	if vec[idx] <= 0 {
+		t.Fatalf("transform value for malware in doc0 = %v, want > 0", vec[idx])
+	}
+
+	// Transform output is L2-normalized: the vector's norm is 1 for any
+	// document that has at least one in-vocabulary token.
+	var sumSq float64
+	for _, val := range vec {
+		sumSq += val * val
+	}
+	if math.Abs(math.Sqrt(sumSq)-1.0) > 1e-9 {
+		t.Fatalf("||Transform(doc0)|| = %v, want 1.0", math.Sqrt(sumSq))
 	}
 }
 
@@ -48,9 +62,10 @@ func TestFitDeterminism(t *testing.T) {
 		"gamma delta epsilon",
 		"alpha delta epsilon",
 	}
+	labels := zeros(len(docs))
 
-	v1 := Fit(docs)
-	v2 := Fit(docs)
+	v1 := Fit(docs, labels)
+	v2 := Fit(docs, labels)
 
 	if len(v1.Vocabulary) != len(v2.Vocabulary) {
 		t.Fatalf("vocab size mismatch: %d vs %d", len(v1.Vocabulary), len(v2.Vocabulary))
@@ -73,6 +88,8 @@ func TestVocabularyCapping(t *testing.T) {
 	// Tokens tok0..tok99 each appear in 3 documents (high df);
 	// tokens uniqN each appear in exactly 1 document (low df) and there are
 	// enough of them to exceed MaxVocabularySize distinct tokens overall.
+	// All documents share the same label, so chi-square association is 0
+	// everywhere and ranking falls back to document frequency.
 	var docs []string
 	for i := 0; i < 100; i++ {
 		docs = append(docs, fmt.Sprintf("tok%d tok%d tok%d common", i%10, (i+1)%10, (i+2)%10))
@@ -81,7 +98,7 @@ func TestVocabularyCapping(t *testing.T) {
 		docs = append(docs, fmt.Sprintf("uniq%d", i))
 	}
 
-	v := Fit(docs)
+	v := Fit(docs, zeros(len(docs)))
 
 	if len(v.Vocabulary) != MaxVocabularySize {
 		t.Fatalf("vocabulary size = %d, want %d", len(v.Vocabulary), MaxVocabularySize)
@@ -102,7 +119,7 @@ func TestVocabularyCapping(t *testing.T) {
 
 func TestTransformEmptyAndOOV(t *testing.T) {
 	docs := []string{"alpha beta", "beta gamma"}
-	v := Fit(docs)
+	v := Fit(docs, zeros(len(docs)))
 
 	cases := []string{"", "zzz unknown words only"}
 	for _, doc := range cases {
@@ -118,7 +135,7 @@ func TestTransformEmptyAndOOV(t *testing.T) {
 	}
 }
 
-func TestTransformOnManuallyConstructedVectorizer(t *testing.T) {
+func TestTransformIsL2Normalized(t *testing.T) {
 	v := &Vectorizer{
 		Vocabulary: map[string]int{
 			"malware": 0,
@@ -128,7 +145,11 @@ func TestTransformOnManuallyConstructedVectorizer(t *testing.T) {
 	}
 
 	vec := v.Transform("malware malware attack unknown")
-	want := []float64{4.0, 0.5}
+	// Raw (pre-normalization) values would be [4.0, 0.5]; normalized by
+	// their L2 norm (sqrt(4.0^2 + 0.5^2)).
+	rawNorm := math.Sqrt(4.0*4.0 + 0.5*0.5)
+	want := []float64{4.0 / rawNorm, 0.5 / rawNorm}
+
 	if len(vec) != len(want) {
 		t.Fatalf("len(vec) = %d, want %d", len(vec), len(want))
 	}
@@ -136,5 +157,13 @@ func TestTransformOnManuallyConstructedVectorizer(t *testing.T) {
 		if math.Abs(vec[i]-want[i]) > 1e-9 {
 			t.Fatalf("vec[%d] = %v, want %v", i, vec[i], want[i])
 		}
+	}
+
+	var sumSq float64
+	for _, val := range vec {
+		sumSq += val * val
+	}
+	if math.Abs(math.Sqrt(sumSq)-1.0) > 1e-9 {
+		t.Fatalf("||vec|| = %v, want 1.0", math.Sqrt(sumSq))
 	}
 }
