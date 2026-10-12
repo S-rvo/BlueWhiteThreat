@@ -42,6 +42,13 @@ const (
 	// falls under minRecall, pickThreshold falls back to the F1-maximizing
 	// threshold instead.
 	minRecall = 0.15
+	// nearDuplicateMaxDistance is the maximum SimHash hamming distance (out
+	// of 64 bits) for two exact-dedup groups to be treated as the same
+	// underlying content (e.g. a re-crawl with minor copy edits, or a
+	// lightly paraphrased repost). Calibrated empirically: a single
+	// word-level edit in a short CTI blurb produces a handful of flipped
+	// bits, while unrelated documents differ in roughly half the bits.
+	nearDuplicateMaxDistance = 10
 )
 
 func main() {
@@ -64,6 +71,17 @@ func main() {
 	if len(conflicts) > 0 {
 		log.Printf("WARNING: %d set(s) of identical-text documents have contradictory labels; excluding them from training/eval rather than guessing:", len(conflicts))
 		for _, c := range conflicts {
+			log.Printf("  conflict — ids: %v, labels: %v", c.IDs, c.Labels)
+		}
+	}
+
+	beforeNearDedup := len(groups)
+	var nearDupConflicts []dedup.Conflict
+	groups, nearDupConflicts = dedup.MergeNearDuplicates(groups, nearDuplicateMaxDistance)
+	log.Printf("Near-duplicate merge: %d groups before, %d after (paraphrased/re-crawled reposts collapsed)", beforeNearDedup, len(groups))
+	if len(nearDupConflicts) > 0 {
+		log.Printf("WARNING: %d set(s) of near-duplicate documents have contradictory labels; excluding them from training/eval rather than guessing:", len(nearDupConflicts))
+		for _, c := range nearDupConflicts {
 			log.Printf("  conflict — ids: %v, labels: %v", c.IDs, c.Labels)
 		}
 	}
