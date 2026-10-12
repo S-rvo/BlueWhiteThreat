@@ -56,6 +56,47 @@ func TestClassify_AllZeroVector(t *testing.T) {
 	}
 }
 
+func TestClassify_NeedsReviewNearThreshold(t *testing.T) {
+	// Threshold 0.5, ReviewMargin 0.1: scores within [0.4, 0.6] are
+	// borderline calls the model isn't confident about, so they should be
+	// flagged for human review rather than silently trusted either way.
+	m := &model.Model{
+		Vocabulary: map[string]int{},
+		IDF:        []float64{},
+		Weights:    []float64{},
+		Bias:       0, // sigmoid(0) == 0.5 == threshold exactly
+		Threshold:  0.5,
+		Version:    "unit-test",
+	}
+
+	c := New(m)
+
+	result := c.Classify("any text at all")
+	if !result.NeedsReview {
+		t.Fatalf("expected needs_review=true for score=%f within margin of threshold=0.5", result.Score)
+	}
+}
+
+func TestClassify_ConfidentScoreNotFlaggedForReview(t *testing.T) {
+	// A strongly positive weight pushes the score far from the threshold,
+	// so a confident classification should not be flagged for review.
+	m := &model.Model{
+		Vocabulary: map[string]int{"ransomware": 0},
+		IDF:        []float64{1.0},
+		Weights:    []float64{5.0},
+		Bias:       -1.0,
+		Threshold:  0.5,
+		Version:    "unit-test",
+	}
+
+	c := New(m)
+
+	result := c.Classify("a new ransomware campaign is spreading")
+	if result.NeedsReview {
+		t.Fatalf("expected needs_review=false for confident score=%f", result.Score)
+	}
+}
+
 func TestClassify_ScoreEqualsThreshold(t *testing.T) {
 	// An empty vocabulary always yields a zero vector, so the score is
 	// exactly sigmoid(Bias). With Bias=0, sigmoid(0)==0.5 exactly, landing

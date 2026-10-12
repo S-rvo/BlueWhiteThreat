@@ -56,4 +56,7 @@ func TestClassifyArticle_OrdinaryContentIsScoredNormally(t *testing.T) {
 	if !relevance.Relevant {
 		t.Fatalf("expected relevant=true, got score=%f", relevance.Score)
 	}
+	if relevance.NeedsReview {
+		t.Fatalf("expected needs_review=false for a confident score=%f", relevance.Score)
+	}
 }

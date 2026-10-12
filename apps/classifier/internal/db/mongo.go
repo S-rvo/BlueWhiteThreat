@@ -88,6 +88,7 @@ type Relevance struct {
 	Relevant     bool    `bson:"relevant"`
 	Score        float64 `bson:"score"`
 	ModelVersion string  `bson:"model_version"`
+	NeedsReview  bool    `bson:"needs_review"`
 }
 
 // UpdateRelevance sets the "relevance" field on the article identified by id.
