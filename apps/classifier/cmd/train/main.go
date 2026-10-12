@@ -5,27 +5,33 @@ import (
 	"encoding/csv"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
-	"sort"
 	"strconv"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/dedup"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
+	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/split"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/tfidf"
 	"github.com/joho/godotenv"
 )
 
 const (
-	trainSplitRatio = 0.8
-	epochs          = 4000
-	learningRate    = 2.0
-	l2              = 0.0001
-	splitSeed       = 42
+	// trainRatio/valRatio/testRatio (the remainder after train+val) split
+	// deduplicated groups three ways: train fits the vocabulary/IDF/model,
+	// validation picks the decision threshold, and test is reserved for a
+	// single final report so threshold-picking never leaks into the number
+	// we claim as the model's real-world precision/recall.
+	trainRatio = 0.7
+	valRatio   = 0.15
+	epochs     = 4000
+	learningRate = 2.0
+	l2           = 0.0001
+	splitSeed    = 42
 	// targetPrecision is the precision floor we try to hit when picking a
-	// decision threshold: among thresholds that reach it on the eval set,
-	// we keep the one with the best recall. If no threshold reaches it, we
-	// fall back to the threshold that maximizes F1.
+	// decision threshold: among thresholds that reach it on the validation
+	// set, we keep the one with the best recall. If no threshold reaches it,
+	// we fall back to the threshold that maximizes F1.
 	targetPrecision = 0.99
 )
 
@@ -37,7 +43,7 @@ func main() {
 	inputPath := getEnvOrDefault("TRAINING_DATA", "training_data.csv")
 	outputPath := getEnvOrDefault("MODEL_PATH", "model.json")
 
-	texts, labels, err := readLabeledCSV(inputPath)
+	ids, texts, labels, err := readLabeledCSV(inputPath)
 	if err != nil {
 		log.Fatalf("failed to read training data: %v", err)
 	}
@@ -45,13 +51,22 @@ func main() {
 		log.Fatalf("need at least 10 labeled examples, got %d — label more data first", len(texts))
 	}
 
-	trainTexts, trainLabels, evalTexts, evalLabels := split(texts, labels, trainSplitRatio)
-	log.Printf("Training on %d examples, evaluating on %d (split seed: %d)", len(trainTexts), len(evalTexts), splitSeed)
+	groups, conflicts := dedup.GroupByNormalizedText(ids, texts, labels)
+	if len(conflicts) > 0 {
+		log.Printf("WARNING: %d set(s) of identical-text documents have contradictory labels; excluding them from training/eval rather than guessing:", len(conflicts))
+		for _, c := range conflicts {
+			log.Printf("  conflict — ids: %v, labels: %v", c.IDs, c.Labels)
+		}
+	}
 
-	vectorizer := tfidf.Fit(trainTexts, trainLabels)
+	trainSet, valSet, testSet := split.GroupAndSplit(groups, splitSeed, trainRatio, valRatio)
+	log.Printf("Training on %d examples, validating on %d, testing on %d (split seed: %d)",
+		len(trainSet.Texts), len(valSet.Texts), len(testSet.Texts), splitSeed)
 
-	X := make([][]float64, len(trainTexts))
-	for i, t := range trainTexts {
+	vectorizer := tfidf.Fit(trainSet.Texts, trainSet.Labels)
+
+	X := make([][]float64, len(trainSet.Texts))
+	for i, t := range trainSet.Texts {
 		X[i] = vectorizer.Transform(t)
 	}
 
@@ -59,14 +74,21 @@ func main() {
 	// the model toward the majority class. BalancedWeights makes each class
 	// contribute equally to the loss so the model doesn't just learn to
 	// always predict "not relevant".
-	weights := model.BalancedWeights(trainLabels)
-	lr := model.TrainWeighted(X, trainLabels, weights, epochs, learningRate, l2)
+	weights := model.BalancedWeights(trainSet.Labels)
+	lr := model.TrainWeighted(X, trainSet.Labels, weights, epochs, learningRate, l2)
 
-	evalScores := make([]float64, len(evalTexts))
-	for i, t := range evalTexts {
-		evalScores[i] = lr.Predict(vectorizer.Transform(t))
+	valScores := make([]float64, len(valSet.Texts))
+	for i, t := range valSet.Texts {
+		valScores[i] = lr.Predict(vectorizer.Transform(t))
 	}
-	chosenThreshold := pickThreshold(evalScores, evalLabels)
+	chosenThreshold := pickThreshold(valScores, valSet.Labels)
+	evaluateAt("validation", valScores, valSet.Labels, chosenThreshold)
+
+	testScores := make([]float64, len(testSet.Texts))
+	for i, t := range testSet.Texts {
+		testScores[i] = lr.Predict(vectorizer.Transform(t))
+	}
+	reportTest(testScores, testSet.Labels, chosenThreshold)
 
 	m := &model.Model{
 		Vocabulary: vectorizer.Vocabulary,
@@ -77,32 +99,30 @@ func main() {
 		Version:    time.Now().Format("2006-01-02T15-04-05"),
 	}
 
-	evaluateAt(evalScores, evalLabels, chosenThreshold)
-
 	if err := model.Save(outputPath, m); err != nil {
 		log.Fatalf("failed to save model: %v", err)
 	}
 	log.Printf("Saved model to %s (version %s)", outputPath, m.Version)
 }
 
-func readLabeledCSV(path string) (texts []string, labels []float64, err error) {
+func readLabeledCSV(path string) (ids []string, texts []string, labels []float64, err error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open %s: %w", path, err)
+		return nil, nil, nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer file.Close()
 
 	reader := csv.NewReader(file)
 	rows, err := reader.ReadAll()
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse csv: %w", err)
+		return nil, nil, nil, fmt.Errorf("parse csv: %w", err)
 	}
 	if len(rows) < 2 {
-		return nil, nil, fmt.Errorf("expected a header row plus at least one data row")
+		return nil, nil, nil, fmt.Errorf("expected a header row plus at least one data row")
 	}
 
 	skipped := 0
-	for _, row := range rows[1:] { // skip header
+	for i, row := range rows[1:] { // skip header
 		// Supports both the legacy 2-column format (text,label) and the
 		// current 3-column format (id,text,label) — text and label are
 		// always the last two fields.
@@ -116,58 +136,23 @@ func readLabeledCSV(path string) (texts []string, labels []float64, err error) {
 			skipped++
 			continue
 		}
+		id := fmt.Sprintf("row-%d", i+1)
+		if len(row) == 3 {
+			id = row[0]
+		}
+		ids = append(ids, id)
 		texts = append(texts, text)
 		labels = append(labels, label)
 	}
 	if skipped > 0 {
 		log.Printf("skipped %d malformed rows out of %d", skipped, len(rows)-1)
 	}
-	return texts, labels, nil
+	return ids, texts, labels, nil
 }
 
-// split performs a stratified train/eval split so both classes are
-// represented proportionally in the (small) eval set — a plain random split
-// on a few dozen examples can leave the eval set with almost no positives,
-// making precision/recall/f1 swing wildly between runs.
-func split(texts []string, labels []float64, trainRatio float64) (trainTexts []string, trainLabels []float64, evalTexts []string, evalLabels []float64) {
-	rng := rand.New(rand.NewSource(splitSeed))
-
-	var classes = map[float64][]int{}
-	for i, l := range labels {
-		classes[l] = append(classes[l], i)
-	}
-
-	// Go map iteration order is randomized per run, which would otherwise make
-	// the RNG stream order (and thus the resulting split) different on every
-	// run despite the fixed splitSeed. Sort class keys for a stable order.
-	keys := make([]float64, 0, len(classes))
-	for k := range classes {
-		keys = append(keys, k)
-	}
-	sort.Float64s(keys)
-
-	for _, k := range keys {
-		idxs := classes[k]
-		perm := rng.Perm(len(idxs))
-		cut := int(float64(len(idxs)) * trainRatio)
-		for i, p := range perm {
-			idx := idxs[p]
-			if i < cut {
-				trainTexts = append(trainTexts, texts[idx])
-				trainLabels = append(trainLabels, labels[idx])
-			} else {
-				evalTexts = append(evalTexts, texts[idx])
-				evalLabels = append(evalLabels, labels[idx])
-			}
-		}
-	}
-	return
-}
-
-// confusionAt computes accuracy/precision/recall/f1 for scores classified
-// as positive when score >= threshold, against the actual labels.
-func confusionAt(scores []float64, labels []float64, threshold float64) (accuracy, precision, recall, f1 float64) {
-	var truePositive, falsePositive, trueNegative, falseNegative int
+// confusionCounts tallies true/false positives/negatives for scores
+// classified as positive when score >= threshold, against the actual labels.
+func confusionCounts(scores []float64, labels []float64, threshold float64) (tp, fp, tn, fn int) {
 	for i, score := range scores {
 		predicted := 0
 		if score >= threshold {
@@ -177,30 +162,39 @@ func confusionAt(scores []float64, labels []float64, threshold float64) (accurac
 
 		switch {
 		case predicted == 1 && actual == 1:
-			truePositive++
+			tp++
 		case predicted == 1 && actual == 0:
-			falsePositive++
+			fp++
 		case predicted == 0 && actual == 0:
-			trueNegative++
+			tn++
 		case predicted == 0 && actual == 1:
-			falseNegative++
+			fn++
 		}
 	}
+	return
+}
 
+// confusionAt computes accuracy/precision/recall/f1 for scores classified
+// as positive when score >= threshold, against the actual labels.
+func confusionAt(scores []float64, labels []float64, threshold float64) (accuracy, precision, recall, f1 float64) {
+	tp, fp, tn, fn := confusionCounts(scores, labels, threshold)
 	total := len(scores)
-	accuracy = float64(truePositive+trueNegative) / float64(total)
-	precision = safeDiv(float64(truePositive), float64(truePositive+falsePositive))
-	recall = safeDiv(float64(truePositive), float64(truePositive+falseNegative))
+	accuracy = float64(tp+tn) / float64(total)
+	precision = safeDiv(float64(tp), float64(tp+fp))
+	recall = safeDiv(float64(tp), float64(tp+fn))
 	f1 = safeDiv(2*precision*recall, precision+recall)
 	return
 }
 
-// pickThreshold sweeps candidate thresholds against the eval set and logs
-// a precision/recall table, so the chosen cutoff is visible and auditable
-// instead of being a blind guess. Among thresholds that reach
+// pickThreshold sweeps candidate thresholds against the validation set and
+// logs a precision/recall table, so the chosen cutoff is visible and
+// auditable instead of being a blind guess. Among thresholds that reach
 // targetPrecision, it keeps the one with the highest recall (the least
 // aggressive way to hit the precision floor); if none reach it, it falls
-// back to the threshold that maximizes F1.
+// back to the threshold that maximizes F1. The validation set is used here
+// so the test set stays untouched until the final report — picking the
+// threshold on the same data used to report final metrics would bias the
+// reported precision/recall upward.
 func pickThreshold(scores []float64, labels []float64) float64 {
 	type candidate struct {
 		threshold                       float64
@@ -213,7 +207,7 @@ func pickThreshold(scores []float64, labels []float64) float64 {
 		candidates = append(candidates, candidate{t, accuracy, precision, recall, f1})
 	}
 
-	log.Println("Threshold sweep (eval set):")
+	log.Println("Threshold sweep (validation set):")
 	for _, t := range []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9} {
 		_, p, r, f := confusionAt(scores, labels, t)
 		log.Printf("  threshold %.2f — precision: %.3f, recall: %.3f, f1: %.3f", t, p, r, f)
@@ -240,15 +234,32 @@ func pickThreshold(scores []float64, labels []float64) float64 {
 	}
 
 	c := candidates[bestByF1]
-	log.Printf("No threshold on the eval set reaches target precision %.2f; falling back to the F1-maximizing threshold %.2f (precision: %.3f, recall: %.3f, f1: %.3f)",
+	log.Printf("No threshold on the validation set reaches target precision %.2f; falling back to the F1-maximizing threshold %.2f (precision: %.3f, recall: %.3f, f1: %.3f)",
 		targetPrecision, c.threshold, c.precision, c.recall, c.f1)
 	return c.threshold
 }
 
-func evaluateAt(scores []float64, labels []float64, threshold float64) {
+func evaluateAt(setName string, scores []float64, labels []float64, threshold float64) {
 	accuracy, precision, recall, f1 := confusionAt(scores, labels, threshold)
-	log.Printf("Eval metrics @ threshold %.2f — accuracy: %.3f, precision: %.3f, recall: %.3f, f1: %.3f (n=%d)",
+	log.Printf("%s metrics @ threshold %.2f — accuracy: %.3f, precision: %.3f, recall: %.3f, f1: %.3f (n=%d)",
+		setName, threshold, accuracy, precision, recall, f1, len(scores))
+}
+
+// reportTest logs the final, held-out performance report: metrics, raw
+// confusion-matrix counts, and an explicit failure warning if the chosen
+// threshold doesn't actually reach targetPrecision on data it never
+// influenced (neither training nor threshold selection touched the test
+// set).
+func reportTest(scores []float64, labels []float64, threshold float64) {
+	accuracy, precision, recall, f1 := confusionAt(scores, labels, threshold)
+	tp, fp, tn, fn := confusionCounts(scores, labels, threshold)
+	log.Printf("Test metrics @ threshold %.2f — accuracy: %.3f, precision: %.3f, recall: %.3f, f1: %.3f (n=%d)",
 		threshold, accuracy, precision, recall, f1, len(scores))
+	log.Printf("Test confusion matrix — TP: %d, FP: %d, TN: %d, FN: %d", tp, fp, tn, fn)
+	if precision < targetPrecision {
+		log.Printf("WARNING: target precision %.2f NOT met on the test set (actual: %.3f). The model does not meet the precision bar on held-out data.",
+			targetPrecision, precision)
+	}
 }
 
 func safeDiv(a, b float64) float64 {
