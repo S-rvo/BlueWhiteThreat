@@ -37,11 +37,7 @@ func InitRedis() error {
 		return err
 	}
 
-	if err := RedisClient.FlushDB(ctx).Err(); err != nil {
-		return err
-	}
-	log.Println("Redis database flushed on startup")
-	log.Printf("Connected to Redis: %s:%s", redisHost, redisPort)
+	log.Printf("Connected to Redis: %s:%s", redisHost, redisPort) // #nosec G706 -- values come from operator-set env vars, not user input
 	return nil
 }
 
@@ -76,6 +72,10 @@ func SetupRedisQueues() error {
 // AddURLToQueue ajoute une URL à la file d'attente si elle n'a pas déjà été traitée
 func AddURLToQueue(url string) error {
 	cleaned := cleanOnionURL(url)
+
+	if isBlockedURL(cleaned) {
+		return nil
+	}
 
 	pipe := RedisClient.Pipeline()
 	isCrawledCmd := pipe.SIsMember(ctx, "urls_crawled", cleaned)
