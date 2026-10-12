@@ -7,7 +7,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"sync"
 )
 
 // MinKeywordHits is the number of distinct seed keywords that must appear
@@ -57,57 +56,62 @@ func IsLinkDirectory(text string) bool {
 	return false
 }
 
-var (
-	keywordPatternsMu sync.Mutex
-	keywordPatterns   = map[string]*regexp.Regexp{}
-)
+// Keep Unicode letters and single digits (notably "0-day"). Punctuation
+// separates tokens, so spelling variants such as "cve"/"cve-" share a key.
+var keywordWords = regexp.MustCompile(`[\p{L}\p{N}_]+`)
 
-// keywordPattern compiles (and caches) a word-boundary regex for a keyword.
-// A plain substring match would let "ransom" match inside "ransomware",
-// double-counting one real signal as two keyword hits. \b only anchors at a
-// transition between a word character and a non-word one, so it's only
-// added on a side whose edge character is itself a word character —
-// otherwise (e.g. a keyword ending in "-", like "cve-") the literal
-// character already provides the boundary.
-func keywordPattern(kw string) *regexp.Regexp {
-	keywordPatternsMu.Lock()
-	defer keywordPatternsMu.Unlock()
-
-	if p, ok := keywordPatterns[kw]; ok {
-		return p
-	}
-
-	isWordChar := func(b byte) bool {
-		return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
-	}
-
-	pattern := regexp.QuoteMeta(kw)
-	if isWordChar(kw[0]) {
-		pattern = `\b` + pattern
-	}
-	if isWordChar(kw[len(kw)-1]) {
-		pattern = pattern + `\b`
-	}
-
-	p := regexp.MustCompile("(?i)" + pattern)
-	keywordPatterns[kw] = p
-	return p
-}
-
-// LabelByKeywords returns 1 (relevant) if text contains at least
-// MinKeywordHits of the given keywords, 0 otherwise. Matching is done at
-// word boundaries so a keyword only counts when it appears as its own
-// token (or its own hyphenated/multi-word phrase), not as a substring of
-// an unrelated or more specific word.
+// LabelByKeywords counts distinct, non-overlapping keyword phrases. At each
+// word, the longest matching phrase wins: "data breach" does not also count
+// as "breach". Repeated mentions and equivalent seed spellings count once.
+// This remains a lexical bootstrap heuristic, not a semantic relevance test.
 func LabelByKeywords(text string, keywords []string) int {
-	hits := 0
-	for _, kw := range keywords {
-		if keywordPattern(kw).MatchString(text) {
-			hits++
-		}
+	type phrase struct {
+		words []string
+		key   string
 	}
-	if hits >= MinKeywordHits {
-		return 1
+	byFirst := make(map[string][]phrase)
+	unique := make(map[string]bool)
+	for _, kw := range keywords {
+		words := keywordWords.FindAllString(strings.ToLower(kw), -1)
+		if len(words) == 0 {
+			continue
+		}
+		key := strings.Join(words, " ")
+		if unique[key] {
+			continue
+		}
+		unique[key] = true
+		byFirst[words[0]] = append(byFirst[words[0]], phrase{words, key})
+	}
+
+	words := keywordWords.FindAllString(strings.ToLower(text), -1)
+	matched := make(map[string]bool)
+	for i := 0; i < len(words); {
+		var longest phrase
+		for _, candidate := range byFirst[words[i]] {
+			if len(candidate.words) <= len(longest.words) || i+len(candidate.words) > len(words) {
+				continue
+			}
+			matches := true
+			for j, word := range candidate.words {
+				if words[i+j] != word {
+					matches = false
+					break
+				}
+			}
+			if matches {
+				longest = candidate
+			}
+		}
+		if len(longest.words) == 0 {
+			i++
+			continue
+		}
+		matched[longest.key] = true
+		if len(matched) >= MinKeywordHits {
+			return 1
+		}
+		i += len(longest.words)
 	}
 	return 0
 }

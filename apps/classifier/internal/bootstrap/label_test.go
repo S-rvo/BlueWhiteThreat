@@ -175,3 +175,35 @@ func TestLoadKeywordsInvalidJSON(t *testing.T) {
 		t.Fatalf("LoadKeywords() on invalid JSON returned non-nil keywords: %+v", keywords)
 	}
 }
+
+func TestLabelByKeywordsDistinctNonOverlappingPhrases(t *testing.T) {
+	cases := []struct {
+		name, text string
+		keywords   []string
+		want       int
+	}{
+		{"CVE aliases count once", "ransomware CVE-2026-1234", []string{"cve", "cve-", "ransomware"}, 0},
+		{"nested phrase counts once", "A data breach involved ransomware", []string{"breach", "data breach", "ransomware"}, 0},
+		{"repeated phrase still consumes nested words", "data breach data breach ransomware", []string{"breach", "data breach", "ransomware"}, 0},
+		{"three independent phrases", "data breach ransomware exploit", []string{"breach", "data breach", "ransomware", "exploit"}, 1},
+		{"seed duplicates and empty seeds", "exploit ransomware", []string{"", "---", "exploit", "EXPLOIT", "ransomware"}, 0},
+		{"unicode word boundaries", "préexploit ransomware leaked", []string{"exploit", "ransomware", "leaked"}, 0},
+		{"unicode phrases and flexible whitespace", "FUITE\u00a0de\nDONNÉES ransomware exploit", []string{"fuite de données", "ransomware", "exploit"}, 1},
+		{"single digit zero day", "0-day ransomware exploit", []string{"0-day", "ransomware", "exploit"}, 1},
+		{"hyphen and whitespace aliases", "command-and-control ransomware", []string{"command and control", "command-and-control", "ransomware"}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := LabelByKeywords(tc.text, tc.keywords); got != tc.want {
+				t.Fatalf("got %d, want %d", got, tc.want)
+			}
+			reversed := append([]string(nil), tc.keywords...)
+			for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+				reversed[i], reversed[j] = reversed[j], reversed[i]
+			}
+			if got := LabelByKeywords(tc.text, reversed); got != tc.want {
+				t.Fatalf("reversed seeds: got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
