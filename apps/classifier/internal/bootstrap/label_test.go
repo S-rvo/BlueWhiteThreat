@@ -48,6 +48,69 @@ func TestLabelByKeywords(t *testing.T) {
 	}
 }
 
+func TestLabelByKeywords_WordBoundaries(t *testing.T) {
+	// "ransom" is a substring of "ransomware" — a naive strings.Contains
+	// match would count both keywords for a single mention of "ransomware",
+	// double-counting one real signal as two hits.
+	keywords := []string{"ransom", "ransomware", "leaked"}
+
+	cases := []struct {
+		name string
+		text string
+		want int
+	}{
+		{
+			name: "ransomware mention does not also count as a separate ransom hit",
+			text: "A new ransomware strain has leaked victim data online.",
+			want: 0, // only 2 distinct concepts hit (ransomware, leaked), below MinKeywordHits=3
+		},
+		{
+			name: "standalone ransom and ransomware are both real, distinct hits",
+			text: "Negotiators refused to pay the ransom demanded after the ransomware attack leaked files.",
+			want: 1, // ransom, ransomware, leaked — 3 distinct hits
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := LabelByKeywords(c.text, keywords)
+			if got != c.want {
+				t.Fatalf("LabelByKeywords(%q) = %d, want %d", c.text, got, c.want)
+			}
+		})
+	}
+}
+
+func TestLabelByKeywords_HyphenatedAndMultiWordKeywordsStillMatch(t *testing.T) {
+	keywords := []string{"zero-day", "data breach", "cve-"}
+
+	cases := []struct {
+		name string
+		text string
+		want int
+	}{
+		{
+			name: "hyphenated and multi-word keywords match at word boundaries",
+			text: "The zero-day was used in a data breach disclosed in CVE-2024-1234.",
+			want: 1, // zero-day, data breach, cve- — 3 hits
+		},
+		{
+			name: "breach does not match inside an unrelated compound word",
+			text: "The databreach-free quarter had no zero-day and no cve filed.",
+			want: 0, // "databreach" is one contiguous word, not a "breach" hit
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := LabelByKeywords(c.text, keywords)
+			if got != c.want {
+				t.Fatalf("LabelByKeywords(%q) = %d, want %d", c.text, got, c.want)
+			}
+		})
+	}
+}
+
 func TestIsLinkDirectory(t *testing.T) {
 	cases := []struct {
 		name string
