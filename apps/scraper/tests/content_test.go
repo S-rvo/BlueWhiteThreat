@@ -73,3 +73,28 @@ func TestExtractMainContentCollapsesWhitespace(t *testing.T) {
 		t.Errorf("expected both lines retained, got %q", got)
 	}
 }
+
+func TestExtractMainContentPreservesTextStructure(t *testing.T) {
+	cases := []struct{ name, html, want string }{
+		{"compact paragraphs", `<body><p>data</p><p>breach</p></body>`, "data\nbreach"},
+		{"inline word markup", `<body><p>ransom<strong>ware</strong> attack</p></body>`, "ransomware attack"},
+		{"line breaks and cells", `<body>one<br>two<table><tr><td>three</td><td>four</td></tr></table></body>`, "one\ntwo\nthree\nfour"},
+		{"article header survives", `<body><header>Site menu</header><article><header class="article-header"><h1>Victim breach</h1></header><p>Details</p></article></body>`, "Victim breach\nDetails"},
+		{"main heading survives", `<body><main><div class="post-header"><h1>New exploit</h1></div><p>Details</p></main></body>`, "New exploit\nDetails"},
+		{"article ads still removed", `<body><article><header><h1>Report</h1><div class="ad-header">Buy now</div></header></article></body>`, "Report"},
+		{"removal does not join words", `<body>data<nav>Menu</nav>breach</body>`, "data\nbreach"},
+		{"explicitly hidden content", `<body><p>Report</p><div hidden>spam</div><div aria-hidden="true">spam</div></body>`, "Report"},
+		{"unicode whitespace", `<body><p>data&nbsp; breach</p></body>`, "data breach"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := sites.ExtractMainContent(tc.html)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
