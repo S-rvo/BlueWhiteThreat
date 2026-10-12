@@ -40,8 +40,9 @@ func Connect(ctx context.Context) (*mongo.Client, error) {
 // ArticleContent is the minimal projection needed for scoring: the article's
 // Mongo _id and its scraped text.
 type ArticleContent struct {
-	ID      interface{} `bson:"_id"`
-	Content string      `bson:"content"`
+	ID        interface{} `bson:"_id"`
+	Content   string      `bson:"content"`
+	Relevance *Relevance  `bson:"relevance"`
 }
 
 func articleCollection(client *mongo.Client) *mongo.Collection {
