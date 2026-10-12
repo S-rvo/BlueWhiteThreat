@@ -19,27 +19,37 @@ const ReviewMargin = 0.1
 type Result struct {
 	Relevant     bool
 	Score        float64
-	ModelVersion string
-	NeedsReview  bool
+	// CalibratedScore is Score passed through the model's Platt-scaling
+	// calibrator, so it reflects the true observed positive rate at that
+	// confidence level instead of the raw (and, under balanced-weighted
+	// training, systematically overconfident) sigmoid output. Relevant and
+	// NeedsReview are still decided on the raw Score against threshold,
+	// since that's what the threshold was picked against — CalibratedScore
+	// is for anything that treats Score as an actual probability.
+	CalibratedScore float64
+	ModelVersion    string
+	NeedsReview     bool
 }
 
 // Classifier combines a fitted vectorizer and a trained logistic regression
 // into a single Classify(text) call, so callers never need to know about
 // TF-IDF or model internals.
 type Classifier struct {
-	vectorizer *tfidf.Vectorizer
-	logreg     *model.LogisticRegression
-	threshold  float64
-	version    string
+	vectorizer  *tfidf.Vectorizer
+	logreg      *model.LogisticRegression
+	threshold   float64
+	calibration model.Calibrator
+	version     string
 }
 
 // New builds a ready-to-use Classifier from a loaded model.Model.
 func New(m *model.Model) *Classifier {
 	return &Classifier{
-		vectorizer: &tfidf.Vectorizer{Vocabulary: m.Vocabulary, IDF: m.IDF},
-		logreg:     &model.LogisticRegression{Weights: m.Weights, Bias: m.Bias},
-		threshold:  m.Threshold,
-		version:    m.Version,
+		vectorizer:  &tfidf.Vectorizer{Vocabulary: m.Vocabulary, IDF: m.IDF},
+		logreg:      &model.LogisticRegression{Weights: m.Weights, Bias: m.Bias},
+		threshold:   m.Threshold,
+		calibration: m.Calibration,
+		version:     m.Version,
 	}
 }
 
@@ -59,9 +69,10 @@ func (c *Classifier) Classify(text string) Result {
 	vector := c.vectorizer.Transform(text)
 	score := c.logreg.Predict(vector)
 	return Result{
-		Relevant:     score >= c.threshold,
-		Score:        score,
-		ModelVersion: c.version,
-		NeedsReview:  math.Abs(score-c.threshold) <= ReviewMargin,
+		Relevant:        score >= c.threshold,
+		Score:           score,
+		CalibratedScore: c.calibration.Apply(score),
+		ModelVersion:    c.version,
+		NeedsReview:     math.Abs(score-c.threshold) <= ReviewMargin,
 	}
 }

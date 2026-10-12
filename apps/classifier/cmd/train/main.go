@@ -49,6 +49,11 @@ const (
 	// word-level edit in a short CTI blurb produces a handful of flipped
 	// bits, while unrelated documents differ in roughly half the bits.
 	nearDuplicateMaxDistance = 10
+	// calibrationEpochs/calibrationLearningRate control the gradient
+	// descent used to fit Platt scaling (2 scalar parameters, so this
+	// converges fast even with many epochs).
+	calibrationEpochs       = 2000
+	calibrationLearningRate = 0.1
 )
 
 func main() {
@@ -111,6 +116,14 @@ func main() {
 	chosenThreshold := pickThreshold(valScores, valSet.Labels)
 	evaluateAt("validation", valScores, valSet.Labels, chosenThreshold)
 
+	// Fit Platt scaling on the same validation set used to pick the
+	// threshold: TrainWeighted's balanced-loss objective makes raw scores
+	// systematically overconfident relative to the true positive rate, so
+	// calibration corrects that without touching the threshold decision
+	// itself (which stays based on raw scores).
+	calibration := model.FitPlattScaling(valScores, valSet.Labels, calibrationEpochs, calibrationLearningRate)
+	log.Printf("Fitted Platt scaling calibration: A=%.4f, B=%.4f", calibration.A, calibration.B)
+
 	testScores := make([]float64, len(testSet.Texts))
 	for i, t := range testSet.Texts {
 		testScores[i] = lr.Predict(vectorizer.Transform(t))
@@ -118,12 +131,13 @@ func main() {
 	reportTest(testScores, testSet.Labels, chosenThreshold)
 
 	m := &model.Model{
-		Vocabulary: vectorizer.Vocabulary,
-		IDF:        vectorizer.IDF,
-		Weights:    lr.Weights,
-		Bias:       lr.Bias,
-		Threshold:  chosenThreshold,
-		Version:    time.Now().Format("2006-01-02T15-04-05"),
+		Vocabulary:  vectorizer.Vocabulary,
+		IDF:         vectorizer.IDF,
+		Weights:     lr.Weights,
+		Bias:        lr.Bias,
+		Threshold:   chosenThreshold,
+		Calibration: calibration,
+		Version:     time.Now().Format("2006-01-02T15-04-05"),
 	}
 
 	if err := model.Save(outputPath, m); err != nil {

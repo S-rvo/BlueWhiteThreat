@@ -102,10 +102,11 @@ func classifyArticle(classifier *classify.Classifier, content string) (relevance
 
 	result := classifier.Classify(content)
 	return db.Relevance{
-		Relevant:     result.Relevant,
-		Score:        result.Score,
-		ModelVersion: result.ModelVersion,
-		NeedsReview:  result.NeedsReview,
+		Relevant:        result.Relevant,
+		Score:           result.Score,
+		CalibratedScore: result.CalibratedScore,
+		ModelVersion:    result.ModelVersion,
+		NeedsReview:     result.NeedsReview,
 	}, false
 }
 
