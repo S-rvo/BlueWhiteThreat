@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/dedup"
-	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/embeddings"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/split"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/tfidf"
@@ -55,20 +54,6 @@ const (
 	// converges fast even with many epochs).
 	calibrationEpochs       = 2000
 	calibrationLearningRate = 0.1
-	// embeddingDim/embeddingWindow/embeddingMaxVocab/embeddingSeed control
-	// the pure-Go semantic word embeddings (see internal/embeddings): a
-	// small PPMI co-occurrence table over the embeddingMaxVocab most
-	// frequent words, built from a window of embeddingWindow neighboring
-	// tokens, randomly projected down to embeddingDim dimensions and
-	// averaged per document. This adds a semantic feature channel next to
-	// TF-IDF — e.g. letting "malware" and "ransomware" contribute similar
-	// signal — without a pre-trained table, an extra runtime, or any
-	// network access, per the classifier design doc's constraint against
-	// heavy ML dependencies.
-	embeddingDim      = 0
-	embeddingWindow   = 4
-	embeddingMaxVocab = 2000
-	embeddingSeed     = 42
 )
 
 func main() {
@@ -112,17 +97,9 @@ func main() {
 
 	vectorizer := tfidf.Fit(trainSet.Texts, trainSet.Labels)
 
-	wordVectors := embeddings.BuildWordVectors(trainSet.Texts, embeddingWindow, embeddingDim, embeddingMaxVocab, embeddingSeed)
-	embedder := &embeddings.Embedder{Vectors: wordVectors, Dim: embeddingDim}
-	log.Printf("Built semantic embeddings for %d words (dim=%d)", len(wordVectors), embeddingDim)
-
-	featureVector := func(t string) []float64 {
-		return append(vectorizer.Transform(t), embedder.Transform(t)...)
-	}
-
 	X := make([][]float64, len(trainSet.Texts))
 	for i, t := range trainSet.Texts {
-		X[i] = featureVector(t)
+		X[i] = vectorizer.Transform(t)
 	}
 
 	// Unweighted loss on an imbalanced dataset (here ~8% positives) biases
@@ -134,7 +111,7 @@ func main() {
 
 	valScores := make([]float64, len(valSet.Texts))
 	for i, t := range valSet.Texts {
-		valScores[i] = lr.Predict(featureVector(t))
+		valScores[i] = lr.Predict(vectorizer.Transform(t))
 	}
 	chosenThreshold := pickThreshold(valScores, valSet.Labels)
 	evaluateAt("validation", valScores, valSet.Labels, chosenThreshold)
@@ -149,7 +126,7 @@ func main() {
 
 	testScores := make([]float64, len(testSet.Texts))
 	for i, t := range testSet.Texts {
-		testScores[i] = lr.Predict(featureVector(t))
+		testScores[i] = lr.Predict(vectorizer.Transform(t))
 	}
 	reportTest(testScores, testSet.Labels, chosenThreshold)
 
@@ -160,7 +137,6 @@ func main() {
 		Bias:        lr.Bias,
 		Threshold:   chosenThreshold,
 		Calibration: calibration,
-		Embedding:   *embedder,
 		Version:     time.Now().Format("2006-01-02T15-04-05"),
 	}
 
