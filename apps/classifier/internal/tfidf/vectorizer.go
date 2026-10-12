@@ -21,15 +21,47 @@ type Vectorizer struct {
 	IDF        []float64      // idf weight per vocabulary index
 }
 
-// terms splits doc into unigrams (via text.Tokenize) plus adjacent-pair
-// bigrams, so fixed phrases ("whatsapp hacker", "virgin bitcoin") get their
-// own vocabulary entry distinct from their component words.
+// charNgramSize is the window length for character n-gram features.
+const charNgramSize = 4
+
+// charNgramPrefix distinguishes character n-gram tokens ("c_rans") from
+// word tokens, so a short word that happens to equal a 4-gram never
+// collides with it in the vocabulary.
+const charNgramPrefix = "c_"
+
+// charNgrams returns every overlapping charNgramSize-rune window of token,
+// prefixed to its own namespace. Dark-web content is full of l33tspeak and
+// typo variants of the same word ("ransomw4re", "r4nsomware") that share
+// almost no word tokens but share most character n-grams, so this gives
+// the model a feature that still picks up the family resemblance where a
+// pure word-token vocabulary would see unrelated tokens. Tokens shorter
+// than charNgramSize produce no n-grams; the word token itself already
+// covers that case.
+func charNgrams(token string) []string {
+	runes := []rune(token)
+	if len(runes) < charNgramSize {
+		return nil
+	}
+	grams := make([]string, 0, len(runes)-charNgramSize+1)
+	for i := 0; i+charNgramSize <= len(runes); i++ {
+		grams = append(grams, charNgramPrefix+string(runes[i:i+charNgramSize]))
+	}
+	return grams
+}
+
+// terms splits doc into unigrams (via text.Tokenize), adjacent-pair
+// bigrams (so fixed phrases like "whatsapp hacker" get their own
+// vocabulary entry distinct from their component words), and character
+// n-grams of each unigram (see charNgrams).
 func terms(doc string) []string {
 	unigrams := text.Tokenize(doc)
 	out := make([]string, 0, 2*len(unigrams))
 	out = append(out, unigrams...)
 	for i := 0; i+1 < len(unigrams); i++ {
 		out = append(out, unigrams[i]+"_"+unigrams[i+1])
+	}
+	for _, tok := range unigrams {
+		out = append(out, charNgrams(tok)...)
 	}
 	return out
 }

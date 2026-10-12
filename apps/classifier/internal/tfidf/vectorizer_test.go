@@ -10,6 +10,29 @@ func zeros(n int) []float64 {
 	return make([]float64, n)
 }
 
+func TestFitIncludesCharacterNgrams(t *testing.T) {
+	// Dark-web content is rife with l33tspeak/typo variants of the same
+	// word ("ransomw4re", "r4nsomware"). Character n-grams give the model
+	// a feature that still overlaps heavily between such variants, where a
+	// pure word-token vocabulary would treat them as entirely unrelated.
+	docs := []string{
+		"a ransomware gang leaked data",
+		"a ransomware gang leaked data",
+		"unrelated quarterly earnings report",
+	}
+	v := Fit(docs, zeros(len(docs)))
+
+	if _, ok := v.Vocabulary["c_rans"]; !ok {
+		t.Fatalf("expected vocabulary to contain character 4-gram %q, vocab=%v", "c_rans", v.Vocabulary)
+	}
+
+	vec := v.Transform("ransomware")
+	idx := v.Vocabulary["c_rans"]
+	if vec[idx] <= 0 {
+		t.Fatalf("expected Transform(%q) to score character n-gram %q > 0, got %v", "ransomware", "c_rans", vec[idx])
+	}
+}
+
 func TestFitTransformRoundTrip(t *testing.T) {
 	docs := []string{
 		"malware attack network",
