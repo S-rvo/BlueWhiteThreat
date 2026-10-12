@@ -51,8 +51,11 @@ func charNgrams(token string) []string {
 
 // terms splits doc into unigrams (via text.Tokenize), adjacent-pair
 // bigrams (so fixed phrases like "whatsapp hacker" get their own
-// vocabulary entry distinct from their component words), and character
-// n-grams of each unigram (see charNgrams).
+// vocabulary entry distinct from their component words), character
+// n-grams of each unigram (see charNgrams), and structural indicator
+// tokens (see structuralTokens) matched against the raw, untokenized doc
+// text so patterns like CVE IDs or onion addresses aren't broken apart by
+// tokenization first.
 func terms(doc string) []string {
 	unigrams := text.Tokenize(doc)
 	out := make([]string, 0, 2*len(unigrams))
@@ -63,6 +66,7 @@ func terms(doc string) []string {
 	for _, tok := range unigrams {
 		out = append(out, charNgrams(tok)...)
 	}
+	out = append(out, structuralTokens(doc)...)
 	return out
 }
 
