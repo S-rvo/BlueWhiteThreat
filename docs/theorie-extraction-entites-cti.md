@@ -36,14 +36,13 @@ Le service `parser` est un binaire Go indépendant, au même titre que `crawler`
 
 C'est le cœur de la fiabilité du système, et le point le plus important à comprendre :
 
-```
-texte brut  →  [LLM]  →  Entities (brut, potentiellement halluciné)
-                              │
-                              ▼
-                     [validation regex]
-                              │
-                              ▼
-                  Entities (propre, garanti bien formé)
+```mermaid
+flowchart LR
+    texte["Texte brut"] --> llm["LLM"] --> brut["Entities brutes\npotentiellement halluciné"] --> validation["Validation déterministe"] --> propre["Entities propres\nbien formées"]
+    llm -. erreurs et latence .-> logs["Logs Docker"]
+    validation -. rejets et erreurs .-> logs
+    logs --> alloy["Grafana Alloy"] --> loki[(Loki)] --> grafana["Grafana"]
+    cadvisor["cAdvisor\nCPU / mémoire"] --> prometheus[(Prometheus)] --> grafana
 ```
 
 **Le LLM peut halluciner des formats.** Même un bon modèle peut, sur un texte ambigu, sortir une "adresse IP" comme `192.168.1.999` (octet invalide) ou un "hash" de 20 caractères hexadécimaux (ni un MD5, ni un SHA1, ni un SHA256). Ce n'est pas un bug du modèle, c'est une limite intrinsèque des LLMs sur des tâches d'extraction structurée : ils génèrent du texte plausible, pas du texte garanti-conforme.
