@@ -168,10 +168,14 @@ func TestTransformIsL2Normalized(t *testing.T) {
 	}
 
 	vec := v.Transform("malware malware attack unknown")
-	// Raw (pre-normalization) values would be [4.0, 0.5]; normalized by
-	// their L2 norm (sqrt(4.0^2 + 0.5^2)).
-	rawNorm := math.Sqrt(4.0*4.0 + 0.5*0.5)
-	want := []float64{4.0 / rawNorm, 0.5 / rawNorm}
+	// TF is log-scaled (log1p(count)) before multiplying by IDF, so a term
+	// repeated many times doesn't dominate linearly - "malware" appearing
+	// twice shouldn't count as literally twice the signal of once. Raw
+	// (pre-normalization) values: malware = log1p(2)*2.0, attack = log1p(1)*0.5.
+	rawMalware := math.Log1p(2) * 2.0
+	rawAttack := math.Log1p(1) * 0.5
+	rawNorm := math.Sqrt(rawMalware*rawMalware + rawAttack*rawAttack)
+	want := []float64{rawMalware / rawNorm, rawAttack / rawNorm}
 
 	if len(vec) != len(want) {
 		t.Fatalf("len(vec) = %d, want %d", len(vec), len(want))

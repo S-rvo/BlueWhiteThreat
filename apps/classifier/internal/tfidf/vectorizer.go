@@ -154,23 +154,33 @@ func Fit(documents []string, labels []float64) *Vectorizer {
 
 // Transform converts a single document into a TF-IDF vector of length
 // len(Vocabulary), using this Vectorizer's frozen vocabulary and IDF.
-// TF is raw term frequency within the document (count of token occurrences,
-// unigrams and adjacent-pair bigrams alike). Each vector entry is
-// TF(token) * IDF(token) for tokens in the vocabulary; tokens not in the
-// vocabulary are ignored. The resulting vector is L2-normalized so a
-// document's score isn't a function of its raw length — otherwise a long
-// page repeating generic boilerplate (e.g. a crypto-rate ticker) outscores
-// a short, information-dense one on term volume alone. Returns a zero
-// vector (all 0.0, length len(Vocabulary)) for an empty document or a
-// document containing only unknown (out-of-vocabulary) tokens.
+// TF is log-scaled term frequency within the document: log1p(count) of
+// occurrences of a token (unigrams, adjacent-pair bigrams, and character
+// n-grams alike), so a term repeated many times (e.g. a spammed keyword,
+// or a generic word naturally common in long dark-web listings) doesn't
+// contribute linearly more signal than the same term appearing once or
+// twice — it dampens raw repetition while still rewarding presence growing
+// weight. Each vector entry is logTF(token) * IDF(token) for tokens in the
+// vocabulary; tokens not in the vocabulary are ignored. The resulting
+// vector is L2-normalized so a document's score isn't a function of its
+// raw length — otherwise a long page repeating generic boilerplate (e.g. a
+// crypto-rate ticker) outscores a short, information-dense one on term
+// volume alone. Returns a zero vector (all 0.0, length len(Vocabulary)) for
+// an empty document or a document containing only unknown (out-of-vocabulary)
+// tokens.
 func (v *Vectorizer) Transform(document string) []float64 {
-	vec := make([]float64, len(v.Vocabulary))
+	counts := make(map[int]int)
 	for _, tok := range terms(document) {
 		idx, ok := v.Vocabulary[tok]
 		if !ok {
 			continue
 		}
-		vec[idx] += v.IDF[idx]
+		counts[idx]++
+	}
+
+	vec := make([]float64, len(v.Vocabulary))
+	for idx, count := range counts {
+		vec[idx] = math.Log1p(float64(count)) * v.IDF[idx]
 	}
 
 	var sumSq float64
