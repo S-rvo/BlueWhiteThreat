@@ -6,28 +6,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/embeddings"
 )
 
 // Model bundles everything needed to reconstruct a working classifier:
 // the TF-IDF vectorizer's vocabulary/IDF weights, the logistic regression's
 // weights/bias, the decision threshold used to turn a probability into a
-// binary verdict, a version string identifying the model artifact, and an
-// optional pure-Go word-embedding table (see internal/embeddings) used as
-// an additional semantic feature channel alongside TF-IDF. A model.json
-// saved before embeddings existed unmarshals with a zero-value Embedding
-// (Dim 0), which Embedder.Transform treats as a no-op, so old models keep
-// working unchanged.
+// binary verdict, a calibrator for turning scores into probabilities, and
+// a version string identifying the model artifact.
 type Model struct {
-	Vocabulary  map[string]int      `json:"vocabulary"`
-	IDF         []float64           `json:"idf"`
-	Weights     []float64           `json:"weights"`
-	Bias        float64             `json:"bias"`
-	Threshold   float64             `json:"threshold"`
-	Calibration Calibrator          `json:"calibration"`
-	Embedding   embeddings.Embedder `json:"embedding"`
-	Version     string              `json:"version"`
+	Vocabulary  map[string]int `json:"vocabulary"`
+	IDF         []float64      `json:"idf"`
+	Weights     []float64      `json:"weights"`
+	Bias        float64        `json:"bias"`
+	Threshold   float64        `json:"threshold"`
+	Calibration Calibrator     `json:"calibration"`
+	Version     string         `json:"version"`
 }
 
 // Save serializes m as JSON and writes it to path. The write is atomic:
