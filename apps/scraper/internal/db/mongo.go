@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"log"
 	"reflect"
 	"strings"
 	"time"
@@ -37,7 +38,9 @@ func SaveAllEntries(base, collection string, entries interface{}, uniqueFields [
     defer func() {
         ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
         defer cancel()
-        client.Disconnect(ctx)
+        if err := client.Disconnect(ctx); err != nil {
+            log.Printf("mongo: disconnect failed: %v", err)
+        }
     }()
     coll := client.Database(base).Collection(collection)
 
