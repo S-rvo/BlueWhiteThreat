@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
 )
 
 // MinKeywordHits is the number of distinct seed keywords that must appear
@@ -55,13 +57,52 @@ func IsLinkDirectory(text string) bool {
 	return false
 }
 
+var (
+	keywordPatternsMu sync.Mutex
+	keywordPatterns   = map[string]*regexp.Regexp{}
+)
+
+// keywordPattern compiles (and caches) a word-boundary regex for a keyword.
+// A plain substring match would let "ransom" match inside "ransomware",
+// double-counting one real signal as two keyword hits. \b only anchors at a
+// transition between a word character and a non-word one, so it's only
+// added on a side whose edge character is itself a word character —
+// otherwise (e.g. a keyword ending in "-", like "cve-") the literal
+// character already provides the boundary.
+func keywordPattern(kw string) *regexp.Regexp {
+	keywordPatternsMu.Lock()
+	defer keywordPatternsMu.Unlock()
+
+	if p, ok := keywordPatterns[kw]; ok {
+		return p
+	}
+
+	isWordChar := func(b byte) bool {
+		return b == '_' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+	}
+
+	pattern := regexp.QuoteMeta(kw)
+	if isWordChar(kw[0]) {
+		pattern = `\b` + pattern
+	}
+	if isWordChar(kw[len(kw)-1]) {
+		pattern = pattern + `\b`
+	}
+
+	p := regexp.MustCompile("(?i)" + pattern)
+	keywordPatterns[kw] = p
+	return p
+}
+
 // LabelByKeywords returns 1 (relevant) if text contains at least
-// MinKeywordHits of the given keywords, 0 otherwise.
+// MinKeywordHits of the given keywords, 0 otherwise. Matching is done at
+// word boundaries so a keyword only counts when it appears as its own
+// token (or its own hyphenated/multi-word phrase), not as a substring of
+// an unrelated or more specific word.
 func LabelByKeywords(text string, keywords []string) int {
-	lower := strings.ToLower(text)
 	hits := 0
 	for _, kw := range keywords {
-		if strings.Contains(lower, strings.ToLower(kw)) {
+		if keywordPattern(kw).MatchString(text) {
 			hits++
 		}
 	}
