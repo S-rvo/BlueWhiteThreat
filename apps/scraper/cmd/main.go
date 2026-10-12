@@ -23,13 +23,13 @@ func main() {
 	}
 
 	log.Printf("Lancement du scraper (interval: %d min)", DefaultInterval)
-	sites.RunScraper() // lance le scraper une fois pour vérifier que tout fonctionne
+	sites.RunDarkwebScraper()
 
 	ticker := time.NewTicker(time.Duration(DefaultInterval) * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		log.Printf("⏰ Exécution programmée du scraper à %s", time.Now().Format("15:04:05"))
-		sites.RunScraper()
+		sites.RunDarkwebScraper()
 	}
 }

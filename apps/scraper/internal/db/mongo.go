@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"log"
 	"reflect"
 	"strings"
 	"time"
@@ -34,7 +35,13 @@ func SaveAllEntries(base, collection string, entries interface{}, uniqueFields [
     if err != nil {
         return 0, err
     }
-    defer client.Disconnect(context.TODO())
+    defer func() {
+        ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+        defer cancel()
+        if err := client.Disconnect(ctx); err != nil {
+            log.Printf("mongo: disconnect failed: %v", err)
+        }
+    }()
     coll := client.Database(base).Collection(collection)
 
     // On convertit entries en slice de valeurs
@@ -63,7 +70,9 @@ func SaveAllEntries(base, collection string, entries interface{}, uniqueFields [
             }
         }
         update := bson.M{"$set": entry}
-        res, err := coll.UpdateOne(context.TODO(), filter, update, options.Update().SetUpsert(true))
+        writeCtx, cancelWrite := context.WithTimeout(context.Background(), 15*time.Second)
+        res, err := coll.UpdateOne(writeCtx, filter, update, options.Update().SetUpsert(true))
+        cancelWrite()
         if err != nil {
             return inserted, err
         }
