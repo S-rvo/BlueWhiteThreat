@@ -4,11 +4,12 @@ package bootstrap
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestLabelByKeywords(t *testing.T) {
-	keywords := []string{"ransomware", "leaked", "exploit"}
+	keywords := []string{"ransomware", "leaked", "exploit", "breach"}
 
 	cases := []struct {
 		name string
@@ -16,9 +17,14 @@ func TestLabelByKeywords(t *testing.T) {
 		want int
 	}{
 		{
-			name: "two keyword hits labels relevant",
-			text: "A new ransomware strain has leaked victim data online.",
+			name: "three keyword hits labels relevant",
+			text: "A new ransomware strain has leaked victim data after an exploit was used in the breach.",
 			want: 1,
+		},
+		{
+			name: "two keyword hits labels not relevant",
+			text: "A new ransomware strain has leaked victim data online.",
+			want: 0,
 		},
 		{
 			name: "single keyword hit labels not relevant",
@@ -37,6 +43,34 @@ func TestLabelByKeywords(t *testing.T) {
 			got := LabelByKeywords(c.text, keywords)
 			if got != c.want {
 				t.Fatalf("LabelByKeywords(%q) = %d, want %d", c.text, got, c.want)
+			}
+		})
+	}
+}
+
+func TestIsLinkDirectory(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "few onion mentions is not a directory",
+			text: "A ransomware gang leaked data stolen from a hospital, hosted at abc.onion.",
+			want: false,
+		},
+		{
+			name: "many onion mentions is a directory",
+			text: strings.Repeat("link.onion ", 20),
+			want: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := IsLinkDirectory(c.text)
+			if got != c.want {
+				t.Fatalf("IsLinkDirectory(%q) = %v, want %v", c.text, got, c.want)
 			}
 		})
 	}

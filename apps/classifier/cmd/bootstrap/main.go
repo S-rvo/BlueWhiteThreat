@@ -9,6 +9,7 @@ import (
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/bootstrap"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/db"
+	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/review"
 	"github.com/joho/godotenv"
 )
 
@@ -19,11 +20,21 @@ func main() {
 
 	outputPath := getEnvOrDefault("BOOTSTRAP_OUTPUT", "training_data.csv")
 	keywordsPath := getEnvOrDefault("SEED_KEYWORDS_PATH", "data/seed_keywords.json")
+	reviewedPath := getEnvOrDefault("REVIEWED_LABELS_PATH", "data/reviewed_labels.csv")
 
 	keywords, err := bootstrap.LoadKeywords(keywordsPath)
 	if err != nil {
 		log.Fatalf("failed to load seed keywords: %v", err)
 	}
+
+	// reviewed holds human-corrected labels keyed by stable Mongo _id. Unlike
+	// training_data.csv, this file is never regenerated — it survives every
+	// bootstrap cycle and overrides the noisy keyword heuristic below.
+	reviewed, err := review.LoadReviewed(reviewedPath)
+	if err != nil {
+		log.Fatalf("failed to load reviewed labels: %v", err)
+	}
+	log.Printf("Loaded %d human-reviewed label overrides from %s", len(reviewed), reviewedPath)
 
 	ctx := context.Background()
 	client, err := db.Connect(ctx)
@@ -47,24 +58,33 @@ func main() {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	if err := writer.Write([]string{"text", "label"}); err != nil {
+	if err := writer.Write([]string{"id", "text", "label"}); err != nil {
 		log.Fatalf("failed to write CSV header: %v", err)
 	}
 
-	written := 0
+	written, skippedDirectories, overridden := 0, 0, 0
 	for _, article := range articles {
 		if article.Content == "" {
 			continue
 		}
+		if bootstrap.IsLinkDirectory(article.Content) {
+			skippedDirectories++
+			continue
+		}
+		id := review.IDString(article.ID)
 		label := bootstrap.LabelByKeywords(article.Content, keywords)
-		if err := writer.Write([]string{article.Content, itoa(label)}); err != nil {
+		if reviewedLabel, ok := reviewed[id]; ok {
+			label = reviewedLabel
+			overridden++
+		}
+		if err := writer.Write([]string{id, article.Content, itoa(label)}); err != nil {
 			log.Printf("skipping article due to write error: %v", err)
 			continue
 		}
 		written++
 	}
 
-	log.Printf("Wrote %d labeled candidates to %s — review and correct labels by hand before running cmd/train.", written, outputPath)
+	log.Printf("Wrote %d labeled candidates to %s (skipped %d link-directory pages, %d overridden by human review)", written, outputPath, skippedDirectories, overridden)
 }
 
 func getEnvOrDefault(key, defaultValue string) string {
