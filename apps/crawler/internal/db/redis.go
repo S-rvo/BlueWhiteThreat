@@ -37,7 +37,7 @@ func InitRedis() error {
 		return err
 	}
 
-	log.Printf("Connected to Redis: %s:%s", redisHost, redisPort)
+	log.Printf("Connected to Redis: %s:%s", redisHost, redisPort) // #nosec G706 -- values come from operator-set env vars, not user input
 	return nil
 }
 
