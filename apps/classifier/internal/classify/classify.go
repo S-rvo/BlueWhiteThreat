@@ -4,6 +4,7 @@ package classify
 import (
 	"math"
 
+	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/embeddings"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/tfidf"
 )
@@ -17,8 +18,8 @@ const ReviewMargin = 0.1
 
 // Result is the outcome of scoring one document.
 type Result struct {
-	Relevant     bool
-	Score        float64
+	Relevant bool
+	Score    float64
 	// CalibratedScore is Score passed through the model's Platt-scaling
 	// calibrator, so it reflects the true observed positive rate at that
 	// confidence level instead of the raw (and, under balanced-weighted
@@ -36,6 +37,7 @@ type Result struct {
 // TF-IDF or model internals.
 type Classifier struct {
 	vectorizer  *tfidf.Vectorizer
+	embedder    *embeddings.Embedder
 	logreg      *model.LogisticRegression
 	threshold   float64
 	calibration model.Calibrator
@@ -44,8 +46,10 @@ type Classifier struct {
 
 // New builds a ready-to-use Classifier from a loaded model.Model.
 func New(m *model.Model) *Classifier {
+	embedding := m.Embedding
 	return &Classifier{
 		vectorizer:  &tfidf.Vectorizer{Vocabulary: m.Vocabulary, IDF: m.IDF},
+		embedder:    &embedding,
 		logreg:      &model.LogisticRegression{Weights: m.Weights, Bias: m.Bias},
 		threshold:   m.Threshold,
 		calibration: m.Calibration,
@@ -66,7 +70,7 @@ func (c *Classifier) Version() string {
 // in the vocabulary (or no tokens at all) yields an all-zero vector, so
 // its score falls back to sigmoid(Bias).
 func (c *Classifier) Classify(text string) Result {
-	vector := c.vectorizer.Transform(text)
+	vector := append(c.vectorizer.Transform(text), c.embedder.Transform(text)...)
 	score := c.logreg.Predict(vector)
 	return Result{
 		Relevant:        score >= c.threshold,
