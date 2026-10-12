@@ -33,6 +33,12 @@ func New(m *model.Model) *Classifier {
 	}
 }
 
+// Version reports the model version this Classifier was built from, so
+// callers can attach it to records they write without re-deriving it.
+func (c *Classifier) Version() string {
+	return c.version
+}
+
 // Classify scores text for relevance: it vectorizes text with the
 // Classifier's TF-IDF vectorizer, runs the resulting vector through the
 // logistic regression model, and reports Relevant as true when the

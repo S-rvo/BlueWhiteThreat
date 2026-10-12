@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/bootstrap"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/classify"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/db"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
@@ -70,16 +71,10 @@ func runOnce(classifier *classify.Classifier) {
 	log.Printf("Found %d unclassified articles", len(articles))
 
 	for _, article := range articles {
-		if article.Content == "" {
+		relevance, skip := classifyArticle(classifier, article.Content)
+		if skip {
 			log.Printf("skipping article %v: empty content", article.ID)
 			continue
-		}
-
-		result := classifier.Classify(article.Content)
-		relevance := db.Relevance{
-			Relevant:     result.Relevant,
-			Score:        result.Score,
-			ModelVersion: result.ModelVersion,
 		}
 
 		if err := db.UpdateRelevance(ctx, client, article.ID, relevance); err != nil {
@@ -87,6 +82,30 @@ func runOnce(classifier *classify.Classifier) {
 			continue
 		}
 	}
+}
+
+// classifyArticle decides the relevance record for one article's content.
+// Empty content can't be scored and is skipped entirely (left for a later
+// pass). Link-directory pages (bootstrap.IsLinkDirectory) are excluded from
+// training data by cmd/bootstrap and cmd/export, so the live classifier
+// never saw one as a labeled example — scoring it here would apply a model
+// to data it was never evaluated against, so it's instead recorded directly
+// as not relevant, keeping training and inference consistent.
+func classifyArticle(classifier *classify.Classifier, content string) (relevance db.Relevance, skip bool) {
+	if content == "" {
+		return db.Relevance{}, true
+	}
+
+	if bootstrap.IsLinkDirectory(content) {
+		return db.Relevance{Relevant: false, Score: 0, ModelVersion: classifier.Version()}, false
+	}
+
+	result := classifier.Classify(content)
+	return db.Relevance{
+		Relevant:     result.Relevant,
+		Score:        result.Score,
+		ModelVersion: result.ModelVersion,
+	}, false
 }
 
 func getEnvOrDefault(key, defaultValue string) string {
