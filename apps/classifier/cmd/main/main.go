@@ -105,6 +105,7 @@ func classifyArticle(classifier *classify.Classifier, content string) (relevance
 		Relevant:     result.Relevant,
 		Score:        result.Score,
 		ModelVersion: result.ModelVersion,
+		NeedsReview:  result.NeedsReview,
 	}, false
 }
 

@@ -2,15 +2,25 @@
 package classify
 
 import (
+	"math"
+
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/tfidf"
 )
+
+// ReviewMargin defines how close a score must be to the model's threshold
+// to be flagged NeedsReview: scores within [threshold-ReviewMargin,
+// threshold+ReviewMargin] are borderline calls the model isn't confident
+// about, so a human should check them rather than trusting the automatic
+// Relevant verdict either way.
+const ReviewMargin = 0.1
 
 // Result is the outcome of scoring one document.
 type Result struct {
 	Relevant     bool
 	Score        float64
 	ModelVersion string
+	NeedsReview  bool
 }
 
 // Classifier combines a fitted vectorizer and a trained logistic regression
@@ -52,5 +62,6 @@ func (c *Classifier) Classify(text string) Result {
 		Relevant:     score >= c.threshold,
 		Score:        score,
 		ModelVersion: c.version,
+		NeedsReview:  math.Abs(score-c.threshold) <= ReviewMargin,
 	}
 }
