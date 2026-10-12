@@ -42,7 +42,7 @@ const (
 	// never quite reaches the floor. When the best floor-meeting candidate
 	// falls under minRecall, pickThreshold falls back to the F1-maximizing
 	// threshold instead.
-	minRecall = 0.15
+	minRecall = 0.3
 	// nearDuplicateMaxDistance is the maximum SimHash hamming distance (out
 	// of 64 bits) for two exact-dedup groups to be treated as the same
 	// underlying content (e.g. a re-crawl with minor copy edits, or a
@@ -65,7 +65,7 @@ const (
 	// signal — without a pre-trained table, an extra runtime, or any
 	// network access, per the classifier design doc's constraint against
 	// heavy ML dependencies.
-	embeddingDim      = 32
+	embeddingDim      = 0
 	embeddingWindow   = 4
 	embeddingMaxVocab = 2000
 	embeddingSeed     = 42
