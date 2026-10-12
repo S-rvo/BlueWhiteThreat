@@ -39,7 +39,22 @@ type ReviewCandidate struct {
 	ID             string  `json:"id"`
 	HeuristicLabel int     `json:"heuristic_label"`
 	ModelScore     float64 `json:"model_score,omitempty"`
+	NeedsReview    bool    `json:"needs_review,omitempty"`
 	Content        string  `json:"content"`
+}
+
+// prioritizeNeedsReview stable-sorts candidates so every one already
+// flagged needs_review by the live classification pipeline (its score fell
+// within classify.ReviewMargin of the model's threshold at scoring time)
+// comes first, closing the loop between "the model told us it wasn't
+// sure" and "a human looks at exactly those documents first". Candidates
+// are otherwise left in their existing order (typically the heuristic/
+// model-score prioritization already applied), since this only needs to
+// promote the uncertain ones, not fully re-rank the queue.
+func prioritizeNeedsReview(candidates []ReviewCandidate) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].NeedsReview && !candidates[j].NeedsReview
+	})
 }
 
 func main() {
@@ -99,6 +114,9 @@ func main() {
 		}
 		label := bootstrap.LabelByKeywords(article.Content, keywords)
 		candidate := ReviewCandidate{ID: id, HeuristicLabel: label, Content: article.Content}
+		if article.Relevance != nil {
+			candidate.NeedsReview = article.Relevance.NeedsReview
+		}
 		if lr != nil {
 			candidate.ModelScore = lr.Predict(vectorizer.Transform(article.Content))
 		}
@@ -128,6 +146,14 @@ func main() {
 	if negativeSample < len(negatives) {
 		negatives = negatives[:negativeSample]
 	}
+
+	// Final pass: whatever order the heuristic/model-score sorting above
+	// produced, documents the live pipeline already flagged needs_review
+	// (its score landed within classify.ReviewMargin of the threshold) jump
+	// to the front — the model telling us it's unsure is a stronger review
+	// signal than the heuristic/model disagreement ordering above.
+	prioritizeNeedsReview(positives)
+	prioritizeNeedsReview(negatives)
 
 	file, err := os.Create(outputPath)
 	if err != nil {
