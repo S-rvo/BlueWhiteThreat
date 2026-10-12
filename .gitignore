@@ -4,3 +4,5 @@
 /db
 
 .worktrees/
+.DS_Store
+apps/classifier/retrain_loop.log

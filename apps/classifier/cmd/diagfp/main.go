@@ -21,8 +21,8 @@ import (
 
 const (
 	trainSplitRatio = 0.8
-	epochs          = 500
-	learningRate    = 0.1
+	epochs          = 4000
+	learningRate    = 2.0
 	l2              = 0.0001
 	splitSeed       = 42
 )
@@ -49,7 +49,7 @@ func main() {
 		trainLabels[i] = labels[idx]
 	}
 
-	vectorizer := tfidf.Fit(trainTexts)
+	vectorizer := tfidf.Fit(trainTexts, trainLabels)
 	X := make([][]float64, len(trainTexts))
 	for i, t := range trainTexts {
 		X[i] = vectorizer.Transform(t)
