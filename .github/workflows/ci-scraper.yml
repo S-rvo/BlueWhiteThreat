@@ -33,7 +33,7 @@ jobs:
       - name: Go Security Scan (scraper)
         run: |
           cd apps/scraper
-          curl -sfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
+          curl -sfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.29.0
           $(go env GOPATH)/bin/gosec ./...
 
       # Secrets Scan
