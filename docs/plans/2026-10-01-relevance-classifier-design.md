@@ -16,14 +16,19 @@ Objectif de ce chantier : un service dédié qui score chaque article scrapé ("
 
 ## Architecture
 
-```
-MongoDB.article (sans champ "relevance")
-   → classifier (ticker, polling périodique — même pattern que scraper/crawler/parser)
-        → tokenisation (minuscules, découpage unicode, ponctuation retirée)
-        → vecteur TF-IDF (vocabulaire + IDF figés à l'entraînement, chargés depuis model.json)
-        → régression logistique (poids + biais figés à l'entraînement)
-        → écrit "relevance": { relevant: bool, score: float64, model_version: string }
-   → (futur, hors périmètre ici) parser ne traite que relevance.relevant == true
+```mermaid
+flowchart LR
+    mongo[("MongoDB.article\nsans relevance")] --> classifier["Classifier\nticker / polling"] --> tokens["Tokenisation"] --> tfidf["Vecteur TF-IDF\nmodel.json"] --> regression["Régression logistique"]
+    regression --> relevance["relevance\npertinent, score, version"] --> mongo
+    relevance -->|pertinent| parser["Parser CTI"]
+    relevance -->|non pertinent| archive["Archivé / exclu"]
+
+    subgraph OBS["Logs et monitoring Docker"]
+        docker["Docker Engine\nstdout / stderr"] --> alloy["Grafana Alloy"] --> loki[(Loki)] --> grafana["Grafana"]
+        docker --> cadvisor["cAdvisor"] --> prometheus[(Prometheus)] --> grafana
+    end
+
+    classifier -. erreurs et activité .-> docker
 ```
 
 ### Entraînement (offline, hors du service runtime)
