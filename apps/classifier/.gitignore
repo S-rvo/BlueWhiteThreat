@@ -2,3 +2,7 @@ classifier
 *.csv
 model.json
 .env
+
+# Local frozen experiment artifacts contain corpus text; keep out of source control.
+/data/confirmation-campaign/
+/data/.confirmation-history/
