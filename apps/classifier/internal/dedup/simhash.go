@@ -123,3 +123,7 @@ func MergeNearDuplicates(groups []Group, maxDistance int) (merged []Group, confl
 	}
 	return merged, conflicts
 }
+
+// Fingerprint exposes the same lexical SimHash used for training deduplication
+// so confirmation can check every reference document without clustering.
+func Fingerprint(doc string) uint64 { return simHash(doc) }
