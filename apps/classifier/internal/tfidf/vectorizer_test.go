@@ -167,3 +167,30 @@ func TestTransformIsL2Normalized(t *testing.T) {
 		t.Fatalf("||vec|| = %v, want 1.0", math.Sqrt(sumSq))
 	}
 }
+
+func TestSublinearTFReducesBoilerplateDominance(t *testing.T) {
+	v := &Vectorizer{Vocabulary: map[string]int{"menu": 0, "malware": 1}, IDF: []float64{1, 1}}
+	doc := "menu menu menu menu menu menu menu menu malware"
+	raw := v.Transform(doc)
+	v.SublinearTF = true
+	logarithmic := v.Transform(doc)
+	if logarithmic[1] <= raw[1] {
+		t.Fatal("logarithmic TF should preserve more of the nonrepeated signal")
+	}
+	if math.Abs(logarithmic[0]/logarithmic[1]-(1+math.Log(8))) > 1e-9 {
+		t.Fatal("incorrect logarithmic term weighting")
+	}
+}
+
+func TestCharacterFeaturesHandleUnseenWordVariants(t *testing.T) {
+	v := FitWithCharacters([]string{"malware attack", "cooking recipe"}, []float64{1, 0}, true)
+	vec := v.Transform("malwares")
+	idx, ok := v.Vocabulary["@c:mal"]
+	if !ok || vec[idx] <= 0 {
+		t.Fatal("unseen plural lost shared character signal")
+	}
+	legacy := Fit([]string{"malware"}, []float64{1})
+	if _, ok := legacy.Vocabulary["@c:mal"]; ok {
+		t.Fatal("legacy models must keep their original features")
+	}
+}

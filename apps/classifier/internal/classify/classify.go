@@ -26,7 +26,7 @@ type Classifier struct {
 // New builds a ready-to-use Classifier from a loaded model.Model.
 func New(m *model.Model) *Classifier {
 	return &Classifier{
-		vectorizer: &tfidf.Vectorizer{Vocabulary: m.Vocabulary, IDF: m.IDF},
+		vectorizer: &tfidf.Vectorizer{Vocabulary: m.Vocabulary, IDF: m.IDF, SublinearTF: m.SublinearTF, CharNgrams: m.CharNgrams},
 		logreg:     &model.LogisticRegression{Weights: m.Weights, Bias: m.Bias},
 		threshold:  m.Threshold,
 		version:    m.Version,

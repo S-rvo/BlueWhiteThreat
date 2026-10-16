@@ -17,19 +17,37 @@ const MaxVocabularySize = 5000
 // Fit, or constructed directly (e.g. when loading vocabulary/IDF data
 // deserialized from model.json at inference time).
 type Vectorizer struct {
-	Vocabulary map[string]int // token -> index in the TF-IDF vector
-	IDF        []float64      // idf weight per vocabulary index
+	Vocabulary  map[string]int // token -> index in the TF-IDF vector
+	IDF         []float64      // idf weight per vocabulary index
+	CharNgrams  bool           // character fragments tolerate spelling variants
+	SublinearTF bool           // logarithmic counts reduce repeated page boilerplate
 }
 
 // terms splits doc into unigrams (via text.Tokenize) plus adjacent-pair
 // bigrams, so fixed phrases ("whatsapp hacker", "virgin bitcoin") get their
 // own vocabulary entry distinct from their component words.
-func terms(doc string) []string {
+func terms(doc string) []string { return documentTerms(doc, false) }
+
+func documentTerms(doc string, characters bool) []string {
 	unigrams := text.Tokenize(doc)
 	out := make([]string, 0, 2*len(unigrams))
 	out = append(out, unigrams...)
 	for i := 0; i+1 < len(unigrams); i++ {
 		out = append(out, unigrams[i]+"_"+unigrams[i+1])
+	}
+	if characters {
+		for _, word := range unigrams {
+			runes := []rune("^" + word + "$")
+			// Long hashes and identifiers do not provide useful morphology.
+			if len(runes) > 34 {
+				continue
+			}
+			for n := 3; n <= 5; n++ {
+				for i := 0; i+n <= len(runes); i++ {
+					out = append(out, "@c:"+string(runes[i:i+n]))
+				}
+			}
+		}
 	}
 	return out
 }
@@ -53,6 +71,12 @@ func terms(doc string) []string {
 // documents and df = document frequency of the token (smoothed to avoid
 // division by zero and to avoid a zero IDF for terms in every document).
 func Fit(documents []string, labels []float64) *Vectorizer {
+	return FitWithCharacters(documents, labels, false)
+}
+
+// FitWithCharacters optionally adds within-word character n-grams (3–5).
+// The option is stored with the model so inference uses identical features.
+func FitWithCharacters(documents []string, labels []float64, characters bool) *Vectorizer {
 	docFreq := make(map[string]int)
 	posFreq := make(map[string]int) // docFreq restricted to label==1 docs
 	nPos := 0
@@ -62,7 +86,7 @@ func Fit(documents []string, labels []float64) *Vectorizer {
 			nPos++
 		}
 		seen := make(map[string]struct{})
-		for _, tok := range terms(doc) {
+		for _, tok := range documentTerms(doc, characters) {
 			seen[tok] = struct{}{}
 		}
 		for tok := range seen {
@@ -81,10 +105,10 @@ func Fit(documents []string, labels []float64) *Vectorizer {
 
 	chi2 := make(map[string]float64, len(tokens))
 	for _, tok := range tokens {
-		a := float64(posFreq[tok])         // has token, positive
+		a := float64(posFreq[tok])                // has token, positive
 		b := float64(docFreq[tok] - posFreq[tok]) // has token, negative
-		c := float64(nPos) - a              // lacks token, positive
-		d := float64(nNeg) - b              // lacks token, negative
+		c := float64(nPos) - a                    // lacks token, positive
+		d := float64(nNeg) - b                    // lacks token, negative
 		denom := (a + b) * (c + d) * (a + c) * (b + d)
 		if denom == 0 {
 			chi2[tok] = 0
@@ -117,7 +141,7 @@ func Fit(documents []string, labels []float64) *Vectorizer {
 		idf[i] = math.Log((n+1)/(df+1)) + 1
 	}
 
-	return &Vectorizer{Vocabulary: vocabulary, IDF: idf}
+	return &Vectorizer{Vocabulary: vocabulary, IDF: idf, CharNgrams: characters}
 }
 
 // Transform converts a single document into a TF-IDF vector of length
@@ -133,16 +157,24 @@ func Fit(documents []string, labels []float64) *Vectorizer {
 // document containing only unknown (out-of-vocabulary) tokens.
 func (v *Vectorizer) Transform(document string) []float64 {
 	vec := make([]float64, len(v.Vocabulary))
-	for _, tok := range terms(document) {
+	for _, tok := range documentTerms(document, v.CharNgrams) {
 		idx, ok := v.Vocabulary[tok]
 		if !ok {
 			continue
 		}
-		vec[idx] += v.IDF[idx]
+		vec[idx]++
 	}
 
 	var sumSq float64
-	for _, val := range vec {
+	for i, count := range vec {
+		if count == 0 {
+			continue
+		}
+		if v.SublinearTF {
+			count = 1 + math.Log(count)
+		}
+		vec[i] = count * v.IDF[i]
+		val := vec[i]
 		sumSq += val * val
 	}
 	if sumSq > 0 {

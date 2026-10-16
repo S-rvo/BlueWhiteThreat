@@ -59,7 +59,7 @@ func main() {
 	if m, err := model.Load(modelPath); err != nil {
 		log.Printf("no usable model at %s (%v) — falling back to random sampling of heuristic negatives", modelPath, err)
 	} else {
-		vectorizer = &tfidf.Vectorizer{Vocabulary: m.Vocabulary, IDF: m.IDF}
+		vectorizer = &tfidf.Vectorizer{Vocabulary: m.Vocabulary, IDF: m.IDF, SublinearTF: m.SublinearTF, CharNgrams: m.CharNgrams}
 		lr = &model.LogisticRegression{Weights: m.Weights, Bias: m.Bias}
 		log.Printf("loaded model %s — prioritizing heuristic negatives by model confidence", m.Version)
 	}
