@@ -13,12 +13,14 @@ import (
 // weights/bias, the decision threshold used to turn a probability into a
 // binary verdict, and a version string identifying the model artifact.
 type Model struct {
-	Vocabulary map[string]int `json:"vocabulary"`
-	IDF        []float64      `json:"idf"`
-	Weights    []float64      `json:"weights"`
-	Bias       float64        `json:"bias"`
-	Threshold  float64        `json:"threshold"`
-	Version    string         `json:"version"`
+	CharNgrams  bool           `json:"char_ngrams,omitempty"`
+	SublinearTF bool           `json:"sublinear_tf,omitempty"`
+	Vocabulary  map[string]int `json:"vocabulary"`
+	IDF         []float64      `json:"idf"`
+	Weights     []float64      `json:"weights"`
+	Bias        float64        `json:"bias"`
+	Threshold   float64        `json:"threshold"`
+	Version     string         `json:"version"`
 }
 
 // Save serializes m as JSON and writes it to path. The write is atomic:

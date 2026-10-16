@@ -2,6 +2,9 @@
 package classify
 
 import (
+	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/tfidf"
+	"math"
+	"path/filepath"
 	"testing"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
@@ -75,5 +78,31 @@ func TestClassify_ScoreEqualsThreshold(t *testing.T) {
 	result := c.Classify("any text at all")
 	if !result.Relevant {
 		t.Fatalf("expected relevant=true when score==threshold, got score=%f", result.Score)
+	}
+}
+
+func TestFeatureOptionsSurviveSaveLoad(t *testing.T) {
+	docs := []string{"malware malware attack", "cooking recipe dinner"}
+	v := tfidf.FitWithCharacters(docs, []float64{1, 0}, true)
+	v.SublinearTF = true
+	m := &model.Model{Vocabulary: v.Vocabulary, IDF: v.IDF, Weights: make([]float64, len(v.Vocabulary)), Threshold: .5, SublinearTF: true, CharNgrams: true}
+	for i := range m.Weights {
+		m.Weights[i] = float64(i%7) - 3
+	}
+	path := filepath.Join(t.TempDir(), "model.json")
+	if err := model.Save(path, m); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := model.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(loaded)
+	lr := &model.LogisticRegression{Weights: m.Weights}
+	for _, doc := range []string{"malwares attack attack", "cooking cooking dinner", "unknown"} {
+		want := lr.Predict(v.Transform(doc))
+		if got := c.Classify(doc).Score; math.Abs(got-want) > 1e-12 {
+			t.Fatalf("training/inference mismatch: got %g want %g", got, want)
+		}
 	}
 }
