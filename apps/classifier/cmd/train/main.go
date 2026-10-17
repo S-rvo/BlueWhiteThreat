@@ -4,11 +4,11 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math"
-	"math/rand"
 	"os"
 	"sort"
 	"strconv"
@@ -26,7 +26,6 @@ const (
 	epochs          = 1500
 	learningRate    = 2.0
 	l2              = 0.0001
-	splitSeed       = 42
 	// targetPrecision is the precision floor we try to hit when picking a
 	// decision threshold: among thresholds that reach it on the eval set,
 	// we keep the one with the best recall. If no threshold reaches it, we
@@ -64,7 +63,7 @@ func main() {
 			log.Fatalf("%s needs at least 2 unique examples of each class", name)
 		}
 	}
-	log.Printf("Deduplicated split: train=%d validation=%d test=%d (seed=%d)", len(trainTexts), len(evalTexts), len(testTexts), splitSeed)
+	log.Printf("Deduplicated split: train=%d validation=%d test=%d (hash-stable)", len(trainTexts), len(evalTexts), len(testTexts))
 	var vectorizer *tfidf.Vectorizer
 	var bestVectorizer *tfidf.Vectorizer
 	balancedWeights := model.BalancedWeights(trainLabels)
@@ -193,20 +192,20 @@ func readLabeledCSV(path string) (texts []string, labels []float64, err error) {
 }
 
 // split performs a stratified train/eval split so both classes are
-// represented proportionally in the (small) eval set — a plain random split
-// on a few dozen examples can leave the eval set with almost no positives,
-// making precision/recall/f1 swing wildly between runs.
+// represented proportionally in the (small) eval set. Each document's
+// bucket is decided by the hash of its own text rather than by a random
+// permutation: a permutation over n indices is a different, unrelated
+// ordering whenever n changes, so adding or removing rows would reshuffle
+// every existing document's train/eval/test assignment, not just the new
+// ones — making measured recall swing between runs independent of data
+// quality. Hashing each document's own content keeps its assignment stable
+// as the dataset grows; only documents near the cut point can move.
 func split(texts []string, labels []float64, trainRatio float64) (trainTexts []string, trainLabels []float64, evalTexts []string, evalLabels []float64) {
-	rng := rand.New(rand.NewSource(splitSeed))
-
 	var classes = map[float64][]int{}
 	for i, l := range labels {
 		classes[l] = append(classes[l], i)
 	}
 
-	// Go map iteration order is randomized per run, which would otherwise make
-	// the RNG stream order (and thus the resulting split) different on every
-	// run despite the fixed splitSeed. Sort class keys for a stable order.
 	keys := make([]float64, 0, len(classes))
 	for k := range classes {
 		keys = append(keys, k)
@@ -214,11 +213,16 @@ func split(texts []string, labels []float64, trainRatio float64) (trainTexts []s
 	sort.Float64s(keys)
 
 	for _, k := range keys {
-		idxs := classes[k]
-		perm := rng.Perm(len(idxs))
+		idxs := append([]int{}, classes[k]...)
+		hashes := make(map[int]string, len(idxs))
+		for _, idx := range idxs {
+			hashes[idx] = textHash(texts[idx])
+		}
+		sort.Slice(idxs, func(a, b int) bool {
+			return hashes[idxs[a]] < hashes[idxs[b]]
+		})
 		cut := int(float64(len(idxs)) * trainRatio)
-		for i, p := range perm {
-			idx := idxs[p]
+		for i, idx := range idxs {
 			if i < cut {
 				trainTexts = append(trainTexts, texts[idx])
 				trainLabels = append(trainLabels, labels[idx])
@@ -229,6 +233,11 @@ func split(texts []string, labels []float64, trainRatio float64) (trainTexts []s
 		}
 	}
 	return
+}
+
+func textHash(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
 }
 
 // confusionAt computes accuracy/precision/recall/f1 for scores classified
@@ -366,7 +375,7 @@ func writeReport(path string, m *model.Model, texts []string, labels, scores []f
 	}
 	report := struct {
 		Version       string    `json:"model_version"`
-		Seed          int       `json:"split_seed"`
+		SplitMethod   string    `json:"split_method"`
 		Samples       int       `json:"test_samples"`
 		Positives     int       `json:"test_positives"`
 		Accuracy      float64   `json:"accuracy"`
@@ -376,7 +385,7 @@ func writeReport(path string, m *model.Model, texts []string, labels, scores []f
 		TargetReached bool      `json:"target_95_reached"`
 		Threshold     float64   `json:"threshold"`
 		Mistakes      []mistake `json:"mistakes"`
-	}{m.Version, splitSeed, len(texts), positives, a, p, r, f, p >= .95 && r >= .95 && f >= .95, m.Threshold, errors}
+	}{m.Version, "sha256-text-hash-stable", len(texts), positives, a, p, r, f, p >= .95 && r >= .95 && f >= .95, m.Threshold, errors}
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return err
