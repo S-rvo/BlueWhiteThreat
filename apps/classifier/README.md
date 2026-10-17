@@ -66,3 +66,14 @@ L'objectif global de 95 % n'est pas atteint. Le modèle manque notamment
 un enrichissement des exemples positifs restent nécessaires avant de revendiquer
 ce niveau de qualité. Ces résultats ne constituent pas une comparaison directe
 avec l'ancien score, qui utilisait le même jeu pour régler et mesurer le seuil.
+
+Le store persistant `data/reviewed_labels.csv` utilise désormais les colonnes
+`id,label,source` : `human` pour les relectures humaines (y compris toutes les
+lignes de l'ancien format) et `llm_reviewed` pour les décisions de Codex.
+`cmd/applyreview` accepte `source` dans chaque décision JSONL ; son absence
+vaut `human` pour compatibilité. Le batch LLM et ses justifications sont conservés
+respectivement dans `data/llm_review_decisions.jsonl` et `data/llm_review_log.jsonl`.
+Tant qu'un échantillon des labels `llm_reviewed` n'a pas été audité par un humain,
+un `target_95_reached` calculé sur un corpus contenant ces labels ne doit pas
+être présenté comme équivalent à la vérification humaine complète décrite
+ci-dessus : il mesure aussi l'accord avec les décisions d'un LLM.

@@ -27,14 +27,14 @@ func main() {
 		log.Fatalf("failed to load seed keywords: %v", err)
 	}
 
-	// reviewed holds human-corrected labels keyed by stable Mongo _id. Unlike
+	// reviewed holds reviewed labels keyed by stable Mongo _id. Unlike
 	// training_data.csv, this file is never regenerated — it survives every
 	// bootstrap cycle and overrides the noisy keyword heuristic below.
 	reviewed, err := review.LoadReviewed(reviewedPath)
 	if err != nil {
 		log.Fatalf("failed to load reviewed labels: %v", err)
 	}
-	log.Printf("Loaded %d human-reviewed label overrides from %s", len(reviewed), reviewedPath)
+	log.Printf("Loaded %d reviewed label overrides from %s", len(reviewed), reviewedPath)
 
 	ctx := context.Background()
 	client, err := db.Connect(ctx)
@@ -74,7 +74,7 @@ func main() {
 		id := review.IDString(article.ID)
 		label := bootstrap.LabelByKeywords(article.Content, keywords)
 		if reviewedLabel, ok := reviewed[id]; ok {
-			label = reviewedLabel
+			label = reviewedLabel.Label
 			overridden++
 		}
 		if err := writer.Write([]string{id, article.Content, itoa(label)}); err != nil {
@@ -84,7 +84,7 @@ func main() {
 		written++
 	}
 
-	log.Printf("Wrote %d labeled candidates to %s (skipped %d link-directory pages, %d overridden by human review)", written, outputPath, skippedDirectories, overridden)
+	log.Printf("Wrote %d labeled candidates to %s (skipped %d link-directory pages, %d overridden by review)", written, outputPath, skippedDirectories, overridden)
 }
 
 func getEnvOrDefault(key, defaultValue string) string {

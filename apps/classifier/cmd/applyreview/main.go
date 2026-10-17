@@ -1,7 +1,7 @@
 // apps/classifier/cmd/applyreview/main.go
 //
-// Merges a batch of review decisions (JSONL: {"id":"...","label":0|1} per
-// line) into the persistent reviewed-labels store at data/reviewed_labels.csv,
+// Merges a batch of review decisions (JSONL: {"id":"...","label":0|1,"source":"human"|"llm_reviewed"} per
+// line; source defaults to human) into the persistent reviewed-labels store at data/reviewed_labels.csv,
 // keyed by document id. Safe to run repeatedly across many small batches —
 // existing entries are overwritten by newer decisions for the same id,
 // everything else is kept.
@@ -19,8 +19,9 @@ import (
 )
 
 type decision struct {
-	ID    string `json:"id"`
-	Label int    `json:"label"`
+	ID     string `json:"id"`
+	Label  *int   `json:"label"`
+	Source string `json:"source"`
 }
 
 func main() {
@@ -55,11 +56,18 @@ func main() {
 			log.Printf("skipping malformed decision line: %v", err)
 			continue
 		}
-		if d.Label != 0 && d.Label != 1 {
-			log.Printf("skipping decision %s with invalid label %d", d.ID, d.Label)
+		if d.Label == nil || (*d.Label != 0 && *d.Label != 1) || d.ID == "" {
+			log.Printf("skipping decision %s with invalid label or empty id", d.ID)
 			continue
 		}
-		existing[d.ID] = d.Label
+		if d.Source == "" {
+			d.Source = review.SourceHuman
+		}
+		if d.Source != review.SourceHuman && d.Source != review.SourceLLM {
+			log.Printf("skipping decision %s with invalid source %q", d.ID, d.Source)
+			continue
+		}
+		existing[d.ID] = review.Label{Label: *d.Label, Source: d.Source}
 		applied++
 	}
 	if err := scanner.Err(); err != nil {
@@ -79,16 +87,23 @@ func main() {
 	defer out.Close()
 
 	writer := csv.NewWriter(out)
-	defer writer.Flush()
-	if err := writer.Write([]string{"id", "label"}); err != nil {
+
+	if err := writer.Write([]string{"id", "label", "source"}); err != nil {
 		log.Fatalf("failed to write header: %v", err)
 	}
 	for _, id := range ids {
-		if err := writer.Write([]string{id, itoa(existing[id])}); err != nil {
+		if err := writer.Write([]string{id, itoa(existing[id].Label), existing[id].Source}); err != nil {
 			log.Fatalf("failed to write row: %v", err)
 		}
 	}
 
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		log.Fatalf("failed to flush labels: %v", err)
+	}
+	if err := out.Close(); err != nil {
+		log.Fatalf("failed to close labels: %v", err)
+	}
 	log.Printf("Applied %d decisions; %s now holds %d reviewed labels total", applied, reviewedPath, len(existing))
 }
 
