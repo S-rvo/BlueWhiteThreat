@@ -40,8 +40,6 @@ jobs:
       # Secrets Scan
       - name: Find secrets (crawler)
         uses: gitleaks/gitleaks-action@v2
-        with:
-          paths: apps/crawler
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
