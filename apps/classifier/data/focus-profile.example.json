@@ -1,0 +1,12 @@
+{
+  "id": "finance-watch",
+  "name": "Menaces visant la finance",
+  "description": "Exemple à adapter avant usage",
+  "include_groups": [
+    ["ransomware", "crypto locker"],
+    ["APT 29", "APT29", "Cozy Bear"],
+    ["data breach", "data exfiltration"]
+  ],
+  "exclude": ["training exercise"],
+  "min_matched_includes": 2
+}
