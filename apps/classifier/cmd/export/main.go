@@ -37,9 +37,25 @@ import (
 // ReviewCandidate is one line of the exported JSONL review queue.
 type ReviewCandidate struct {
 	ID             string  `json:"id"`
+	URL            string  `json:"url,omitempty"`
 	HeuristicLabel int     `json:"heuristic_label"`
 	ModelScore     float64 `json:"model_score,omitempty"`
+	NeedsReview    bool    `json:"needs_review,omitempty"`
 	Content        string  `json:"content"`
+}
+
+// prioritizeNeedsReview stable-sorts candidates so every one already
+// flagged needs_review by the live classification pipeline (its score fell
+// within classify.ReviewMargin of the model's threshold at scoring time)
+// comes first, closing the loop between "the model told us it wasn't
+// sure" and "a human looks at exactly those documents first". Candidates
+// are otherwise left in their existing order (typically the heuristic/
+// model-score prioritization already applied), since this only needs to
+// promote the uncertain ones, not fully re-rank the queue.
+func prioritizeNeedsReview(candidates []ReviewCandidate) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].NeedsReview && !candidates[j].NeedsReview
+	})
 }
 
 func main() {
@@ -50,6 +66,7 @@ func main() {
 	outputPath := getEnvOrDefault("EXPORT_OUTPUT", "review_queue.jsonl")
 	keywordsPath := getEnvOrDefault("SEED_KEYWORDS_PATH", "data/seed_keywords.json")
 	reviewedPath := getEnvOrDefault("REVIEWED_LABELS_PATH", "data/reviewed_labels.csv")
+	excludedPath := getEnvOrDefault("EXCLUDED_IDS_PATH", "data/excluded_ids.csv")
 	modelPath := getEnvOrDefault("MODEL_PATH", "model.json")
 	negativeSample := getEnvIntOrDefault("EXPORT_NEGATIVE_SAMPLE", 400)
 	seed := int64(getEnvIntOrDefault("EXPORT_SEED", 42))
@@ -59,7 +76,7 @@ func main() {
 	if m, err := model.Load(modelPath); err != nil {
 		log.Printf("no usable model at %s (%v) — falling back to random sampling of heuristic negatives", modelPath, err)
 	} else {
-		vectorizer = &tfidf.Vectorizer{Vocabulary: m.Vocabulary, IDF: m.IDF, SublinearTF: m.SublinearTF, CharNgrams: m.CharNgrams}
+		vectorizer = &tfidf.Vectorizer{Vocabulary: m.Vocabulary, IDF: m.IDF}
 		lr = &model.LogisticRegression{Weights: m.Weights, Bias: m.Bias}
 		log.Printf("loaded model %s — prioritizing heuristic negatives by model confidence", m.Version)
 	}
@@ -74,6 +91,14 @@ func main() {
 		log.Fatalf("failed to load reviewed labels: %v", err)
 	}
 	log.Printf("%d documents already reviewed — excluding them from the export", len(reviewed))
+
+	// excluded holds documents a human reviewer found to be CSAM or
+	// CSAM-adjacent. These must never resurface in the review queue.
+	excluded, err := review.LoadExcluded(excludedPath)
+	if err != nil {
+		log.Fatalf("failed to load excluded ids: %v", err)
+	}
+	log.Printf("%d documents excluded (CSAM/CSAM-adjacent) — excluding them from the export", len(excluded))
 
 	ctx := context.Background()
 	client, err := db.Connect(ctx)
@@ -97,8 +122,14 @@ func main() {
 		if _, ok := reviewed[id]; ok {
 			continue
 		}
+		if excluded[id] {
+			continue
+		}
 		label := bootstrap.LabelByKeywords(article.Content, keywords)
-		candidate := ReviewCandidate{ID: id, HeuristicLabel: label, Content: article.Content}
+		candidate := ReviewCandidate{ID: id, URL: article.URL, HeuristicLabel: label, Content: article.Content}
+		if article.Relevance != nil {
+			candidate.NeedsReview = article.Relevance.NeedsReview
+		}
 		if lr != nil {
 			candidate.ModelScore = lr.Predict(vectorizer.Transform(article.Content))
 		}
@@ -128,6 +159,14 @@ func main() {
 	if negativeSample < len(negatives) {
 		negatives = negatives[:negativeSample]
 	}
+
+	// Final pass: whatever order the heuristic/model-score sorting above
+	// produced, documents the live pipeline already flagged needs_review
+	// (its score landed within classify.ReviewMargin of the threshold) jump
+	// to the front — the model telling us it's unsure is a stronger review
+	// signal than the heuristic/model disagreement ordering above.
+	prioritizeNeedsReview(positives)
+	prioritizeNeedsReview(negatives)
 
 	file, err := os.Create(outputPath)
 	if err != nil {

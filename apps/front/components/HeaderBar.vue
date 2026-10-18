@@ -9,7 +9,7 @@
         <span class="text-red-500">Threat</span>
         <span
           class="ml-2 w-5 h-5 rounded-full border-2 border-white flex items-center justify-center bg-gradient-to-r from-blue-500 via-white to-red-500"
-        ></span>
+        />
       </span>
     </NuxtLink>
     <nav class="ml-auto flex gap-8">
@@ -20,6 +20,9 @@
         to="/menaces"
         class="hover:text-red-500 font-semibold transition"
         >Menaces</NuxtLink
+      >
+      <NuxtLink to="/veille" class="hover:text-blue-400 font-semibold transition"
+        >Ma veille</NuxtLink
       >
       <NuxtLink to="/ioc" class="hover:text-white font-semibold transition"
         >IOC</NuxtLink
