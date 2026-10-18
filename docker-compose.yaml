@@ -34,11 +34,11 @@ services:
 
   crawler:
     build:
-      context: ./apps/crawler
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: apps/crawler/Dockerfile.dev
     container_name: crawler_service
     volumes:
-      - ./apps/crawler:/app
+      - .:/app
     depends_on:
       - redis
       - neo4j
@@ -61,11 +61,11 @@ services:
 
   scraper:
     build:
-      context: ./apps/scraper
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: apps/scraper/Dockerfile.dev
     container_name: scraper_service
     volumes:
-      - ./apps/scraper:/app
+      - .:/app
     depends_on:
       - mongodb
       - redis

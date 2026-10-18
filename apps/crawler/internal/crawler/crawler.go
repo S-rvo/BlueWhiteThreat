@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/db"
+	"github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter"
 	"github.com/gocolly/colly"
 	"github.com/gocolly/colly/proxy"
 )
@@ -82,7 +83,7 @@ func Crawler(startURL string, depthMax int) ([]string, []string, int, error) {
 			// bloqué : le check se fait ici, avant la requête HTTP, pas
 			// seulement à l'ajout dans la queue Redis, pour que Colly ne
 			// suive jamais récursivement les backends CSAM connus.
-			if onionRegex.MatchString(absLink) && isRelevantLink(absLink, linkText) && !db.IsBlockedURL(absLink) && !db.IsFarmBackend(absLink) {
+			if onionRegex.MatchString(absLink) && isRelevantLink(absLink, linkText) && !csamfilter.IsBlockedURL(absLink) && !db.IsFarmBackend(absLink) {
 				mu.Lock()
 				foundLinks = append(foundLinks, absLink)
 				mu.Unlock()
