@@ -54,6 +54,15 @@ const (
 	minRecall               = 0.3
 	calibrationEpochs       = 2000
 	calibrationLearningRate = 0.1
+
+	// squaredHingeEpochs/squaredHingeL2: model.TrainSquaredHinge's step is
+	// fixed at 0.1 and is not tuned for comparecandidates' logistic
+	// learningRate/l2 constants. squaredHingeL2 was swept on validation only
+	// (grid 0.0005-0.005, epochs 1200/2500); 0.0008 ties for the best
+	// validation F1 (0.707, precision=1.000, recall=0.547) at epochs=1200,
+	// so epochs stayed at 1200 rather than the costlier 2500.
+	squaredHingeEpochs = 1200
+	squaredHingeL2     = 0.0008
 )
 
 type candidateResult struct {
@@ -163,6 +172,18 @@ func main() {
 		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_new.json"))
 	results = append(results, runHumanOnlyCandidate(textGroups, trainIDs, reviewed,
 		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_human.json"))
+	humanSquaredHinge, err := runHumanOnlyMarginLoss("human-squared-hinge", false, textGroups, trainIDs, reviewed,
+		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_human_squared_hinge.json")
+	if err != nil {
+		log.Fatalf("candidate %q: squared-hinge training failed: %v", "human-squared-hinge", err)
+	}
+	results = append(results, humanSquaredHinge)
+	humanCappedHinge, err := runHumanOnlyMarginLoss("human-capped-hinge", true, textGroups, trainIDs, reviewed,
+		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_human_capped_hinge.json")
+	if err != nil {
+		log.Fatalf("candidate %q: capped-hinge training failed: %v", "human-capped-hinge", err)
+	}
+	results = append(results, humanCappedHinge)
 
 	log.Println("=== THREE-WAY COMPARISON — fixed human validation set (selection happens HERE, nowhere else) ===")
 	best := -1
@@ -249,6 +270,45 @@ func runHumanOnlyCandidate(textGroups []frozen.TextGroup, trainIDs map[string]bo
 	lr := model.TrainWeighted(X, trainLabels, weights, epochs, learningRate, l2)
 
 	return finishCandidate("human", vectorizer, lr, valTexts, valGroundTruth, devTexts, devGroundTruth, modelPath)
+}
+
+// runHumanOnlyMarginLoss trains using exclusively human-reviewed labels,
+// like runHumanOnlyCandidate, but minimizes a margin loss
+// (model.TrainMarginLoss: squared-hinge, or capped-hinge if capped) instead
+// of cross-entropy. Scores are a sigmoid of the learned margin, not a
+// calibrated probability, before Platt calibration.
+func runHumanOnlyMarginLoss(name string, capped bool, textGroups []frozen.TextGroup, trainIDs map[string]bool, reviewed map[string]int,
+	idText map[string]string, valTexts []string, valGroundTruth []float64, devTexts []string, devGroundTruth []float64, modelPath string) (candidateResult, error) {
+
+	var trainTexts []string
+	var trainLabels []float64
+	for _, g := range textGroups {
+		for _, id := range g.IDs {
+			if !trainIDs[id] {
+				continue
+			}
+			human, ok := reviewed[id]
+			if !ok {
+				continue
+			}
+			trainTexts = append(trainTexts, idText[id])
+			trainLabels = append(trainLabels, float64(human))
+		}
+	}
+	log.Printf("candidate %q: training on %d examples (human-reviewed only)", name, len(trainTexts))
+
+	vectorizer := tfidf.Fit(trainTexts, trainLabels)
+	X := make([][]float64, len(trainTexts))
+	for i, t := range trainTexts {
+		X[i] = vectorizer.Transform(t)
+	}
+	weights := model.BalancedWeights(trainLabels)
+	lr, err := model.TrainMarginLoss(X, trainLabels, weights, squaredHingeEpochs, squaredHingeL2, capped)
+	if err != nil {
+		return candidateResult{}, err
+	}
+
+	return finishCandidate(name, vectorizer, lr, valTexts, valGroundTruth, devTexts, devGroundTruth, modelPath), nil
 }
 
 func finishCandidate(name string, vectorizer *tfidf.Vectorizer, lr *model.LogisticRegression,
