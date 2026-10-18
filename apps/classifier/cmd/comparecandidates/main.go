@@ -58,12 +58,22 @@ const (
 	// squaredHingeEpochs/squaredHingeL2: model.TrainSquaredHinge's step is
 	// fixed at 0.1 and is not tuned for comparecandidates' logistic
 	// learningRate/l2 constants. A recall sweep on validation only (positive
-	// class weight multipliers 1-8x, l2 grid 0.0001-0.0008, epochs
-	// 1200/2500/5000) found positive-class overweighting hurts recall, but
-	// epochs=5000 (any l2 in 0.0001-0.0008 ties) raises validation recall
-	// from 0.547 to 0.558 (f1 0.707->0.716) at the same precision=1.000.
-	squaredHingeEpochs = 5000
-	squaredHingeL2     = 0.0008
+	// class weight multipliers 1-8x, l2 grid 0.0001-0.0008, epochs up to
+	// 30000) found positive-class overweighting hurts recall, but more
+	// epochs plus reserving TF-IDF vocabulary slots for plain words (pushing
+	// out some character n-grams via tfidf.FitWithWordReserve) raises
+	// validation recall from 0.558 (epochs=5000, default vocab) to 0.611
+	// (f1 0.716->0.758) at the same precision=1.000; combining epochs beyond
+	// 20000 with the word reserve adds nothing further.
+	squaredHingeEpochs      = 20000
+	squaredHingeL2          = 0.0008
+	squaredHingeWordReserve = 4500
+
+	// cappedHingeEpochs: unchanged from before the squared-hinge sweep above;
+	// the wordReserve/epochs=20000 combination was only validated for
+	// squared-hinge, not capped-hinge, so capped-hinge keeps its prior
+	// epochs=5000/default-vocab configuration until it gets its own sweep.
+	cappedHingeEpochs = 5000
 )
 
 type candidateResult struct {
@@ -173,13 +183,13 @@ func main() {
 		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_new.json"))
 	results = append(results, runHumanOnlyCandidate(textGroups, trainIDs, reviewed,
 		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_human.json"))
-	humanSquaredHinge, err := runHumanOnlyMarginLoss("human-squared-hinge", false, textGroups, trainIDs, reviewed,
+	humanSquaredHinge, err := runHumanOnlyMarginLoss("human-squared-hinge", false, squaredHingeWordReserve, squaredHingeEpochs, textGroups, trainIDs, reviewed,
 		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_human_squared_hinge.json")
 	if err != nil {
 		log.Fatalf("candidate %q: squared-hinge training failed: %v", "human-squared-hinge", err)
 	}
 	results = append(results, humanSquaredHinge)
-	humanCappedHinge, err := runHumanOnlyMarginLoss("human-capped-hinge", true, textGroups, trainIDs, reviewed,
+	humanCappedHinge, err := runHumanOnlyMarginLoss("human-capped-hinge", true, 0, cappedHingeEpochs, textGroups, trainIDs, reviewed,
 		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_human_capped_hinge.json")
 	if err != nil {
 		log.Fatalf("candidate %q: capped-hinge training failed: %v", "human-capped-hinge", err)
@@ -277,8 +287,11 @@ func runHumanOnlyCandidate(textGroups []frozen.TextGroup, trainIDs map[string]bo
 // like runHumanOnlyCandidate, but minimizes a margin loss
 // (model.TrainMarginLoss: squared-hinge, or capped-hinge if capped) instead
 // of cross-entropy. Scores are a sigmoid of the learned margin, not a
-// calibrated probability, before Platt calibration.
-func runHumanOnlyMarginLoss(name string, capped bool, textGroups []frozen.TextGroup, trainIDs map[string]bool, reviewed map[string]int,
+// calibrated probability, before Platt calibration. wordReserve is forwarded
+// to tfidf.FitWithWordReserve (0 reproduces the default tfidf.Fit vocabulary);
+// marginEpochs lets squared-hinge and capped-hinge use independently tuned
+// epoch counts instead of sharing one constant.
+func runHumanOnlyMarginLoss(name string, capped bool, wordReserve, marginEpochs int, textGroups []frozen.TextGroup, trainIDs map[string]bool, reviewed map[string]int,
 	idText map[string]string, valTexts []string, valGroundTruth []float64, devTexts []string, devGroundTruth []float64, modelPath string) (candidateResult, error) {
 
 	var trainTexts []string
@@ -298,13 +311,16 @@ func runHumanOnlyMarginLoss(name string, capped bool, textGroups []frozen.TextGr
 	}
 	log.Printf("candidate %q: training on %d examples (human-reviewed only)", name, len(trainTexts))
 
-	vectorizer := tfidf.Fit(trainTexts, trainLabels)
+	vectorizer, err := tfidf.FitWithWordReserve(trainTexts, trainLabels, 1, wordReserve)
+	if err != nil {
+		return candidateResult{}, err
+	}
 	X := make([][]float64, len(trainTexts))
 	for i, t := range trainTexts {
 		X[i] = vectorizer.Transform(t)
 	}
 	weights := model.BalancedWeights(trainLabels)
-	lr, err := model.TrainMarginLoss(X, trainLabels, weights, squaredHingeEpochs, squaredHingeL2, capped)
+	lr, err := model.TrainMarginLoss(X, trainLabels, weights, marginEpochs, squaredHingeL2, capped)
 	if err != nil {
 		return candidateResult{}, err
 	}
