@@ -73,7 +73,7 @@ func SetupRedisQueues() error {
 func AddURLToQueue(url string) error {
 	cleaned := cleanOnionURL(url)
 
-	if isBlockedURL(cleaned) {
+	if IsBlockedURL(cleaned) || IsFarmBackend(cleaned) {
 		return nil
 	}
 
