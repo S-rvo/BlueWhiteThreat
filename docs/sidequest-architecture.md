@@ -2,25 +2,27 @@
 
 ## Vue d'ensemble du pipeline
 
-```
-Seeds .onion
-     │
-     ▼
-┌─────────────┐      ┌──────────┐      ┌───────────┐      ┌──────────┐      ┌────────────────┐      ┌───────────────┐
-│  Crawler    │ ───▶ │  Redis   │ ───▶ │  Scraper  │ ───▶ │ MongoDB  │ ───▶ │  Classifieur    │ ───▶ │  Parser LLM   │
-│  (Go, Tor)  │      │ (queue)  │      │  (Go)     │      │ (brut)   │      │  ML (triage)    │      │ (extraction)  │
-└─────────────┘      └──────────┘      └───────────┘      └──────────┘      └────────┬────────┘      └───────┬───────┘
-                                                                                       │ non pertinent         │ entités
-                                                                                       ▼                       ▼
-                                                                                   (archivé)             ┌──────────┐
-                                                                                                          │  Neo4j   │
-                                                                                                          │ (graphe) │
-                                                                                                          └────┬─────┘
-                                                                                                               │
-                                                                        ┌──────────────────────────────────────┼──────────────────────┐
-                                                                        ▼                                      ▼                      ▼
-                                                                  Interface web                         Connecteur STIX 2.1      Alerting
-                                                                  (visualisation)                       / TAXII → MISP/SIEM      (nouvel acteur/TTP)
+```mermaid
+flowchart LR
+    seeds["Seeds approuvées\nTor, forums, Telegram"] --> crawler["Crawler / connecteurs"] --> redis[(Redis)] --> scraper["Scraper"] --> mongo[(MongoDB)]
+    mongo --> classifier["Classifieur ML"]
+    classifier -->|non pertinent| archive["Archivé"]
+    classifier -->|pertinent| parser["Parser LLM"] --> neo4j[(Neo4j)]
+    neo4j --> web["Interface web"]
+    neo4j --> stix["STIX 2.1 / TAXII\nMISP / SIEM"]
+    neo4j --> alerting["Alerting acteur / TTP"]
+
+    subgraph OBS["Logs et monitoring de tous les conteneurs"]
+        docker["Docker Engine\nstdout / stderr"] --> alloy["Grafana Alloy"] --> loki[(Loki)] --> grafana["Grafana"]
+        docker --> cadvisor["cAdvisor"] --> prometheus[(Prometheus)] --> grafana
+    end
+
+    crawler -. observé .-> docker
+    scraper -. observé .-> docker
+    classifier -. observé .-> docker
+    parser -. observé .-> docker
+    neo4j -. observé .-> docker
+    web -. observé .-> docker
 ```
 
 Chaque étage est un service indépendant qui interroge périodiquement son entrée (pattern déjà en place dans le repo : `time.Ticker` plutôt qu'une queue événementielle dédiée — cf. `docs/theorie-extraction-entites-cti.md` §3). Ce choix est volontairement conservé pour le pipeline complet : au volume actuel (quelques milliers d'articles/jour), une architecture événementielle ajouterait de la complexité pour un gain marginal.
@@ -40,6 +42,9 @@ Chaque étage est un service indépendant qui interroge périodiquement son entr
 | Connecteur STIX 2.1/TAXII | Export vers MISP/SIEM | **À concevoir et implémenter** |
 | Télégram bot | Collecte sur canaux publics | **À concevoir et implémenter** |
 | Alerting | Notification sur nouvel acteur/TTP | **À concevoir et implémenter** |
+| Grafana Alloy + Loki | Collecte et conservation centralisée des logs Docker du projet | **Implémenté** (`docker-compose.monitoring.yaml`) |
+| cAdvisor + Prometheus | Mesures CPU, mémoire, réseau et état des conteneurs | **Implémenté** (`docker-compose.monitoring.yaml`) |
+| Grafana | Dashboard commun : état, performances, erreurs et logs | **Implémenté** (`monitoring/grafana/dashboards/bluewhitethreat-overview.json`) |
 
 ## Décisions de conception clés
 

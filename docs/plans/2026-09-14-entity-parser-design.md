@@ -18,15 +18,22 @@ Automatiser 80-90% du travail de collecte/enrichissement/triage aujourd'hui fait
 
 ## Architecture
 
-```
-MongoDB (articles sans champ "entities")
-   → parser (ticker, polling périodique — même pattern que le scraper)
-        → Extractor (interface Go)
-             ├── OllamaExtractor   (défaut : appel local http://localhost:11434, gratuit, illimité)
-             └── ClaudeExtractor   (fallback : Claude Haiku 4.5, via Batches API, coût -50%)
-        → validation regex (IP, hash, CVE, domaine — élimine les hallucinations de format)
-        → écrit le champ "entities" dans le document Mongo
-        → crée/merge les noeuds et relations correspondants dans Neo4j
+```mermaid
+flowchart LR
+    mongo[("MongoDB\narticles sans entities")] --> parser["Parser\nticker / polling"] --> extractor{"Extractor Go"}
+    extractor --> ollama["Ollama local\nchemin par défaut"]
+    extractor -->|repli contrôlé| claude["Claude"]
+    ollama --> validation["Validation déterministe\nIP, hash, CVE, domaine"]
+    claude --> validation
+    validation --> mongo
+    validation --> neo4j[("Neo4j\nnœuds et relations")]
+
+    subgraph OBS["Logs et monitoring Docker"]
+        docker["Docker Engine\nstdout / stderr"] --> alloy["Grafana Alloy"] --> loki[(Loki)] --> grafana["Grafana"]
+        docker --> cadvisor["cAdvisor"] --> prometheus[(Prometheus)] --> grafana
+    end
+
+    parser -. erreurs et activité .-> docker
 ```
 
 ### Interface Extractor
