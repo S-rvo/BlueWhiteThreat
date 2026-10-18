@@ -1,0 +1,24 @@
+{
+  "id": "cti-relevance-v1",
+  "schema_version": 1,
+  "authority": "Project working definition adopted by assistant under user delegation; not human annotation",
+  "target": "Document relevance to concrete cyber threats and associated defense; separate from customer focus and claim truth",
+  "positive_topics": ["incident", "vulnerability", "threat_campaign", "explicit_malicious_claim", "threat_specific_defense"],
+  "negative_topics": ["generic_it", "generic_finance_privacy", "generic_security_marketing", "unrelated"],
+  "abstention_topics": ["insufficient_context", "mixed_content", "directory", "separate_review"],
+  "document_units": ["article", "advisory", "forum_post", "service_page", "tutorial", "directory", "mixed", "empty", "unknown"],
+  "blocked_units": ["directory", "mixed", "empty", "unknown"],
+  "claim_statuses": ["reported_event", "unverified_claim", "not_applicable", "unknown"],
+  "rules": {
+    "R1": "Positive requires an explicit cyber threat, concrete vulnerability, or defense tied to an identified threat or mechanism in the document body.",
+    "R2": "An explicit stolen-data, compromised-access or malicious-service claim is relevant even if not verified; relevance is not authenticity.",
+    "R3": "Tor, anonymity, cryptocurrency, price, product brand, security keywords or domain reputation alone never establish relevance.",
+    "R4": "Ordinary administration, accessibility, installation, privacy and finance instructions without a concrete cyber threat are negative.",
+    "R5": "A directory, mixed index, empty page or missing article is an abstention, never a negative example by default.",
+    "R6": "If ambiguous origin or missing context changes the relevance decision, abstain instead of inventing a compromise.",
+    "R7": "Navigation, testimonials, related links and repeated boilerplate do not independently establish the main document topic.",
+    "R8": "Evidence spans must match the immutable stored text. Negative labels also require full-text reading; one negative excerpt cannot prove absence of a threat.",
+    "R9": "Novelty and relevance are separate. Duplicate or unresolved-neighbor documents cannot enter the new training export.",
+    "R10": "Assistant annotations remain assistant annotations. Historical human labels are preserved until a separately traceable adjudication supersedes them."
+  }
+}

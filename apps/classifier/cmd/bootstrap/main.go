@@ -21,6 +21,7 @@ func main() {
 	outputPath := getEnvOrDefault("BOOTSTRAP_OUTPUT", "training_data.csv")
 	keywordsPath := getEnvOrDefault("SEED_KEYWORDS_PATH", "data/seed_keywords.json")
 	reviewedPath := getEnvOrDefault("REVIEWED_LABELS_PATH", "data/reviewed_labels.csv")
+	excludedPath := getEnvOrDefault("EXCLUDED_IDS_PATH", "data/excluded_ids.csv")
 
 	keywords, err := bootstrap.LoadKeywords(keywordsPath)
 	if err != nil {
@@ -35,6 +36,15 @@ func main() {
 		log.Fatalf("failed to load reviewed labels: %v", err)
 	}
 	log.Printf("Loaded %d reviewed label overrides from %s", len(reviewed), reviewedPath)
+
+	// excluded holds documents a human reviewer found to be CSAM or
+	// CSAM-adjacent. These must never enter training_data.csv under any
+	// label — excluding them is not the same as labeling them negative.
+	excluded, err := review.LoadExcluded(excludedPath)
+	if err != nil {
+		log.Fatalf("failed to load excluded ids: %v", err)
+	}
+	log.Printf("Loaded %d excluded document ids from %s", len(excluded), excludedPath)
 
 	ctx := context.Background()
 	client, err := db.Connect(ctx)
@@ -62,7 +72,7 @@ func main() {
 		log.Fatalf("failed to write CSV header: %v", err)
 	}
 
-	written, skippedDirectories, overridden := 0, 0, 0
+	written, skippedDirectories, skippedExcluded, overridden := 0, 0, 0, 0
 	for _, article := range articles {
 		if article.Content == "" {
 			continue
@@ -72,6 +82,10 @@ func main() {
 			continue
 		}
 		id := review.IDString(article.ID)
+		if excluded[id] {
+			skippedExcluded++
+			continue
+		}
 		label := bootstrap.LabelByKeywords(article.Content, keywords)
 		if reviewedLabel, ok := reviewed[id]; ok {
 			label = reviewedLabel.Label
@@ -84,7 +98,7 @@ func main() {
 		written++
 	}
 
-	log.Printf("Wrote %d labeled candidates to %s (skipped %d link-directory pages, %d overridden by review)", written, outputPath, skippedDirectories, overridden)
+	log.Printf("Wrote %d labeled candidates to %s (skipped %d link-directory pages, %d excluded, %d overridden by human review)", written, outputPath, skippedDirectories, skippedExcluded, overridden)
 }
 
 func getEnvOrDefault(key, defaultValue string) string {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -55,18 +56,62 @@ func IsLinkDirectory(text string) bool {
 	return false
 }
 
-// LabelByKeywords returns 1 (relevant) if text contains at least
-// MinKeywordHits of the given keywords, 0 otherwise.
+// Keep Unicode letters and single digits (notably "0-day"). Punctuation
+// separates tokens, so spelling variants such as "cve"/"cve-" share a key.
+var keywordWords = regexp.MustCompile(`[\p{L}\p{N}_]+`)
+
+// LabelByKeywords counts distinct, non-overlapping keyword phrases. At each
+// word, the longest matching phrase wins: "data breach" does not also count
+// as "breach". Repeated mentions and equivalent seed spellings count once.
+// This remains a lexical bootstrap heuristic, not a semantic relevance test.
 func LabelByKeywords(text string, keywords []string) int {
-	lower := strings.ToLower(text)
-	hits := 0
-	for _, kw := range keywords {
-		if strings.Contains(lower, strings.ToLower(kw)) {
-			hits++
-		}
+	type phrase struct {
+		words []string
+		key   string
 	}
-	if hits >= MinKeywordHits {
-		return 1
+	byFirst := make(map[string][]phrase)
+	unique := make(map[string]bool)
+	for _, kw := range keywords {
+		words := keywordWords.FindAllString(strings.ToLower(kw), -1)
+		if len(words) == 0 {
+			continue
+		}
+		key := strings.Join(words, " ")
+		if unique[key] {
+			continue
+		}
+		unique[key] = true
+		byFirst[words[0]] = append(byFirst[words[0]], phrase{words, key})
+	}
+
+	words := keywordWords.FindAllString(strings.ToLower(text), -1)
+	matched := make(map[string]bool)
+	for i := 0; i < len(words); {
+		var longest phrase
+		for _, candidate := range byFirst[words[i]] {
+			if len(candidate.words) <= len(longest.words) || i+len(candidate.words) > len(words) {
+				continue
+			}
+			matches := true
+			for j, word := range candidate.words {
+				if words[i+j] != word {
+					matches = false
+					break
+				}
+			}
+			if matches {
+				longest = candidate
+			}
+		}
+		if len(longest.words) == 0 {
+			i++
+			continue
+		}
+		matched[longest.key] = true
+		if len(matched) >= MinKeywordHits {
+			return 1
+		}
+		i += len(longest.words)
 	}
 	return 0
 }
