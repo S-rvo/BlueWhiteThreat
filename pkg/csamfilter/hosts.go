@@ -1,6 +1,4 @@
-package db
-
-import "strings"
+package csamfilter
 
 // blockedHosts are .onion domains confirmed to index/advertise CSAM. They are
 // excluded from the crawl queue entirely so the crawler never re-visits or
@@ -342,29 +340,13 @@ var blockedHosts = map[string]bool{
 	"zx47gl3qbwlokzhjbwxbhmmzedu4dm5dzl2ohhsm5cgmipffccl5o2ad.onion": true,
 }
 
-// blockedHostPatterns catches CSAM-indicative domain-name prefixes used across
-// many onion-hash variants of the same spam farm, so new hashes are blocked
-// without needing their exact hostname first. Discovered 2026-10-08 via the
-// crawler's queue actively discovering dozens of hash variants of these
-// patterns, none yet scraped.
-var blockedHostPatterns = []string{
-	"teen-boy-porn",
-	"punished-young",
-	"family-love-free-vidios",
-	// "chuby" added 2026-10-11: same spam farm as above, 11 distinct hash
-	// variants seen across the two most recent batches alone.
-	"chuby",
-}
-
 // blockedBackendHashes are the real .onion identities (bare hash, no
 // subdomain prefix) behind a wildcard-subdomain spam farm: the same handful
 // of backends respond under dozens of auto-generated CSAM-themed prefixes
 // (e.g. "pamela-andersom.<hash>.onion", "top-site-cp.<hash>.onion") to defeat
-// prefix/keyword-based filtering and inflate crawl discovery. Since
-// isBlockedURL matches by substring, blocking the bare hash here blocks every
-// prefix variant without needing to enumerate them. Discovered 2026-10-17 by
-// grouping crawler log discoveries by hash suffix: each of these backed 2-19
-// distinct CSAM-themed prefixes.
+// prefix/keyword-based filtering and inflate crawl discovery. Discovered
+// 2026-10-17 by grouping crawler log discoveries by hash suffix: each of
+// these backed 2-19 distinct CSAM-themed prefixes.
 var blockedBackendHashes = []string{
 	"tq2mgeqtasrltpvcmc2hjm6owo3itzyfrkviuffwlgpxr6ahaj7oxjid.onion",
 	"cio6osv4jegsxgavect4isfwrs4gh2wlpmjjfb47g5mwuc2xabenj4ad.onion",
@@ -385,28 +367,4 @@ var blockedBackendHashes = []string{
 	"rot5a2w7tm2kn5xxaukwzvr6pcabnecjyaej6tff6mqhnr35xj56l4id.onion",
 	"ilovecpdnq3vtohjuntc5rdneprmrbiws6l6oi6arhueks47iizstnid.onion",
 	"skxsnbw34tr7kwfcsjnknnp3gmqxa4dbwa6reg6wqpae3ubv6zntscad.onion",
-}
-
-// IsBlockedURL reports whether the URL's host is a known CSAM-indexing site,
-// either by exact hostname match or by a known CSAM-indicative name pattern.
-// Exported so the crawler package can skip these URLs before even issuing
-// the HTTP request, not just before queuing them in Redis.
-func IsBlockedURL(rawURL string) bool {
-	for host := range blockedHosts {
-		if strings.Contains(rawURL, host) {
-			return true
-		}
-	}
-	low := strings.ToLower(rawURL)
-	for _, pattern := range blockedHostPatterns {
-		if strings.Contains(low, pattern) {
-			return true
-		}
-	}
-	for _, hash := range blockedBackendHashes {
-		if strings.Contains(low, hash) {
-			return true
-		}
-	}
-	return false
 }

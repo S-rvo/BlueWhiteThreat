@@ -6,10 +6,13 @@ toolchain go1.24.4
 
 require (
 	github.com/PuerkitoBio/goquery v1.10.3
+	github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter v0.0.0
 	github.com/chromedp/chromedp v0.13.7
 	github.com/redis/go-redis/v9 v9.7.3
 	go.mongodb.org/mongo-driver v1.17.4
 )
+
+replace github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter => ../../pkg/csamfilter
 
 require (
 	github.com/andybalholm/cascadia v1.3.3 // indirect
