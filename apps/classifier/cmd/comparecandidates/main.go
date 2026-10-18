@@ -62,12 +62,14 @@ const (
 	// 30000) found positive-class overweighting hurts recall, but more
 	// epochs plus reserving TF-IDF vocabulary slots for plain words (pushing
 	// out some character n-grams via tfidf.FitWithWordReserve) raises
-	// validation recall from 0.558 (epochs=5000, default vocab) to 0.611
-	// (f1 0.716->0.758) at the same precision=1.000; combining epochs beyond
-	// 20000 with the word reserve adds nothing further.
+	// validation recall from 0.558 (epochs=5000, default vocab) to 0.621
+	// (f1 0.716->0.766) at the same precision=1.000; a fine-grained reserve
+	// sweep around the initial 4500 estimate found 4400 as the local
+	// optimum (4300/4350/4450-4700 all tie or trail it); combining epochs
+	// beyond 20000 with the word reserve adds nothing further.
 	squaredHingeEpochs      = 20000
 	squaredHingeL2          = 0.0008
-	squaredHingeWordReserve = 4500
+	squaredHingeWordReserve = 4400
 
 	// cappedHingeEpochs: unchanged from before the squared-hinge sweep above;
 	// the wordReserve/epochs=20000 combination was only validated for
