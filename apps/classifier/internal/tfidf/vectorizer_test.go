@@ -10,6 +10,29 @@ func zeros(n int) []float64 {
 	return make([]float64, n)
 }
 
+func TestFitIncludesCharacterNgrams(t *testing.T) {
+	// Dark-web content is rife with l33tspeak/typo variants of the same
+	// word ("ransomw4re", "r4nsomware"). Character n-grams give the model
+	// a feature that still overlaps heavily between such variants, where a
+	// pure word-token vocabulary would treat them as entirely unrelated.
+	docs := []string{
+		"a ransomware gang leaked data",
+		"a ransomware gang leaked data",
+		"unrelated quarterly earnings report",
+	}
+	v := Fit(docs, zeros(len(docs)))
+
+	if _, ok := v.Vocabulary["c_rans"]; !ok {
+		t.Fatalf("expected vocabulary to contain character 4-gram %q, vocab=%v", "c_rans", v.Vocabulary)
+	}
+
+	vec := v.Transform("ransomware")
+	idx := v.Vocabulary["c_rans"]
+	if vec[idx] <= 0 {
+		t.Fatalf("expected Transform(%q) to score character n-gram %q > 0, got %v", "ransomware", "c_rans", vec[idx])
+	}
+}
+
 func TestFitTransformRoundTrip(t *testing.T) {
 	docs := []string{
 		"malware attack network",
@@ -145,10 +168,14 @@ func TestTransformIsL2Normalized(t *testing.T) {
 	}
 
 	vec := v.Transform("malware malware attack unknown")
-	// Raw (pre-normalization) values would be [4.0, 0.5]; normalized by
-	// their L2 norm (sqrt(4.0^2 + 0.5^2)).
-	rawNorm := math.Sqrt(4.0*4.0 + 0.5*0.5)
-	want := []float64{4.0 / rawNorm, 0.5 / rawNorm}
+	// TF is log-scaled (log1p(count)) before multiplying by IDF, so a term
+	// repeated many times doesn't dominate linearly - "malware" appearing
+	// twice shouldn't count as literally twice the signal of once. Raw
+	// (pre-normalization) values: malware = log1p(2)*2.0, attack = log1p(1)*0.5.
+	rawMalware := math.Log1p(2) * 2.0
+	rawAttack := math.Log1p(1) * 0.5
+	rawNorm := math.Sqrt(rawMalware*rawMalware + rawAttack*rawAttack)
+	want := []float64{rawMalware / rawNorm, rawAttack / rawNorm}
 
 	if len(vec) != len(want) {
 		t.Fatalf("len(vec) = %d, want %d", len(vec), len(want))
@@ -168,29 +195,3 @@ func TestTransformIsL2Normalized(t *testing.T) {
 	}
 }
 
-func TestSublinearTFReducesBoilerplateDominance(t *testing.T) {
-	v := &Vectorizer{Vocabulary: map[string]int{"menu": 0, "malware": 1}, IDF: []float64{1, 1}}
-	doc := "menu menu menu menu menu menu menu menu malware"
-	raw := v.Transform(doc)
-	v.SublinearTF = true
-	logarithmic := v.Transform(doc)
-	if logarithmic[1] <= raw[1] {
-		t.Fatal("logarithmic TF should preserve more of the nonrepeated signal")
-	}
-	if math.Abs(logarithmic[0]/logarithmic[1]-(1+math.Log(8))) > 1e-9 {
-		t.Fatal("incorrect logarithmic term weighting")
-	}
-}
-
-func TestCharacterFeaturesHandleUnseenWordVariants(t *testing.T) {
-	v := FitWithCharacters([]string{"malware attack", "cooking recipe"}, []float64{1, 0}, true)
-	vec := v.Transform("malwares")
-	idx, ok := v.Vocabulary["@c:mal"]
-	if !ok || vec[idx] <= 0 {
-		t.Fatal("unseen plural lost shared character signal")
-	}
-	legacy := Fit([]string{"malware"}, []float64{1})
-	if _, ok := legacy.Vocabulary["@c:mal"]; ok {
-		t.Fatal("legacy models must keep their original features")
-	}
-}

@@ -2,3 +2,13 @@ classifier
 *.csv
 model.json
 .env
+
+# Local frozen experiment artifacts contain corpus text; keep out of source control.
+/data/confirmation-campaign/
+/data/.confirmation-history/
+
+# Dated outputs of one-off cmd/ experiment tools (cv*, human-review-*, simhash-*,
+# paired-ranking-*, train-*, docs reports, ...); never read by the production
+# pipeline (cmd/main, cmd/train) and not meant to be committed.
+/data/*2026*
+/docs/*2026*

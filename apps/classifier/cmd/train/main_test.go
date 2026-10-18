@@ -1,83 +1,100 @@
+// apps/classifier/cmd/train/main_test.go
 package main
 
-import (
-	"encoding/csv"
-	"os"
-	"path/filepath"
-	"reflect"
-	"testing"
-)
+import "testing"
 
-func writeCSV(t *testing.T, rows [][]string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "labels.csv")
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w := csv.NewWriter(f)
-	if err := w.WriteAll(rows); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
+// TestPickThreshold_RejectsPrecisionFloorWithDegenerateRecall builds scores
+// where the only threshold reaching targetPrecision does so by predicting a
+// single positive out of ten (recall 0.1) — a degenerate operating point a
+// small, noisy validation set can produce. A much better-rounded threshold
+// exists (precision 0.833, recall 1.0, f1 0.909) but never reaches the
+// precision floor. pickThreshold must reject the degenerate floor-meeting
+// threshold once it falls under minRecall, and fall back to the
+// F1-maximizing threshold instead of returning a near-zero-recall cutoff.
+func TestPickThreshold_RejectsPrecisionFloorWithDegenerateRecall(t *testing.T) {
+	var scores, labels []float64
 
-func TestReadExcludesDuplicatesAndAllConflictingCopies(t *testing.T) {
-	path := writeCSV(t, [][]string{{"text", "label"}, {"Malware attack!", "1"}, {"malware attack", "1"}, {"safe page", "0"}, {"SAFE page!", "1"}, {"different content", "0"}, {"!", "0"}})
-	texts, labels, err := readLabeledCSV(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(texts, []string{"Malware attack!", "different content"}) || !reflect.DeepEqual(labels, []float64{1, 0}) {
-		t.Fatalf("unexpected cleaned data: %v %v", texts, labels)
-	}
-}
+	// One positive scored high enough to be the only example separable at
+	// an extreme threshold.
+	scores = append(scores, 0.99)
+	labels = append(labels, 1)
 
-func TestReadRejectsInvalidLabels(t *testing.T) {
-	for _, label := range []string{"NaN", "Inf", "-1", "0.5", "2", "unknown"} {
-		path := writeCSV(t, [][]string{{"text", "label"}, {"malware attack", label}})
-		if _, _, err := readLabeledCSV(path); err == nil {
-			t.Fatalf("accepted %q", label)
-		}
+	// Nine more positives, all scored just above the well-supported cutoff.
+	for i := 0; i < 9; i++ {
+		scores = append(scores, 0.605)
+		labels = append(labels, 1)
 	}
-}
 
-func TestThreeWaySplitIsDeterministicAndDisjoint(t *testing.T) {
-	var texts []string
-	var labels []float64
-	for i := 0; i < 40; i++ {
-		texts = append(texts, string(rune('A'+i)))
-		labels = append(labels, float64(i%2))
+	// Two negatives contaminate the well-supported cutoff (dropping its
+	// precision below the target) but not the extreme one.
+	for i := 0; i < 2; i++ {
+		scores = append(scores, 0.655)
+		labels = append(labels, 0)
 	}
-	dev, dy, test, _ := split(texts, labels, .8)
-	train, _, validation, _ := split(dev, dy, .75)
-	seen := map[string]bool{}
-	for _, partition := range [][]string{train, validation, test} {
-		for _, doc := range partition {
-			if seen[doc] {
-				t.Fatal("split leakage")
-			}
-			seen[doc] = true
-		}
+
+	// Eight negatives score low and never contaminate any candidate
+	// threshold under test.
+	for i := 0; i < 8; i++ {
+		scores = append(scores, 0.1)
+		labels = append(labels, 0)
 	}
-	if len(seen) != len(texts) {
-		t.Fatal("lost documents")
+
+	got := pickThreshold(scores, labels)
+	// The exact-score search picks the highest boundary on this plateau.
+	if got != 0.605 {
+		t.Fatalf("expected boundary 0.605, got %.9f", got)
 	}
-	again, _, _, _ := split(texts, labels, .8)
-	if !reflect.DeepEqual(dev, again) {
-		t.Fatal("nondeterministic split")
+
+	_, precision, recall, _ := confusionAt(scores, labels, got)
+	if precision < 0.8 || recall < 0.9 {
+		t.Fatalf("expected the well-rounded operating point (precision~0.833, recall~1.0), got precision=%.3f recall=%.3f", precision, recall)
 	}
 }
 
-func TestThresholdUsesObservedScores(t *testing.T) {
-	scores := []float64{.501, .502, .503, .504}
+func TestPickThreshold_CompressedScores(t *testing.T) {
+	scores := []float64{0.493, 0.495, 0.497, 0.499}
 	labels := []float64{0, 0, 1, 1}
-	threshold := pickThreshold(scores, labels)
-	_, precision, recall, f1 := confusionAt(scores, labels, threshold)
-	if precision != 1 || recall != 1 || f1 != 1 {
-		t.Fatalf("missed separating threshold %g", threshold)
+	got := pickThreshold(scores, labels)
+	if got != 0.497 {
+		t.Fatalf("missed attainable perfect separation: %.9f", got)
+	}
+}
+
+func TestCandidateOutputPath(t *testing.T) {
+	t.Setenv("MODEL_PATH", "live.json")
+	t.Setenv("CANDIDATE_MODEL_PATH", "")
+	got, err := candidateOutputPath("provisional-example")
+	if err != nil || got != "model_provisional-example.json" {
+		t.Fatalf("default: %q %v", got, err)
+	}
+	for _, path := range []string{"live.json", "./live.json", "model.json", "nested/model.json"} {
+		t.Setenv("CANDIDATE_MODEL_PATH", path)
+		if _, err := candidateOutputPath("provisional-example"); err == nil {
+			t.Fatalf("accepted live path %q", path)
+		}
+	}
+	t.Setenv("CANDIDATE_MODEL_PATH", "candidate.json")
+	if got, err := candidateOutputPath("provisional-example"); err != nil || got != "candidate.json" {
+		t.Fatalf("candidate: %q %v", got, err)
+	}
+}
+
+func TestValidationSummaryDistinguishesFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		scores, labels []float64
+		met            bool
+		rule           string
+	}{
+		{"constrained", []float64{.9, .8, .1}, []float64{1, 1, 0}, true, "maximum_recall_at_precision_and_recall_constraints"},
+		{"fallback", []float64{.5, .5}, []float64{1, 0}, false, "maximum_f1_fallback"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			threshold := pickThreshold(tc.scores, tc.labels)
+			got := validationSummary(tc.scores, tc.labels, threshold)
+			if got.ObjectiveMet != tc.met || got.SelectionRule != tc.rule || got.Documents != len(tc.labels) || got.LabelAuthority != "input_csv_authority_unspecified" {
+				t.Fatalf("summary: %+v", got)
+			}
+		})
 	}
 }

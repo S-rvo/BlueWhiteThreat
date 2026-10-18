@@ -82,7 +82,7 @@ func main() {
 
 	out, err := os.Create(reviewedPath)
 	if err != nil {
-		log.Fatalf("failed to create %s: %v", reviewedPath, err)
+		log.Fatalf("failed to open %s for writing: %v", reviewedPath, err)
 	}
 	defer out.Close()
 
