@@ -6,6 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.80.0
+	github.com/neo4j/neo4j-go-driver/v5 v5.28.5
 	go.mongodb.org/mongo-driver v1.17.10
 )
 
