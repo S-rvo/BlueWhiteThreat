@@ -3,11 +3,15 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/bootstrap"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/classify"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/db"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
@@ -26,20 +30,13 @@ func main() {
 	}
 
 	modelPath := getEnvOrDefault("MODEL_PATH", "model.json")
-	m, err := model.Load(modelPath)
+	thresholdOverride := os.Getenv("RELEVANCE_THRESHOLD")
+	classifier, err := loadClassifier(modelPath, thresholdOverride)
 	if err != nil {
 		log.Fatalf("failed to load model from %s: %v (run cmd/train first)", modelPath, err)
 	}
 
-	if override := os.Getenv("RELEVANCE_THRESHOLD"); override != "" {
-		if v, err := strconv.ParseFloat(override, 64); err == nil {
-			m.Threshold = v
-		}
-	}
-
-	classifier := classify.New(m)
-
-	log.Printf("Classifier service started (model version %s, interval %d min)", m.Version, defaultIntervalMinutes)
+	log.Printf("Classifier service started (model version %s, interval %d min)", classifier.Version(), defaultIntervalMinutes)
 	runOnce(classifier)
 
 	ticker := time.NewTicker(time.Duration(defaultIntervalMinutes) * time.Minute)
@@ -47,8 +44,53 @@ func main() {
 
 	for range ticker.C {
 		log.Printf("Scheduled classification run at %s", time.Now().Format("15:04:05"))
+		updatedClassifier, err := loadClassifier(modelPath, thresholdOverride)
+		if err != nil {
+			log.Printf("failed to reload model from %s; skipping this cycle: %v", modelPath, err)
+			continue
+		}
+		classifier = updatedClassifier
+		log.Printf("Using model version %s", classifier.Version())
 		runOnce(classifier)
 	}
+}
+
+func loadClassifier(modelPath, thresholdOverride string) (*classify.Classifier, error) {
+	m, err := model.Load(modelPath)
+	if err != nil {
+		return nil, err
+	}
+	if m.Version == "" {
+		modelBytes, err := os.ReadFile(modelPath)
+		if err != nil {
+			return nil, fmt.Errorf("read model for fallback version: %w", err)
+		}
+		digest := sha256.Sum256(modelBytes)
+		m.Version = fmt.Sprintf("legacy-%x", digest[:8])
+	}
+	applyThresholdOverride(m, thresholdOverride)
+	return classify.New(m), nil
+}
+
+// applyThresholdOverride updates the decision threshold and derives a distinct
+// inference version when the effective threshold differs from the model file.
+// The threshold changes labels even when model weights stay the same, so it
+// must trigger a rescore of existing articles.
+func applyThresholdOverride(m *model.Model, raw string) bool {
+	if raw == "" {
+		return false
+	}
+	threshold, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold < 0 || threshold > 1 {
+		log.Printf("ignoring invalid RELEVANCE_THRESHOLD %q; expected a number in [0,1]", raw)
+		return false
+	}
+	if threshold == m.Threshold {
+		return false
+	}
+	m.Threshold = threshold
+	m.Version = fmt.Sprintf("%s-threshold-%s", m.Version, strconv.FormatFloat(threshold, 'g', -1, 64))
+	return true
 }
 
 func runOnce(classifier *classify.Classifier) {
@@ -62,24 +104,18 @@ func runOnce(classifier *classify.Classifier) {
 	}
 	defer client.Disconnect(ctx)
 
-	articles, err := db.FetchUnclassified(ctx, client)
+	articles, err := db.FetchNeedingClassification(ctx, client, classifier.Version())
 	if err != nil {
-		log.Printf("failed to fetch unclassified articles, will retry next tick: %v", err)
+		log.Printf("failed to fetch articles needing classification, will retry next tick: %v", err)
 		return
 	}
-	log.Printf("Found %d unclassified articles", len(articles))
+	log.Printf("Found %d articles needing classification by model %s", len(articles), classifier.Version())
 
 	for _, article := range articles {
-		if article.Content == "" {
+		relevance, skip := classifyArticle(classifier, article.Content)
+		if skip {
 			log.Printf("skipping article %v: empty content", article.ID)
 			continue
-		}
-
-		result := classifier.Classify(article.Content)
-		relevance := db.Relevance{
-			Relevant:     result.Relevant,
-			Score:        result.Score,
-			ModelVersion: result.ModelVersion,
 		}
 
 		if err := db.UpdateRelevance(ctx, client, article.ID, relevance); err != nil {
@@ -87,6 +123,34 @@ func runOnce(classifier *classify.Classifier) {
 			continue
 		}
 	}
+}
+
+// classifyArticle decides the relevance record for one article's content.
+// Empty content can't be scored and is skipped entirely (left for a later
+// pass). Link-directory pages (bootstrap.IsLinkDirectory) are excluded from
+// training data by cmd/bootstrap and cmd/export, so the live classifier
+// never saw one as a labeled example — scoring it here would apply a model
+// to data it was never evaluated against, so it's instead recorded directly
+// as not relevant, keeping training and inference consistent.
+func classifyArticle(classifier *classify.Classifier, content string) (relevance db.Relevance, skip bool) {
+	if content == "" {
+		return db.Relevance{}, true
+	}
+
+	if bootstrap.IsLinkDirectory(content) {
+		return db.Relevance{Relevant: false, Score: 0, ModelVersion: classifier.Version(), PolicyVersion: db.ClassificationPolicyVersion}, false
+	}
+
+	result := classifier.Classify(content)
+	return db.Relevance{
+		Relevant:        result.Relevant,
+		Score:           result.Score,
+		CalibratedScore: result.CalibratedScore,
+		ModelVersion:    result.ModelVersion,
+		PolicyVersion:   db.ClassificationPolicyVersion,
+		NeedsReview:     result.NeedsReview,
+		ReviewReason:    result.ReviewReason,
+	}, false
 }
 
 func getEnvOrDefault(key, defaultValue string) string {

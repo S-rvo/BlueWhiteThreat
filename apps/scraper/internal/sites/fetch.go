@@ -63,12 +63,17 @@ func FetchPage(ctx context.Context, targetURL string, cfg *SiteConfig) (string, 
 		}
 	}
 
-	var content string
+	var html string
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(targetURL),
-		chromedp.Text("body", &content, chromedp.ByQuery),
+		chromedp.OuterHTML("body", &html, chromedp.ByQuery),
 	); err != nil {
 		return "", fmt.Errorf("fetch failed for %s: %w", targetURL, err)
+	}
+
+	content, err := ExtractMainContent(html)
+	if err != nil {
+		return "", fmt.Errorf("extract content for %s: %w", targetURL, err)
 	}
 	return content, nil
 }
