@@ -72,3 +72,38 @@ func LoadReviewed(path string) (map[string]Label, error) {
 	}
 	return reviewed, nil
 }
+
+// LoadExcluded reads a persisted exclusion store (id,reason CSV) into a set.
+// Excluded documents (e.g. CSAM found during human review) must never be
+// written into training_data.csv or review_queue.jsonl again, regardless of
+// label — unlike a reviewed label, exclusion isn't "this is a negative
+// example", it's "this document must not be used at all". Missing file is
+// not an error — it just means nothing has been excluded yet.
+func LoadExcluded(path string) (map[string]bool, error) {
+	excluded := map[string]bool{}
+
+	file, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return excluded, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("review: open %s: %w", path, err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	rows, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("review: parse %s: %w", path, err)
+	}
+	if len(rows) == 0 || len(rows[0]) != 2 || rows[0][0] != "id" || rows[0][1] != "reason" {
+		return nil, fmt.Errorf("review: %s must have header id,reason", path)
+	}
+	for i, row := range rows[1:] {
+		if len(row) != 2 || row[0] == "" {
+			return nil, fmt.Errorf("review: invalid excluded id in %s row %d", path, i+2)
+		}
+		excluded[row[0]] = true
+	}
+	return excluded, nil
+}
