@@ -1,6 +1,4 @@
-package db
-
-import "strings"
+package csamfilter
 
 // blockedHosts are .onion domains confirmed to index/advertise CSAM. They are
 // excluded from the crawl queue entirely so the crawler never re-visits or
@@ -342,33 +340,31 @@ var blockedHosts = map[string]bool{
 	"zx47gl3qbwlokzhjbwxbhmmzedu4dm5dzl2ohhsm5cgmipffccl5o2ad.onion": true,
 }
 
-// blockedHostPatterns catches CSAM-indicative domain-name prefixes used across
-// many onion-hash variants of the same spam farm, so new hashes are blocked
-// without needing their exact hostname first. Discovered 2026-10-08 via the
-// crawler's queue actively discovering dozens of hash variants of these
-// patterns, none yet scraped.
-var blockedHostPatterns = []string{
-	"teen-boy-porn",
-	"punished-young",
-	"family-love-free-vidios",
-	// "chuby" added 2026-10-11: same spam farm as above, 11 distinct hash
-	// variants seen across the two most recent batches alone.
-	"chuby",
-}
-
-// isBlockedURL reports whether the URL's host is a known CSAM-indexing site,
-// either by exact hostname match or by a known CSAM-indicative name pattern.
-func isBlockedURL(rawURL string) bool {
-	for host := range blockedHosts {
-		if strings.Contains(rawURL, host) {
-			return true
-		}
-	}
-	low := strings.ToLower(rawURL)
-	for _, pattern := range blockedHostPatterns {
-		if strings.Contains(low, pattern) {
-			return true
-		}
-	}
-	return false
+// blockedBackendHashes are the real .onion identities (bare hash, no
+// subdomain prefix) behind a wildcard-subdomain spam farm: the same handful
+// of backends respond under dozens of auto-generated CSAM-themed prefixes
+// (e.g. "pamela-andersom.<hash>.onion", "top-site-cp.<hash>.onion") to defeat
+// prefix/keyword-based filtering and inflate crawl discovery. Discovered
+// 2026-10-17 by grouping crawler log discoveries by hash suffix: each of
+// these backed 2-19 distinct CSAM-themed prefixes.
+var blockedBackendHashes = []string{
+	"tq2mgeqtasrltpvcmc2hjm6owo3itzyfrkviuffwlgpxr6ahaj7oxjid.onion",
+	"cio6osv4jegsxgavect4isfwrs4gh2wlpmjjfb47g5mwuc2xabenj4ad.onion",
+	"c2srudgkywfjwf2h2lia2kzentvlqvtdqjtp2xnk6pfksmudvezrpeid.onion",
+	"xobuk2fwpfbestkt2rq6kxozpc2uwh7r5pwob7jofb7zopu2mufkmkqd.onion",
+	"ikewnc2wlg7ldgc6vpvigp3d54otaaumppg5feuhzekjhq5zzy7lelid.onion",
+	"3pesz6bh7wnddgnnungp6l6vd6qsklwe2vlsonzc2vnwkhpm277ok3qd.onion",
+	"32xqnunvyciqp55ocvujc2dpooh6coeqtlmldiklwgnaggzwcunswjyd.onion",
+	"ockzfef625ktwatnmzthpl7kpweac23yxa7tgzxu45bdblwmjjoxaoad.onion",
+	"33cu4ufxbufvk4lofxntmb6p3hjfccvvofgvxi5o5vap7lsf644ztxyd.onion",
+	"hv5eiqmr6rfzcocv7pbanehlacwkduphb5c2vmcszitl6psexur3euqd.onion",
+	"juoqennls5diucnoh2ubwsorgtbsrqkac2hmkrtfrksxdwjpxulyzpid.onion",
+	"lhrfrlbgrv3uwqtydawz26zynw4i5xpfsphuvc2fadbsbagptj24csad.onion",
+	"bwf7gz65px42tse7vm3emuu5bm5wcmk2o3ddxmdfjrdpe4wbnac22syd.onion",
+	"6vnaiomrazucc2dowosfr5xqoxft73f6ycckbz2si3uiysmtzc4ppoqd.onion",
+	"hnjxmimgbqexwsnittzjmpehvivnli5bnkxguwmd3c2kx4vdlzhkbead.onion",
+	"nksf6c2hqyttslkthewi6xwruditz2rtw5pgi7bfuzuitwuj4gyk3fid.onion",
+	"rot5a2w7tm2kn5xxaukwzvr6pcabnecjyaej6tff6mqhnr35xj56l4id.onion",
+	"ilovecpdnq3vtohjuntc5rdneprmrbiws6l6oi6arhueks47iizstnid.onion",
+	"skxsnbw34tr7kwfcsjnknnp3gmqxa4dbwa6reg6wqpae3ubv6zntscad.onion",
 }

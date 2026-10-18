@@ -118,3 +118,4 @@ func TestClassify_ScoreEqualsThreshold(t *testing.T) {
 		t.Fatalf("expected relevant=true when score==threshold, got score=%f", result.Score)
 	}
 }
+

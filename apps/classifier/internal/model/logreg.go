@@ -108,6 +108,20 @@ func TrainWeighted(X [][]float64, y []float64, weights []float64, epochs int, le
 		return lr
 	}
 
+	// TF-IDF vectors are sparse. Cache nonzero coordinates once rather than
+	// visiting thousands of zero features on every optimization step.
+	type feature struct {
+		index int
+		value float64
+	}
+	sparse := make([][]feature, len(X))
+	for i, row := range X {
+		for j, value := range row {
+			if value != 0 {
+				sparse[i] = append(sparse[i], feature{j, value})
+			}
+		}
+	}
 	weightGrad := make([]float64, numFeatures)
 
 	for epoch := 0; epoch < epochs; epoch++ {
@@ -116,11 +130,15 @@ func TrainWeighted(X [][]float64, y []float64, weights []float64, epochs int, le
 		}
 		var biasGrad float64
 
-		for i, x := range X {
-			pred := lr.Predict(x)
+		for i, row := range sparse {
+			z := lr.Bias
+			for _, f := range row {
+				z += lr.Weights[f.index] * f.value
+			}
+			pred := sigmoid(z)
 			err := (pred - y[i]) * weights[i]
-			for j, xj := range x {
-				weightGrad[j] += err * xj
+			for _, f := range row {
+				weightGrad[f.index] += err * f.value
 			}
 			biasGrad += err
 		}

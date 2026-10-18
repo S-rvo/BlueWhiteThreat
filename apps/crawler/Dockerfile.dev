@@ -8,10 +8,11 @@ RUN apt-get update && \
     net-tools && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+WORKDIR /app/apps/crawler
 
-# On copie d'abord uniquement les fichiers de dépendances
-COPY go.mod ./
+# On copie d'abord le module partagé et les fichiers de dépendances
+COPY pkg/csamfilter /app/pkg/csamfilter
+COPY apps/crawler/go.mod ./
 
 # On supprime go.sum s'il existe pour le reconstruire proprement
 RUN rm -f go.sum
@@ -20,6 +21,6 @@ RUN rm -f go.sum
 RUN go mod tidy
 
 # On copie le reste du code source
-COPY . .
+COPY apps/crawler/. .
 
 CMD ["go", "run", "cmd/main.go"]

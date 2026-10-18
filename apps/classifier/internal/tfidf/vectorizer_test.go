@@ -194,3 +194,4 @@ func TestTransformIsL2Normalized(t *testing.T) {
 		t.Fatalf("||vec|| = %v, want 1.0", math.Sqrt(sumSq))
 	}
 }
+

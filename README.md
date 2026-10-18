@@ -19,39 +19,54 @@ Le système repose sur une architecture modulaire intégrant plusieurs mécanism
 
 Ce projet vise à fournir un outil de veille automatisée sur les menaces issues du darkweb, et à faciliter leur analyse contextuelle à travers une visualisation graphique et interactive.
 
+## Documentation opérationnelle
+
+- [`docs/mvp-2027-cadrage.md`](docs/mvp-2027-cadrage.md) : périmètre et contrats du MVP de janvier 2027.
+- [`docs/runbook-services.md`](docs/runbook-services.md) : datasheet pour préparer, lancer, tester, diagnostiquer et modifier chaque service selon les rôles technicien, analyste et développeur.
+- [`monitoring/README.md`](monitoring/README.md) : démarrage et exploitation du dashboard Grafana, des métriques Prometheus et des logs Loki.
+
 #### Schémas Fonctionnel Crawler:
 ```mermaid
 flowchart TB
-crawler["Crawler container"]
+    onion["Sources .onion"] --> redis[(Redis)] --> crawler["Crawler Go"]
+    crawler --> tor1["Proxy Tor 1"] --> onion
+    crawler --> tor2["Proxy Tor 2"] --> onion
+    crawler --> tor3["Proxy Tor 3"] --> onion
+    crawler --> neo4j[(Neo4j)]
+    api["API Go"] --> front["Frontend Nuxt"]
+    api --> neo4j --> api
 
-crawler --> tor1["Tor proxy container 1"] 
-crawler --> tor2["Tor proxy container 2"] 
-crawler --> tor3["Tor proxy container 3"] 
+    subgraph OBS["Logs et monitoring Docker"]
+        docker["Docker Engine\nlogs stdout/stderr"] --> alloy["Grafana Alloy"] --> loki[(Loki)] --> grafana["Grafana"]
+        docker --> cadvisor["cAdvisor"] --> prometheus[(Prometheus)] --> grafana
+    end
 
-.onion[".onion"]
-
-.onion --> redis --> crawler
-
-tor1 --> .onion
-tor2 --> .onion
-tor3 --> .onion
-
-.onion --> neo4j
-
-api["API Golang"]
-front["Front nuxt.js"]
-
-api --> front
-api --> neo4j[(Neo4j DB)] --> api
-
-redis[(Redis cache)]
-
+    crawler -. observé .-> docker
+    tor1 -. observé .-> docker
+    tor2 -. observé .-> docker
+    tor3 -. observé .-> docker
+    api -. observé .-> docker
+    front -. observé .-> docker
+    redis -. observé .-> docker
+    neo4j -. observé .-> docker
 ```
 
 #### Schémas Fonctionnel Scraping, Parsing :
 
 ```mermaid
 flowchart TB
-scraper["Scraper Container"] --> main.go --> AllScrap["All Scrap"] --> Mongo[(Mongo DB)]
---> API --> front
+    scraper["Scraper Go"] --> extraction["Extraction du contenu"] --> mongo[(MongoDB)] --> api["API Go"] --> front["Frontend Nuxt"]
+    mongo --> classifier["Classifieur NLP"] --> parser["Parser CTI"] --> neo4j[(Neo4j)]
+
+    subgraph OBS["Logs et monitoring Docker"]
+        docker["Docker Engine\nlogs stdout/stderr"] --> alloy["Grafana Alloy"] --> loki[(Loki)] --> grafana["Grafana"]
+        docker --> cadvisor["cAdvisor"] --> prometheus[(Prometheus)] --> grafana
+    end
+
+    scraper -. observé .-> docker
+    classifier -. observé .-> docker
+    parser -. observé .-> docker
+    api -. observé .-> docker
+    mongo -. observé .-> docker
+    neo4j -. observé .-> docker
 ```
