@@ -16,22 +16,23 @@ Résultat : le pipeline décrit dans la vision produit (crawler découvre → sc
 
 ## Architecture
 
-```
-Redis: urls_crawled (set, rempli par le crawler)
-   → scraper (ticker, même pattern que l'existant)
-        diff urls_crawled \ urls_scraped → nouvelles URLs
-        pour chaque URL :
-            → charge sa config dans sites.json (par domaine), si elle existe
-            → chromedp, proxy SOCKS5 Tor (round-robin tor1/tor2/tor3)
-                 si config de login présente :
-                     navigue vers login_url, remplit username/password
-                     (valeurs lues depuis des variables d'env, jamais en dur),
-                     soumet le formulaire
-            → extrait le texte brut de la page (body text)
-            → upsert Mongo: { url, source, scraped_at, content }
-            → SADD url dans "urls_scraped" (Redis)
-   un échec sur une URL (timeout, proxy down, login échoué) est loggé et sauté ;
-   l'URL reste absente de "urls_scraped" → retentée au tick suivant
+```mermaid
+flowchart LR
+    crawled[("Redis\nurls_crawled")] --> diff["Diff avec urls_scraped"] --> scraper["Scraper / chromedp"]
+    config["sites.json + variables d'environnement"] --> scraper
+    scraper --> tor["Proxy SOCKS5\ntor1 / tor2 / tor3"] --> source["Source approuvée"]
+    source --> scraper
+    scraper --> mongo[("MongoDB\nurl, source, date, contenu")]
+    scraper --> scraped[("Redis\nurls_scraped")]
+    scraper -->|échec : URL non marquée| retry["Nouvelle tentative\nau tick suivant"] --> diff
+
+    subgraph OBS["Logs et monitoring Docker"]
+        docker["Docker Engine\nstdout / stderr"] --> alloy["Grafana Alloy"] --> loki[(Loki)] --> grafana["Grafana"]
+        docker --> cadvisor["cAdvisor"] --> prometheus[(Prometheus)] --> grafana
+    end
+
+    scraper -. erreurs, timeouts et activité .-> docker
+    tor -. état et consommation .-> docker
 ```
 
 ## Configuration des sites (`apps/scraper/data/sites.json`)

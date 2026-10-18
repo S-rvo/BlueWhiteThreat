@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -73,7 +74,7 @@ func SetupRedisQueues() error {
 func AddURLToQueue(url string) error {
 	cleaned := cleanOnionURL(url)
 
-	if isBlockedURL(cleaned) {
+	if csamfilter.IsBlockedURL(cleaned) || IsFarmBackend(cleaned) {
 		return nil
 	}
 

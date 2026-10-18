@@ -9,6 +9,7 @@ import (
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/api"
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/crawler"
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/db"
+	"github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter"
 )
 
 func main() {
@@ -93,6 +94,18 @@ func startCrawler(maxDepth int) {
 		if url == "" {
 			log.Println("No URL returned from queue, but queue is not empty. Retrying...")
 			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		// Beaucoup d'URLs ont été mises en queue avant l'ajout du filtre
+		// de blocage (queue persistante dans Redis) : il faut donc
+		// re-vérifier ici, au moment de dépiler, pas seulement à
+		// l'ajout, sinon ces entrées historiques sont crawlées en
+		// direct sur Tor sans aucun contrôle.
+		if csamfilter.IsBlockedURL(url) || db.IsFarmBackend(url) {
+			if err := db.MarkURLAsCrawled(url); err != nil {
+				log.Printf("Error marking blocked URL as crawled: %v", err)
+			}
 			continue
 		}
 

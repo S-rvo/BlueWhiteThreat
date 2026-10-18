@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/db"
+	"github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter"
 )
 
 // ScrapedPage est le contenu brut d'une page .onion récupérée par le scraper,
@@ -20,7 +21,7 @@ type ScrapedPage struct {
 // SaveScrapedPage upsert une page scrapée dans MongoDB.article, par URL unique.
 // Les pages indexant du CSAM sont rejetées avant toute écriture.
 func SaveScrapedPage(page ScrapedPage) (int, error) {
-	if ContainsBlockedContent(page.Content) {
+	if csamfilter.IsBlockedURL(page.URL) || csamfilter.ContainsBlockedContent(page.Content) {
 		log.Printf("Contenu bloqué (CSAM) détecté sur %s — page rejetée, non persistée", page.URL)
 		return 0, fmt.Errorf("contenu bloqué: %s", page.URL)
 	}
