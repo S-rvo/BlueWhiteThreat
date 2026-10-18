@@ -57,11 +57,12 @@ const (
 
 	// squaredHingeEpochs/squaredHingeL2: model.TrainSquaredHinge's step is
 	// fixed at 0.1 and is not tuned for comparecandidates' logistic
-	// learningRate/l2 constants. squaredHingeL2 was swept on validation only
-	// (grid 0.0005-0.005, epochs 1200/2500); 0.0008 ties for the best
-	// validation F1 (0.707, precision=1.000, recall=0.547) at epochs=1200,
-	// so epochs stayed at 1200 rather than the costlier 2500.
-	squaredHingeEpochs = 1200
+	// learningRate/l2 constants. A recall sweep on validation only (positive
+	// class weight multipliers 1-8x, l2 grid 0.0001-0.0008, epochs
+	// 1200/2500/5000) found positive-class overweighting hurts recall, but
+	// epochs=5000 (any l2 in 0.0001-0.0008 ties) raises validation recall
+	// from 0.547 to 0.558 (f1 0.707->0.716) at the same precision=1.000.
+	squaredHingeEpochs = 5000
 	squaredHingeL2     = 0.0008
 )
 
