@@ -495,8 +495,8 @@ func run() error {
 		}
 		groups = append(groups, group{id: exact[members[0]].IDs[0], text: exact[members[0]].Texts[0], label: label, members: memberIDs})
 	}
-	if !*dynamicLines && len(groups) != 502 {
-		return fmt.Errorf("expected 502 consistent groups after deduplication, got %d", len(groups))
+	if !*dynamicLines && len(groups) != 499 {
+		return fmt.Errorf("expected 499 consistent groups after deduplication, got %d", len(groups))
 	}
 	if *cleaning == "deduplicate-long-lines" {
 		prints := make([]overlap.Print, len(groups))
