@@ -40,14 +40,61 @@ func TestPickThreshold_RejectsPrecisionFloorWithDegenerateRecall(t *testing.T) {
 	}
 
 	got := pickThreshold(scores, labels)
-	// F1 is flat at 0.909 across the whole well-supported plateau
-	// (0.11-0.60); pickThreshold returns the first candidate reaching that
-	// max, so assert on the plateau's bounds rather than one exact value.
-	if got < 0.10 || got > 0.60 {
-		t.Fatalf("expected a threshold on the well-supported F1-max plateau (0.10-0.60), got %.2f", got)
+	// The exact-score search picks the highest boundary on this plateau.
+	if got != 0.605 {
+		t.Fatalf("expected boundary 0.605, got %.9f", got)
 	}
+
 	_, precision, recall, _ := confusionAt(scores, labels, got)
 	if precision < 0.8 || recall < 0.9 {
 		t.Fatalf("expected the well-rounded operating point (precision~0.833, recall~1.0), got precision=%.3f recall=%.3f", precision, recall)
+	}
+}
+
+func TestPickThreshold_CompressedScores(t *testing.T) {
+	scores := []float64{0.493, 0.495, 0.497, 0.499}
+	labels := []float64{0, 0, 1, 1}
+	got := pickThreshold(scores, labels)
+	if got != 0.497 {
+		t.Fatalf("missed attainable perfect separation: %.9f", got)
+	}
+}
+
+func TestCandidateOutputPath(t *testing.T) {
+	t.Setenv("MODEL_PATH", "live.json")
+	t.Setenv("CANDIDATE_MODEL_PATH", "")
+	got, err := candidateOutputPath("provisional-example")
+	if err != nil || got != "model_provisional-example.json" {
+		t.Fatalf("default: %q %v", got, err)
+	}
+	for _, path := range []string{"live.json", "./live.json", "model.json", "nested/model.json"} {
+		t.Setenv("CANDIDATE_MODEL_PATH", path)
+		if _, err := candidateOutputPath("provisional-example"); err == nil {
+			t.Fatalf("accepted live path %q", path)
+		}
+	}
+	t.Setenv("CANDIDATE_MODEL_PATH", "candidate.json")
+	if got, err := candidateOutputPath("provisional-example"); err != nil || got != "candidate.json" {
+		t.Fatalf("candidate: %q %v", got, err)
+	}
+}
+
+func TestValidationSummaryDistinguishesFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		scores, labels []float64
+		met            bool
+		rule           string
+	}{
+		{"constrained", []float64{.9, .8, .1}, []float64{1, 1, 0}, true, "maximum_recall_at_precision_and_recall_constraints"},
+		{"fallback", []float64{.5, .5}, []float64{1, 0}, false, "maximum_f1_fallback"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			threshold := pickThreshold(tc.scores, tc.labels)
+			got := validationSummary(tc.scores, tc.labels, threshold)
+			if got.ObjectiveMet != tc.met || got.SelectionRule != tc.rule || got.Documents != len(tc.labels) || got.LabelAuthority != "input_csv_authority_unspecified" {
+				t.Fatalf("summary: %+v", got)
+			}
+		})
 	}
 }

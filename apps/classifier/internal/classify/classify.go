@@ -12,8 +12,14 @@ import (
 // to be flagged NeedsReview: scores within [threshold-ReviewMargin,
 // threshold+ReviewMargin] are borderline calls the model isn't confident
 // about, so a human should check them rather than trusting the automatic
-// Relevant verdict either way.
+// Relevant verdict either way. Documents without any active vocabulary feature
+// also need review, independently of the score's distance from the threshold.
 const ReviewMargin = 0.1
+
+const (
+	ReviewNoFeatures    = "no_active_features"
+	ReviewNearThreshold = "near_threshold"
+)
 
 // Result is the outcome of scoring one document.
 type Result struct {
@@ -29,6 +35,9 @@ type Result struct {
 	CalibratedScore float64
 	ModelVersion    string
 	NeedsReview     bool
+	// ReviewReason is empty when no review is requested. No-feature evidence
+	// takes precedence over a score near the threshold, which may reflect bias only.
+	ReviewReason string
 }
 
 // Classifier combines a fitted vectorizer and a trained logistic regression
@@ -64,15 +73,30 @@ func (c *Classifier) Version() string {
 // logistic regression model, and reports Relevant as true when the
 // predicted score is >= the model's threshold. A document with no tokens
 // in the vocabulary (or no tokens at all) yields an all-zero vector, so
-// its score falls back to sigmoid(Bias).
+// its score falls back to sigmoid(Bias) and it is flagged for review because
+// the verdict then contains no document-specific feature evidence.
 func (c *Classifier) Classify(text string) Result {
 	vector := c.vectorizer.Transform(text)
+	hasFeatures := false
+	for _, value := range vector {
+		if value != 0 {
+			hasFeatures = true
+			break
+		}
+	}
 	score := c.logreg.Predict(vector)
+	reviewReason := ""
+	if !hasFeatures {
+		reviewReason = ReviewNoFeatures
+	} else if math.Abs(score-c.threshold) <= ReviewMargin {
+		reviewReason = ReviewNearThreshold
+	}
 	return Result{
 		Relevant:        score >= c.threshold,
 		Score:           score,
 		CalibratedScore: c.calibration.Apply(score),
 		ModelVersion:    c.version,
-		NeedsReview:     math.Abs(score-c.threshold) <= ReviewMargin,
+		NeedsReview:     reviewReason != "",
+		ReviewReason:    reviewReason,
 	}
 }
