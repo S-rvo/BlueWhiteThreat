@@ -40,8 +40,6 @@ jobs:
       # Secrets Scan
       - name: Find secrets (scraper)
         uses: gitleaks/gitleaks-action@v2
-        with:
-          paths: apps/scraper
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
