@@ -1,7 +1,34 @@
 // apps/classifier/cmd/export/main_test.go
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestReviewCandidatePreservesOptionalSourceURL(t *testing.T) {
+	for _, url := range []string{"", "https://example.org/report?source=archive"} {
+		input := ReviewCandidate{ID: "a", URL: url, Content: "Report text"}
+		raw, err := json.Marshal(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output ReviewCandidate
+		if err := json.Unmarshal(raw, &output); err != nil {
+			t.Fatal(err)
+		}
+		if output.URL != url || output.ID != input.ID || output.Content != input.Content {
+			t.Fatalf("source changed: %+v", output)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := fields["url"]; present != (url != "") {
+			t.Fatal("legacy documents must omit absent URLs")
+		}
+	}
+}
 
 func TestPrioritizeNeedsReview_PutsFlaggedCandidatesFirst(t *testing.T) {
 	candidates := []ReviewCandidate{

@@ -3,7 +3,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"time"
@@ -27,20 +30,13 @@ func main() {
 	}
 
 	modelPath := getEnvOrDefault("MODEL_PATH", "model.json")
-	m, err := model.Load(modelPath)
+	thresholdOverride := os.Getenv("RELEVANCE_THRESHOLD")
+	classifier, err := loadClassifier(modelPath, thresholdOverride)
 	if err != nil {
 		log.Fatalf("failed to load model from %s: %v (run cmd/train first)", modelPath, err)
 	}
 
-	if override := os.Getenv("RELEVANCE_THRESHOLD"); override != "" {
-		if v, err := strconv.ParseFloat(override, 64); err == nil {
-			m.Threshold = v
-		}
-	}
-
-	classifier := classify.New(m)
-
-	log.Printf("Classifier service started (model version %s, interval %d min)", m.Version, defaultIntervalMinutes)
+	log.Printf("Classifier service started (model version %s, interval %d min)", classifier.Version(), defaultIntervalMinutes)
 	runOnce(classifier)
 
 	ticker := time.NewTicker(time.Duration(defaultIntervalMinutes) * time.Minute)
@@ -48,8 +44,53 @@ func main() {
 
 	for range ticker.C {
 		log.Printf("Scheduled classification run at %s", time.Now().Format("15:04:05"))
+		updatedClassifier, err := loadClassifier(modelPath, thresholdOverride)
+		if err != nil {
+			log.Printf("failed to reload model from %s; skipping this cycle: %v", modelPath, err)
+			continue
+		}
+		classifier = updatedClassifier
+		log.Printf("Using model version %s", classifier.Version())
 		runOnce(classifier)
 	}
+}
+
+func loadClassifier(modelPath, thresholdOverride string) (*classify.Classifier, error) {
+	m, err := model.Load(modelPath)
+	if err != nil {
+		return nil, err
+	}
+	if m.Version == "" {
+		modelBytes, err := os.ReadFile(modelPath)
+		if err != nil {
+			return nil, fmt.Errorf("read model for fallback version: %w", err)
+		}
+		digest := sha256.Sum256(modelBytes)
+		m.Version = fmt.Sprintf("legacy-%x", digest[:8])
+	}
+	applyThresholdOverride(m, thresholdOverride)
+	return classify.New(m), nil
+}
+
+// applyThresholdOverride updates the decision threshold and derives a distinct
+// inference version when the effective threshold differs from the model file.
+// The threshold changes labels even when model weights stay the same, so it
+// must trigger a rescore of existing articles.
+func applyThresholdOverride(m *model.Model, raw string) bool {
+	if raw == "" {
+		return false
+	}
+	threshold, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold < 0 || threshold > 1 {
+		log.Printf("ignoring invalid RELEVANCE_THRESHOLD %q; expected a number in [0,1]", raw)
+		return false
+	}
+	if threshold == m.Threshold {
+		return false
+	}
+	m.Threshold = threshold
+	m.Version = fmt.Sprintf("%s-threshold-%s", m.Version, strconv.FormatFloat(threshold, 'g', -1, 64))
+	return true
 }
 
 func runOnce(classifier *classify.Classifier) {
@@ -63,12 +104,12 @@ func runOnce(classifier *classify.Classifier) {
 	}
 	defer client.Disconnect(ctx)
 
-	articles, err := db.FetchUnclassified(ctx, client)
+	articles, err := db.FetchNeedingClassification(ctx, client, classifier.Version())
 	if err != nil {
-		log.Printf("failed to fetch unclassified articles, will retry next tick: %v", err)
+		log.Printf("failed to fetch articles needing classification, will retry next tick: %v", err)
 		return
 	}
-	log.Printf("Found %d unclassified articles", len(articles))
+	log.Printf("Found %d articles needing classification by model %s", len(articles), classifier.Version())
 
 	for _, article := range articles {
 		relevance, skip := classifyArticle(classifier, article.Content)
@@ -97,7 +138,7 @@ func classifyArticle(classifier *classify.Classifier, content string) (relevance
 	}
 
 	if bootstrap.IsLinkDirectory(content) {
-		return db.Relevance{Relevant: false, Score: 0, ModelVersion: classifier.Version()}, false
+		return db.Relevance{Relevant: false, Score: 0, ModelVersion: classifier.Version(), PolicyVersion: db.ClassificationPolicyVersion}, false
 	}
 
 	result := classifier.Classify(content)
@@ -106,7 +147,9 @@ func classifyArticle(classifier *classify.Classifier, content string) (relevance
 		Score:           result.Score,
 		CalibratedScore: result.CalibratedScore,
 		ModelVersion:    result.ModelVersion,
+		PolicyVersion:   db.ClassificationPolicyVersion,
 		NeedsReview:     result.NeedsReview,
+		ReviewReason:    result.ReviewReason,
 	}, false
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/split"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/tfidf"
+	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/threshold"
 	"github.com/joho/godotenv"
 )
 
@@ -66,7 +68,11 @@ func main() {
 	}
 
 	inputPath := getEnvOrDefault("TRAINING_DATA", "training_data.csv")
-	outputPath := getEnvOrDefault("MODEL_PATH", "model.json")
+	version := "provisional-" + time.Now().UTC().Format("20060102T150405.000000000Z")
+	outputPath, err := candidateOutputPath(version)
+	if err != nil {
+		log.Fatalf("candidate output: %v", err)
+	}
 
 	ids, texts, labels, err := readLabeledCSV(inputPath)
 	if err != nil {
@@ -141,13 +147,43 @@ func main() {
 		Bias:        lr.Bias,
 		Threshold:   chosenThreshold,
 		Calibration: calibration,
-		Version:     time.Now().Format("2006-01-02T15-04-05"),
+		Version:     version,
+		Validation:  validationSummary(valScores, valSet.Labels, chosenThreshold),
 	}
 
-	if err := model.Save(outputPath, m); err != nil {
+	if err := model.SaveNew(outputPath, m); err != nil {
 		log.Fatalf("failed to save model: %v", err)
 	}
-	log.Printf("Saved model to %s (version %s)", outputPath, m.Version)
+	log.Printf("Saved provisional candidate to %s (version %s); production model unchanged", outputPath, m.Version)
+}
+
+func candidateOutputPath(version string) (string, error) {
+	path := getEnvOrDefault("CANDIDATE_MODEL_PATH", "model_"+version+".json")
+	live := getEnvOrDefault("MODEL_PATH", "model.json")
+	outputAbs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	liveAbs, err := filepath.Abs(live)
+	if err != nil {
+		return "", err
+	}
+	if outputAbs == liveAbs || filepath.Base(outputAbs) == "model.json" {
+		return "", fmt.Errorf("candidate path must differ from the production model path")
+	}
+	return path, nil
+}
+
+func validationSummary(scores, labels []float64, threshold float64) *model.ValidationSummary {
+	_, p, r, f := confusionAt(scores, labels, threshold)
+	met := p >= targetPrecision && r >= minRecall
+	rule := "maximum_f1_fallback"
+	if met {
+		rule = "maximum_recall_at_precision_and_recall_constraints"
+	}
+	return &model.ValidationSummary{Documents: len(labels), Precision: p, Recall: r, F1: f,
+		TargetPrecision: targetPrecision, MinimumRecall: minRecall, ObjectiveMet: met,
+		SelectionRule: rule, LabelAuthority: "input_csv_authority_unspecified"}
 }
 
 func readLabeledCSV(path string) (ids []string, texts []string, labels []float64, err error) {
@@ -231,68 +267,25 @@ func confusionAt(scores []float64, labels []float64, threshold float64) (accurac
 	return
 }
 
-// pickThreshold sweeps candidate thresholds against the validation set and
-// logs a precision/recall table, so the chosen cutoff is visible and
-// auditable instead of being a blind guess. Among thresholds that reach
-// targetPrecision, it keeps the one with the highest recall (the least
-// aggressive way to hit the precision floor); if none reach it, it falls
-// back to the threshold that maximizes F1. The validation set is used here
-// so the test set stays untouched until the final report — picking the
-// threshold on the same data used to report final metrics would bias the
-// reported precision/recall upward.
+// pickThreshold searches attainable boundaries on validation, preserving tied
+// scores. Fine resolution matters when regularization concentrates scores near .5.
 func pickThreshold(scores []float64, labels []float64) float64 {
-	type candidate struct {
-		threshold                       float64
-		accuracy, precision, recall, f1 float64
+	chosen, err := threshold.Pick(scores, labels, targetPrecision, minRecall)
+	if err != nil {
+		log.Fatalf("select validation threshold: %v", err)
 	}
-
-	var candidates []candidate
-	for t := 0.01; t < 1.0; t += 0.01 {
-		accuracy, precision, recall, f1 := confusionAt(scores, labels, t)
-		candidates = append(candidates, candidate{t, accuracy, precision, recall, f1})
+	_, p, r, f := confusionAt(scores, labels, chosen)
+	if p >= targetPrecision && r >= minRecall {
+		log.Printf("Chosen validation threshold %.9f reaches precision/recall constraints (precision %.3f, recall %.3f, F1 %.3f)", chosen, p, r, f)
+	} else {
+		log.Printf("Precision %.2f with recall >= %.2f unavailable on validation; F1 fallback threshold %.9f (precision %.3f, recall %.3f, F1 %.3f)", targetPrecision, minRecall, chosen, p, r, f)
 	}
-
-	log.Println("Threshold sweep (validation set):")
-	for _, t := range []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9} {
-		_, p, r, f := confusionAt(scores, labels, t)
-		log.Printf("  threshold %.2f — precision: %.3f, recall: %.3f, f1: %.3f", t, p, r, f)
-	}
-
-	bestByPrecisionFloor := -1
-	bestByF1 := 0
-	for i, c := range candidates {
-		if c.precision >= targetPrecision {
-			if bestByPrecisionFloor == -1 || c.recall > candidates[bestByPrecisionFloor].recall {
-				bestByPrecisionFloor = i
-			}
-		}
-		if c.f1 > candidates[bestByF1].f1 {
-			bestByF1 = i
-		}
-	}
-
-	if bestByPrecisionFloor != -1 && candidates[bestByPrecisionFloor].recall < minRecall {
-		log.Printf("Threshold %.2f reaches target precision %.2f but its recall (%.3f) is below minRecall %.2f; treating the precision floor as unreachable",
-			candidates[bestByPrecisionFloor].threshold, targetPrecision, candidates[bestByPrecisionFloor].recall, minRecall)
-		bestByPrecisionFloor = -1
-	}
-
-	if bestByPrecisionFloor != -1 {
-		c := candidates[bestByPrecisionFloor]
-		log.Printf("Chosen threshold %.2f reaches target precision %.2f (precision: %.3f, recall: %.3f, f1: %.3f)",
-			c.threshold, targetPrecision, c.precision, c.recall, c.f1)
-		return c.threshold
-	}
-
-	c := candidates[bestByF1]
-	log.Printf("No threshold on the validation set reaches target precision %.2f; falling back to the F1-maximizing threshold %.2f (precision: %.3f, recall: %.3f, f1: %.3f)",
-		targetPrecision, c.threshold, c.precision, c.recall, c.f1)
-	return c.threshold
+	return chosen
 }
 
 func evaluateAt(setName string, scores []float64, labels []float64, threshold float64) {
 	accuracy, precision, recall, f1 := confusionAt(scores, labels, threshold)
-	log.Printf("%s metrics @ threshold %.2f — accuracy: %.3f, precision: %.3f, recall: %.3f, f1: %.3f (n=%d)",
+	log.Printf("%s metrics @ threshold %.9f — accuracy: %.3f, precision: %.3f, recall: %.3f, f1: %.3f (n=%d)",
 		setName, threshold, accuracy, precision, recall, f1, len(scores))
 }
 
@@ -304,7 +297,7 @@ func evaluateAt(setName string, scores []float64, labels []float64, threshold fl
 func reportTest(scores []float64, labels []float64, threshold float64) {
 	accuracy, precision, recall, f1 := confusionAt(scores, labels, threshold)
 	tp, fp, tn, fn := confusionCounts(scores, labels, threshold)
-	log.Printf("Test metrics @ threshold %.2f — accuracy: %.3f, precision: %.3f, recall: %.3f, f1: %.3f (n=%d)",
+	log.Printf("Test metrics @ threshold %.9f — accuracy: %.3f, precision: %.3f, recall: %.3f, f1: %.3f (n=%d)",
 		threshold, accuracy, precision, recall, f1, len(scores))
 	log.Printf("Test confusion matrix — TP: %d, FP: %d, TN: %d, FN: %d", tp, fp, tn, fn)
 	if precision < targetPrecision {

@@ -2,10 +2,34 @@
 package classify
 
 import (
+	"math"
 	"testing"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
 )
+
+func TestNoFeaturesNeedsReviewEvenWhenBiasIsFarFromThreshold(t *testing.T) {
+	for _, bias := range []float64{-10, 10} {
+		m := &model.Model{Vocabulary: map[string]int{"known": 0}, IDF: []float64{1}, Weights: []float64{1}, Bias: bias, Threshold: .5, Version: "no-features-test"}
+		classifier := New(m)
+		for _, text := range []string{"", "! a", "unseen vocabulary"} {
+			result := classifier.Classify(text)
+			if !result.NeedsReview {
+				t.Fatalf("no-feature text escaped review with bias %g", bias)
+			}
+			expected := 1 / (1 + math.Exp(-bias))
+			if result.Score != expected || result.Relevant != (expected >= .5) {
+				t.Fatal("review guard changed score or verdict")
+			}
+			if result.ModelVersion != m.Version {
+				t.Fatal("model version changed")
+			}
+		}
+		if classifier.Classify("known").NeedsReview {
+			t.Fatal("guard caught a nonzero feature vector")
+		}
+	}
+}
 
 func TestClassify(t *testing.T) {
 	// Hand-built tiny model: vocabulary of one term, positive weight,

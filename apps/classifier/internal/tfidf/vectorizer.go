@@ -2,8 +2,11 @@
 package tfidf
 
 import (
+	"fmt"
 	"math"
 	"sort"
+	"strings"
+	"unicode"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/text"
 )
@@ -89,6 +92,79 @@ func terms(doc string) []string {
 // documents and df = document frequency of the token (smoothed to avoid
 // division by zero and to avoid a zero IDF for terms in every document).
 func Fit(documents []string, labels []float64) *Vectorizer {
+	return fit(documents, labels, 1, 0)
+}
+
+// FitWithMinDocumentFrequency filters candidate terms before ranking, using
+// only the supplied training documents. Fit keeps its original behavior.
+func FitWithMinDocumentFrequency(documents []string, labels []float64, minimum int) (*Vectorizer, error) {
+	if minimum < 1 || len(documents) != len(labels) {
+		return nil, fmt.Errorf("positive minimum and matching documents/labels required")
+	}
+	return fit(documents, labels, minimum, 0), nil
+}
+
+// FitWithWordReserve reserves slots for the highest-ranked unigram words.
+// Frequency filtering and ranking use only the supplied training corpus.
+func FitWithWordReserve(documents []string, labels []float64, minimum, reserve int) (*Vectorizer, error) {
+	if minimum < 1 || len(documents) != len(labels) || reserve < 0 || reserve > MaxVocabularySize {
+		return nil, fmt.Errorf("invalid minimum, word reserve, or documents/labels lengths")
+	}
+	return fit(documents, labels, minimum, reserve), nil
+}
+
+func selectVocabulary(tokens []string, limit, reserve int) []string {
+	if len(tokens) <= limit {
+		return tokens
+	}
+	selected := make(map[string]bool, limit)
+	for _, tok := range tokens {
+		if len(selected) >= reserve {
+			break
+		}
+		if !strings.Contains(tok, "_") {
+			selected[tok] = true
+		}
+	}
+	for _, tok := range tokens {
+		if len(selected) >= limit {
+			break
+		}
+		selected[tok] = true
+	}
+	out := make([]string, 0, limit)
+	for _, tok := range tokens {
+		if selected[tok] {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+func fit(documents []string, labels []float64, minimum, reserve int) *Vectorizer {
+	return fitScriptReserve(documents, labels, minimum, reserve, 0, 1)
+}
+
+// FitWithScriptReserve is experimental: reserve a bounded number of ranked
+// non-Latin-letter features at a lower document frequency. Other features keep
+// the usual minimum; the total vocabulary cap and runtime transform are unchanged.
+func FitWithScriptReserve(documents []string, labels []float64, minimum, reserve, rareMinimum int) (*Vectorizer, error) {
+	if len(documents) != len(labels) || minimum < 1 || rareMinimum < 1 || rareMinimum > minimum || reserve < 0 || reserve > MaxVocabularySize {
+		return nil, fmt.Errorf("invalid script reserve, frequencies or document/label lengths")
+	}
+	return fitScriptReserve(documents, labels, minimum, 0, reserve, rareMinimum), nil
+}
+
+func hasNonLatinLetters(term string) bool {
+	for _, r := range term {
+		if unicode.IsLetter(r) && !unicode.Is(unicode.Latin, r) {
+			return true
+		}
+	}
+	return false
+}
+
+func fitScriptReserve(documents []string, labels []float64, minimum, reserve, scriptReserve, rareMinimum int) *Vectorizer {
 	docFreq := make(map[string]int)
 	posFreq := make(map[string]int) // docFreq restricted to label==1 docs
 	nPos := 0
@@ -111,16 +187,18 @@ func Fit(documents []string, labels []float64) *Vectorizer {
 	nNeg := len(documents) - nPos
 
 	tokens := make([]string, 0, len(docFreq))
-	for tok := range docFreq {
-		tokens = append(tokens, tok)
+	for tok, count := range docFreq {
+		if count >= minimum || (scriptReserve > 0 && count >= rareMinimum && hasNonLatinLetters(tok)) {
+			tokens = append(tokens, tok)
+		}
 	}
 
 	chi2 := make(map[string]float64, len(tokens))
 	for _, tok := range tokens {
-		a := float64(posFreq[tok])         // has token, positive
+		a := float64(posFreq[tok])                // has token, positive
 		b := float64(docFreq[tok] - posFreq[tok]) // has token, negative
-		c := float64(nPos) - a              // lacks token, positive
-		d := float64(nNeg) - b              // lacks token, negative
+		c := float64(nPos) - a                    // lacks token, positive
+		d := float64(nNeg) - b                    // lacks token, negative
 		denom := (a + b) * (c + d) * (a + c) * (b + d)
 		if denom == 0 {
 			chi2[tok] = 0
@@ -140,8 +218,33 @@ func Fit(documents []string, labels []float64) *Vectorizer {
 		return tokens[i] < tokens[j]
 	})
 
-	if len(tokens) > MaxVocabularySize {
-		tokens = tokens[:MaxVocabularySize]
+	if scriptReserve > 0 {
+		selected := map[string]bool{}
+		for _, tok := range tokens {
+			if len(selected) >= scriptReserve {
+				break
+			}
+			if hasNonLatinLetters(tok) {
+				selected[tok] = true
+			}
+		}
+		for _, tok := range tokens {
+			if len(selected) >= MaxVocabularySize {
+				break
+			}
+			if docFreq[tok] >= minimum {
+				selected[tok] = true
+			}
+		}
+		retained := make([]string, 0, len(selected))
+		for _, tok := range tokens {
+			if selected[tok] {
+				retained = append(retained, tok)
+			}
+		}
+		tokens = retained
+	} else {
+		tokens = selectVocabulary(tokens, MaxVocabularySize, reserve)
 	}
 
 	n := float64(len(documents))
@@ -173,6 +276,16 @@ func Fit(documents []string, labels []float64) *Vectorizer {
 // an empty document or a document containing only unknown (out-of-vocabulary)
 // tokens.
 func (v *Vectorizer) Transform(document string) []float64 {
+	return v.transform(document, false)
+}
+
+// TransformSaturated is an experimental occurrence weighting: count/(count+1)
+// before IDF and L2 normalization. It is not used by production inference.
+func (v *Vectorizer) TransformSaturated(document string) []float64 {
+	return v.transform(document, true)
+}
+
+func (v *Vectorizer) transform(document string, saturated bool) []float64 {
 	counts := make(map[int]int)
 	for _, tok := range terms(document) {
 		idx, ok := v.Vocabulary[tok]
@@ -184,7 +297,11 @@ func (v *Vectorizer) Transform(document string) []float64 {
 
 	vec := make([]float64, len(v.Vocabulary))
 	for idx, count := range counts {
-		vec[idx] = math.Log1p(float64(count)) * v.IDF[idx]
+		weight := math.Log1p(float64(count))
+		if saturated {
+			weight = float64(count) / (float64(count) + 1)
+		}
+		vec[idx] = weight * v.IDF[idx]
 	}
 
 	var sumSq float64
