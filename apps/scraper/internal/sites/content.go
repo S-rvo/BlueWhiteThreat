@@ -33,13 +33,18 @@ var noiseClassTokens = map[string]bool{
 
 var classTokenSplit = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 
-func hasNoiseToken(attrValue string, inContent bool) bool {
+func hasNoiseToken(attrValue string, inContent, containsArticleBody bool) bool {
 	for _, tok := range classTokenSplit.Split(strings.ToLower(attrValue), -1) {
-		if noiseClassTokens[tok] && !(inContent && tok == "header") {
+		if noiseClassTokens[tok] && !(inContent && tok == "header") && !(containsArticleBody && tok == "sidebar") {
 			return true
 		}
 	}
 	return false
+}
+
+func containsArticleBody(s *goquery.Selection) bool {
+	const selectors = ".entry-content, .wp-block-post-content, [itemprop='articleBody'], .c-layout-main"
+	return s.Is(selectors) || s.Find(selectors).Length() > 0
 }
 
 // Block boundaries must survive compact HTML; inline markup must not split
@@ -83,14 +88,35 @@ func ExtractMainContent(html string) (string, error) {
 
 	doc.Find(strings.Join(noisyTags, ", ")).ReplaceWithHtml("\n")
 	doc.Find("[hidden], [aria-hidden='true']").ReplaceWithHtml("\n")
+	// ARIA landmarks are also used on generic divs. Preserve wrappers that
+	// contain an explicit article body: some layouts misuse complementary.
+	doc.Find("[role]").FilterFunction(func(_ int, s *goquery.Selection) bool {
+		role, _ := s.Attr("role")
+		inContent := s.ParentsFiltered("article, main, [role='main']").Length() > 0
+		for _, token := range strings.Fields(strings.ToLower(role)) {
+			switch token {
+			case "navigation", "contentinfo":
+				return !containsArticleBody(s)
+			case "complementary":
+				return !containsArticleBody(s)
+			case "banner":
+				return !inContent && !containsArticleBody(s)
+			}
+		}
+		return false
+	}).ReplaceWithHtml("\n")
 	doc.Find("header").FilterFunction(func(_ int, s *goquery.Selection) bool {
 		return s.ParentsFiltered("article, main, [role='main']").Length() == 0
 	}).ReplaceWithHtml("\n")
 	doc.Find("*").FilterFunction(func(_ int, s *goquery.Selection) bool {
+		if s.Is("html, body") {
+			return false
+		}
 		class, _ := s.Attr("class")
 		id, _ := s.Attr("id")
 		inContent := s.ParentsFiltered("article, main, [role='main']").Length() > 0
-		return hasNoiseToken(class, inContent) || hasNoiseToken(id, inContent)
+		containsBody := containsArticleBody(s)
+		return hasNoiseToken(class, inContent, containsBody) || hasNoiseToken(id, inContent, containsBody)
 	}).ReplaceWithHtml("\n")
 
 	var text strings.Builder
