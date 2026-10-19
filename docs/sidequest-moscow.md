@@ -2,7 +2,10 @@
 
 ## Must have (indispensable pour le MVP)
 - Crawler Tor en collecte continue (planification automatique), découverte de pages depuis des seeds .onion.
-- Scraper résilient (gestion du rate-limiting et des protections anti-bot de base) persistant le contenu dans MongoDB.
+- Deux pools distincts de scrapers : exploration de nouvelles pages et suivi périodique des pages retenues, avec files Redis et budgets séparés.
+- Admission automatique au suivi après filtre de sûreté, NLP positif, verdict CTI positif de l’IA et validation du résultat ; aucune validation humaine initiale ou périodique requise.
+- Scrapers résilients : respect des limites d’accès et de débit, versions et provenance dans MongoDB après filtre de sûreté, reprise et déduplication.
+- Planificateur de suivi : revisite configurable, détection des nouveaux contenus et éditions, nouvelle analyse des versions modifiées ; limites de débit partagées entre les pools.
 - Connecteur de collecte Telegram (bot dédié sur les canaux publics identifiés).
 - Classifieur ML de triage en boucle de ré-entraînement continue (bootstrap → train → eval → repeat), avec seuil de précision ajustable.
 - Dashboard de suivi des métriques du pipeline (volumes collectés, taux de pertinence, dérive du modèle).
