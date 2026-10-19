@@ -1,5 +1,7 @@
 # Design — Scraper générique de contenu darkweb (`apps/scraper` v2)
 
+> Mise à jour de périmètre — 19 octobre 2026 : ce plan décrit le raccordement initial du scraper. Pour la cible MVP, les scrapers d’exploration et de suivi sont distincts ; l’admission au suivi est automatique après sûreté, NLP et verdict CTI positif de l’IA avec résultat validé. La vérification humaine mentionnée dans ce plan est facultative et ne bloque pas la collecte. Voir [le cadrage](../mvp-2027-cadrage.md) et [l’architecture](../sidequest-architecture.md).
+
 ## Contexte
 
 Le scraper actuel (`apps/scraper/internal/sites/DarkThreat.go`) ne récupère pas de contenu darkweb réel : il navigue en dur vers `http://localhost:8081`, un fixture de test local avec une structure HTML spécifique (`div.card`), et ne passe par aucun proxy Tor. Le crawler (`apps/crawler`), lui, parcourt bien de vraies pages `.onion` via Tor (rotation `tor1/tor2/tor3`, vérifié fonctionnel dans cet environnement), mais ne persiste que les URLs et liens (Neo4j) — jamais le contenu des pages.
@@ -20,7 +22,7 @@ Résultat : le pipeline décrit dans la vision produit (crawler découvre → sc
 flowchart LR
     crawled[("Redis\nurls_crawled")] --> diff["Diff avec urls_scraped"] --> scraper["Scraper / chromedp"]
     config["sites.json + variables d'environnement"] --> scraper
-    scraper --> tor["Proxy SOCKS5\ntor1 / tor2 / tor3"] --> source["Source approuvée"]
+    scraper --> tor["Proxy SOCKS5\ntor1 / tor2 / tor3"] --> source["Source admissible selon la politique d’accès"]
     source --> scraper
     scraper --> mongo[("MongoDB\nurl, source, date, contenu")]
     scraper --> scraped[("Redis\nurls_scraped")]

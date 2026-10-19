@@ -25,48 +25,36 @@ Ce projet vise à fournir un outil de veille automatisée sur les menaces issues
 - [`docs/runbook-services.md`](docs/runbook-services.md) : datasheet pour préparer, lancer, tester, diagnostiquer et modifier chaque service selon les rôles technicien, analyste et développeur.
 - [`monitoring/README.md`](monitoring/README.md) : démarrage et exploitation du dashboard Grafana, des métriques Prometheus et des logs Loki.
 
-#### Schémas Fonctionnel Crawler:
-```mermaid
-flowchart TB
-    onion["Sources .onion"] --> redis[(Redis)] --> crawler["Crawler Go"]
-    crawler --> tor1["Proxy Tor 1"] --> onion
-    crawler --> tor2["Proxy Tor 2"] --> onion
-    crawler --> tor3["Proxy Tor 3"] --> onion
-    crawler --> neo4j[(Neo4j)]
-    api["API Go"] --> front["Frontend Nuxt"]
-    api --> neo4j --> api
+## Pipeline cible du MVP
 
-    subgraph OBS["Logs et monitoring Docker"]
-        docker["Docker Engine\nlogs stdout/stderr"] --> alloy["Grafana Alloy"] --> loki[(Loki)] --> grafana["Grafana"]
-        docker --> cadvisor["cAdvisor"] --> prometheus[(Prometheus)] --> grafana
-    end
+Les scrapers d'exploration découvrent des pages. Après contrôle de sûreté, le NLP puis l'IA décident automatiquement des pages à conserver et à suivre, avec extraction et validation des IOC. Des scrapers de suivi distincts reviennent sur ces pages à cadence configurable ; aucune validation humaine initiale ou périodique n'est requise. Chaque contenu modifié repasse par le même pipeline. Les restrictions d'accès restent applicables indépendamment de la pertinence CTI.
 
-    crawler -. observé .-> docker
-    tor1 -. observé .-> docker
-    tor2 -. observé .-> docker
-    tor3 -. observé .-> docker
-    api -. observé .-> docker
-    front -. observé .-> docker
-    redis -. observé .-> docker
-    neo4j -. observé .-> docker
-```
-
-#### Schémas Fonctionnel Scraping, Parsing :
+Ce schéma décrit la cible ; le [cadrage MVP](docs/mvp-2027-cadrage.md) et l'[architecture](docs/sidequest-architecture.md) précisent les contrats et l'état d'implémentation.
 
 ```mermaid
-flowchart TB
-    scraper["Scraper Go"] --> extraction["Extraction du contenu"] --> mongo[(MongoDB)] --> api["API Go"] --> front["Frontend Nuxt"]
-    mongo --> classifier["Classifieur NLP"] --> parser["Parser CTI"] --> neo4j[(Neo4j)]
-
-    subgraph OBS["Logs et monitoring Docker"]
-        docker["Docker Engine\nlogs stdout/stderr"] --> alloy["Grafana Alloy"] --> loki[(Loki)] --> grafana["Grafana"]
-        docker --> cadvisor["cAdvisor"] --> prometheus[(Prometheus)] --> grafana
-    end
-
-    scraper -. observé .-> docker
-    classifier -. observé .-> docker
-    parser -. observé .-> docker
-    api -. observé .-> docker
-    mongo -. observé .-> docker
-    neo4j -. observé .-> docker
+flowchart LR
+    S[Seeds et liens admissibles] --> QE[(Redis exploration)]
+    QE --> E["Scrapers exploration<br/>Découverte de nouvelles pages"]
+    E --> F{Filtre de sûreté CSAM}
+    U["Scrapers suivi<br/>Workers dédiés aux pages retenues"] --> F
+    F -->|Suspect ou indéterminé| B[Blocage sans contenu exposé]
+    F -->|Autorisé| M[("MongoDB<br/>Versions et provenance")]
+    M --> N{NLP pertinent ?}
+    N -->|Non| A["Exclu du suivi actif<br/>Métadonnées et rétention bornée"]
+    N -->|Incertain ou erreur| W["Attente et reprise bornée"]
+    N -->|Oui| L["IA locale<br/>Verdict CTI et extraction IOC"]
+    L --> V["Validation déterministe<br/>Sortie et formats IOC"]
+    V --> T{"NLP positif et IA positive<br/>Résultat valide ?"}
+    T -->|Oui| R[("Registre des pages suivies<br/>Admission automatique")]
+    T -->|Non| A
+    L -->|Erreur ou résultat incertain| W
+    T -->|Oui| G[("Neo4j<br/>Entités valides et provenance")]
+    R --> P[Planificateur de suivi]
+    P --> QS[(Redis suivi)]
+    QS --> U
+    E --> D["Liens découverts<br/>Contrôles accès et destination"]
+    D --> QE
+    U --> D
+    G --> API[API et interface analyste]
+    G --> STIX[STIX 2.1 / TAXII et alertes]
 ```
