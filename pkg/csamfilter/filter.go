@@ -1,9 +1,8 @@
 // Package csamfilter is the single source of truth for CSAM-indicating
-// vocabulary and known offending hosts, shared by the crawler (URL gate,
-// checked before ever requesting or queuing a page) and the scraper
-// (content gate, checked before persisting a scraped page). Having one
-// canonical list avoids the two apps drifting out of sync as new evasion
-// patterns are discovered.
+// vocabulary, shared by the crawler (URL gate, checked before ever
+// requesting or queuing a page) and the scraper (content gate, checked
+// before persisting a scraped page). Having one canonical list avoids the
+// two apps drifting out of sync as new evasion patterns are discovered.
 package csamfilter
 
 import "strings"
@@ -84,23 +83,13 @@ func ContainsBlockedContent(content string) bool {
 	return containsAnyVariant(strings.ToLower(content), vocabulary)
 }
 
-// IsBlockedURL reports whether a URL (host or path) is a known CSAM-indexing
-// site, a known farm backend hash, or matches known CSAM-indicative
-// vocabulary. Exported so the crawler can skip these URLs before even
-// issuing the HTTP request, not just before queuing them in Redis.
+// IsBlockedURL reports whether a URL (host or path) matches known
+// CSAM-indicative vocabulary. Exported so the crawler can skip these URLs
+// before even issuing the HTTP request, not just before queuing them in
+// Redis.
 func IsBlockedURL(rawURL string) bool {
 	low := strings.ToLower(rawURL)
 
-	for host := range blockedHosts {
-		if strings.Contains(low, host) {
-			return true
-		}
-	}
-	for _, hash := range blockedBackendHashes {
-		if strings.Contains(low, hash) {
-			return true
-		}
-	}
 	if containsAnyVariant(low, vocabulary) {
 		return true
 	}

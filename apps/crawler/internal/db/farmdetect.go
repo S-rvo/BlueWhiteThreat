@@ -33,7 +33,7 @@ func extractOnionHashAndPrefix(rawURL string) (hash, prefix string, ok bool) {
 // spam farm (same backend reused under enough distinct auto-generated
 // prefixes to defeat keyword filtering). Once a hash crosses the threshold it
 // stays blocked for the rest of the crawl via the "dynamic_blocked_hashes"
-// Redis set, so it does not need to be hardcoded like blockedBackendHashes.
+// Redis set, so it does not need any static hardcoded list.
 func IsFarmBackend(rawURL string) bool {
 	hash, prefix, ok := extractOnionHashAndPrefix(rawURL)
 	if !ok {
