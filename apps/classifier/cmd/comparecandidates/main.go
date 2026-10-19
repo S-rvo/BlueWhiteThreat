@@ -71,6 +71,17 @@ const (
 	squaredHingeL2          = 0.0008
 	squaredHingeWordReserve = 4400
 
+	// squaredHingeTargetPrecision: a precision/recall sweep on validation
+	// only (targets 0.99 down to 0.85, same wordReserve/epochs/l2 above)
+	// found the shared targetPrecision=0.99 floor leaves a lot of recall on
+	// the table for this candidate specifically (0.621 recall at
+	// precision=1.000). Relaxing to 0.90 raises recall to 0.800 (precision
+	// 0.938, f1 0.766->0.864) with no further gain below that point. This
+	// floor is validated for squared-hinge only; the shared targetPrecision
+	// constant stays at 0.99 for every other candidate (old/new/human/
+	// capped-hinge), none of which has been re-swept against a lower floor.
+	squaredHingeTargetPrecision = 0.90
+
 	// cappedHingeEpochs: unchanged from before the squared-hinge sweep above;
 	// the wordReserve/epochs=20000 combination was only validated for
 	// squared-hinge, not capped-hinge, so capped-hinge keeps its prior
@@ -185,13 +196,13 @@ func main() {
 		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_new.json"))
 	results = append(results, runHumanOnlyCandidate(textGroups, trainIDs, reviewed,
 		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_human.json"))
-	humanSquaredHinge, err := runHumanOnlyMarginLoss("human-squared-hinge", false, squaredHingeWordReserve, squaredHingeEpochs, textGroups, trainIDs, reviewed,
+	humanSquaredHinge, err := runHumanOnlyMarginLoss("human-squared-hinge", false, squaredHingeWordReserve, squaredHingeEpochs, squaredHingeTargetPrecision, textGroups, trainIDs, reviewed,
 		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_human_squared_hinge.json")
 	if err != nil {
 		log.Fatalf("candidate %q: squared-hinge training failed: %v", "human-squared-hinge", err)
 	}
 	results = append(results, humanSquaredHinge)
-	humanCappedHinge, err := runHumanOnlyMarginLoss("human-capped-hinge", true, 0, cappedHingeEpochs, textGroups, trainIDs, reviewed,
+	humanCappedHinge, err := runHumanOnlyMarginLoss("human-capped-hinge", true, 0, cappedHingeEpochs, targetPrecision, textGroups, trainIDs, reviewed,
 		idText, valTexts, valGroundTruth, devTexts, devGroundTruth, "model_human_capped_hinge.json")
 	if err != nil {
 		log.Fatalf("candidate %q: capped-hinge training failed: %v", "human-capped-hinge", err)
@@ -250,7 +261,7 @@ func runHeuristicCandidate(name string, variantLabels map[string]float64, textGr
 	weights := model.BalancedWeights(trainLabels)
 	lr := model.TrainWeighted(X, trainLabels, weights, epochs, learningRate, l2)
 
-	return finishCandidate(name, vectorizer, lr, valTexts, valGroundTruth, devTexts, devGroundTruth, modelPath)
+	return finishCandidate(name, vectorizer, lr, targetPrecision, valTexts, valGroundTruth, devTexts, devGroundTruth, modelPath)
 }
 
 // runHumanOnlyCandidate trains using exclusively human-reviewed labels.
@@ -282,7 +293,7 @@ func runHumanOnlyCandidate(textGroups []frozen.TextGroup, trainIDs map[string]bo
 	weights := model.BalancedWeights(trainLabels)
 	lr := model.TrainWeighted(X, trainLabels, weights, epochs, learningRate, l2)
 
-	return finishCandidate("human", vectorizer, lr, valTexts, valGroundTruth, devTexts, devGroundTruth, modelPath)
+	return finishCandidate("human", vectorizer, lr, targetPrecision, valTexts, valGroundTruth, devTexts, devGroundTruth, modelPath)
 }
 
 // runHumanOnlyMarginLoss trains using exclusively human-reviewed labels,
@@ -293,7 +304,7 @@ func runHumanOnlyCandidate(textGroups []frozen.TextGroup, trainIDs map[string]bo
 // to tfidf.FitWithWordReserve (0 reproduces the default tfidf.Fit vocabulary);
 // marginEpochs lets squared-hinge and capped-hinge use independently tuned
 // epoch counts instead of sharing one constant.
-func runHumanOnlyMarginLoss(name string, capped bool, wordReserve, marginEpochs int, textGroups []frozen.TextGroup, trainIDs map[string]bool, reviewed map[string]int,
+func runHumanOnlyMarginLoss(name string, capped bool, wordReserve, marginEpochs int, candidateTargetPrecision float64, textGroups []frozen.TextGroup, trainIDs map[string]bool, reviewed map[string]int,
 	idText map[string]string, valTexts []string, valGroundTruth []float64, devTexts []string, devGroundTruth []float64, modelPath string) (candidateResult, error) {
 
 	var trainTexts []string
@@ -327,17 +338,17 @@ func runHumanOnlyMarginLoss(name string, capped bool, wordReserve, marginEpochs 
 		return candidateResult{}, err
 	}
 
-	return finishCandidate(name, vectorizer, lr, valTexts, valGroundTruth, devTexts, devGroundTruth, modelPath), nil
+	return finishCandidate(name, vectorizer, lr, candidateTargetPrecision, valTexts, valGroundTruth, devTexts, devGroundTruth, modelPath), nil
 }
 
-func finishCandidate(name string, vectorizer *tfidf.Vectorizer, lr *model.LogisticRegression,
+func finishCandidate(name string, vectorizer *tfidf.Vectorizer, lr *model.LogisticRegression, candidateTargetPrecision float64,
 	valTexts []string, valGroundTruth []float64, devTexts []string, devGroundTruth []float64, modelPath string) candidateResult {
 
 	valScores := make([]float64, len(valTexts))
 	for i, t := range valTexts {
 		valScores[i] = lr.Predict(vectorizer.Transform(t))
 	}
-	threshold, reason := evalmetrics.PickThreshold(valScores, valGroundTruth, targetPrecision, minRecall)
+	threshold, reason := evalmetrics.PickThreshold(valScores, valGroundTruth, candidateTargetPrecision, minRecall)
 	log.Printf("candidate %q: chosen threshold %.2f on validation — %s", name, threshold, reason)
 
 	vAcc, vPrec, vRec, vF1 := evalmetrics.ConfusionAt(valScores, valGroundTruth, threshold)
