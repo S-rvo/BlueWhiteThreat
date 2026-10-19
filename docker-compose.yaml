@@ -89,18 +89,46 @@ services:
     env_file:
       - ./apps/classifier/.env
 
-  target:
+  # Production NLP classifier: runs the compiled binary only, model.json is
+  # never baked into the image. It reads MODEL_PATH from the classifier_model
+  # volume, which classifier-model-sync keeps up to date, and already
+  # reloads that file on its own every CLASSIFIER_INTERVAL_MIN minutes
+  # (apps/classifier/cmd/main/main.go), so a new model version requires no
+  # rebuild or restart here.
+  classifier-prd:
     build:
-      context: ./apps/target
-      dockerfile: Dockerfile.dev
-    container_name: target
-    depends_on:
-      - scraper
+      context: ./apps/classifier
+      dockerfile: Dockerfile.prd
+    container_name: classifier_prd_service
     volumes:
-      - ./apps/target:/app
-      - /app/node_modules
-    ports:
-      - "8081:8081"
+      - classifier_model:/data
+    environment:
+      - MODEL_PATH=/data/model.json
+    depends_on:
+      - mongodb
+      - classifier-model-sync
+    env_file:
+      - ./apps/classifier/.env
+    restart: unless-stopped
+
+  # Watches the repo's working-tree model.json (updated on the host by
+  # `git pull` after a new model commit) and copies it into the shared
+  # classifier_model volume whenever its content changes. See
+  # apps/classifier/scripts/sync-model.sh.
+  classifier-model-sync:
+    image: alpine:latest
+    container_name: classifier_model_sync
+    command: ["sh", "/scripts/sync-model.sh"]
+    environment:
+      - SRC_DIR=/src
+      - DEST_DIR=/data
+      - MODEL_SYNC_INTERVAL_SECONDS=60
+    volumes:
+      - ./apps/classifier/scripts/sync-model.sh:/scripts/sync-model.sh:ro
+      - ./apps/classifier/model.json:/src/model.json:ro
+      - ./apps/classifier/model.json.evaluation.json:/src/model.json.evaluation.json:ro
+      - classifier_model:/data
+    restart: unless-stopped
 
   front:
     build:
@@ -204,3 +232,4 @@ volumes:
   redis_data:
   neo4j_data:
   ollama_data:
+  classifier_model:

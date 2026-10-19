@@ -1,0 +1,23 @@
+# apps/classifier/Dockerfile.prd
+FROM golang:1.24 AS builder
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o classifier ./cmd/main
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+RUN adduser -D -g '' classifieruser
+USER classifieruser
+WORKDIR /home/classifieruser
+
+COPY --from=builder /app/classifier .
+
+# model.json is never baked into the image: it is supplied at runtime via
+# MODEL_PATH, from a volume kept in sync by the classifier-model-sync
+# service (see docker-compose.yaml) so a new model version can be deployed
+# without rebuilding or restarting this container.
+ENTRYPOINT ["./classifier"]
