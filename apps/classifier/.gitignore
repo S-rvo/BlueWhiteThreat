@@ -12,3 +12,15 @@ model.json
 # pipeline (cmd/main, cmd/train) and not meant to be committed.
 /data/*2026*
 /docs/*2026*
+
+# cmd/comparecandidates writes one provisional model per candidate strategy
+# for comparison; only the winning candidate is ever promoted to the tracked
+# model.json, so these scratch outputs are never meant to be committed.
+/model_old.json
+/model_new.json
+/model_human.json
+/model_human_capped_hinge.json
+/model_human_squared_hinge.json
+
+# Local automation logs (Codex retrain loop); not part of the source tree.
+/.codex_loop_logs/
