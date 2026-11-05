@@ -76,10 +76,15 @@ Ce dossier (postérieur à la promotion du 20/10) contient déjà des audits
 `security-stackexchange`, `ransomware-live`, `official-cti-with-cisa` —
 diversification de sources en cours, sans doc de synthèse ni décision actée
 pour l'instant (aucun fichier `.md` de conclusion, contrairement aux chantiers
-d'octobre). Vu le point sur le seuil par source, il serait plus efficace de
-concentrer ce chantier sur `github-advisories` spécifiquement plutôt que de
-diversifier uniformément — mais ça reste une priorisation à confirmer, pas
-une conclusion déjà actée comme les points 1-3 ci-dessus.
+d'octobre).
+
+**Décision (2026-11-05) :** ne pas concentrer ce chantier sur
+`github-advisories`. La décision du point 7 (ci-dessous) confirme que cette
+source reste hors production — y investir un seuil ou une diversification
+dédiée n'a aucun effet sur le trafic réel. Le chantier `source-refresh` est
+donc dépriorisé sous les points liés à `darkweb_page` (2, 3, 4, 5, 8) tant
+qu'il ne sert qu'à améliorer la qualité d'un jeu d'évaluation offline plutôt
+qu'à mesurer ou améliorer ce que le modèle voit réellement en production.
 
 ## 7. `github-advisories` n'a aucun chemin d'ingestion vers la collection live `article`
 
@@ -104,10 +109,14 @@ source pour `github-advisories` (piste 1, traitée en session) n'aurait donc
 aucun effet en production tant que ce chemin d'ingestion n'existe pas — ce
 n'est pas un bug de câblage à corriger mais une pipeline d'ingestion live à
 construire si on veut vraiment que cette source soit classifiée en continu.
-À trancher avant d'investir dans le calcul du seuil : est-ce que
-`github-advisories` doit rester un stratum d'évaluation ponctuel, ou devenir
-une source ingérée en continu (ce qui redéfinirait aussi la priorité du
-chantier du point 6 ci-dessus) ?
+**Décision (2026-11-05) :** `github-advisories` reste un stratum
+d'évaluation ponctuel, pas une source ingérée en continu. Construire une
+pipeline d'ingestion live pour cette source est un chantier d'infra neuf,
+non justifié par un besoin produit déjà exprimé, et irait à l'encontre de
+la priorité établie au point 8 : la seule chose qui compte en production
+aujourd'hui, c'est `darkweb_page`, le seul flux réellement vivant. Tant
+qu'aucun besoin business explicite de surveillance continue des advisories
+n'est formulé, ne pas investir ici.
 
 ## 8. (Priorité la plus haute) Le modèle de production n'a jamais été évalué sur son vrai trafic
 
