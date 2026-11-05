@@ -205,12 +205,17 @@ volume du corpus live lui-même. Une seconde campagne vraiment indépendante
 n'est pas possible tant que le crawler n'a pas accumulé davantage de pages
 `darkweb_page` nouvelles (le flux `sites.RunDarkwebScraper()` tourne en
 continu mais le volume net de contenu *nouveau et non dupliqué* est faible).
-Options pour la suite, non tranchées : (a) attendre que le corpus live
-grossisse puis retenter l'extraction/stratification par score ; (b) relâcher
-l'exigence d'indépendance et réutiliser une partie des documents déjà
-éligibles de la première campagne (même annotateurs IA, donc pas une mesure
-indépendante, mais permettrait de dépasser le plancher statistique
-`per_stratum_class=10`) ; (c) accepter pour l'instant le résultat
-`not_qualified` de la première campagne comme la meilleure mesure disponible
-et ne pas forcer une seconde campagne tant que le corpus n'a pas
-suffisamment grossi.
+**Décision (2026-11-05) :** on n'écarte pas d'office le besoin d'un corpus
+plus profond. Mais tant qu'il n'a pas grossi, forcer une deuxième campagne
+en réutilisant les mêmes ~180 documents éligibles et les mêmes deux
+annotateurs IA (option « relâcher l'indépendance ») n'apporterait aucune
+preuve nouvelle — ce serait la même mesure déguisée en mesure indépendante,
+donc plus trompeur que l'honnêteté actuelle du statut `not_qualified`. On
+retient donc le résultat de la première campagne (precision 0,04 / recall
+1,0 au seuil de production, non certifié statistiquement mais l'écart avec
+0,758 est trop large pour être du bruit) comme la meilleure mesure
+disponible, et on ne retente pas de seconde campagne avant que le corpus
+`darkweb_page` ait matériellement grossi. Vérification simple avant de
+retenter : `exportpipeline -limit 0` puis comparer le total dédupliqué à
+4100 — pas la peine de rebâtir un pool enrichi si ce chiffre n'a pas
+sensiblement augmenté.
