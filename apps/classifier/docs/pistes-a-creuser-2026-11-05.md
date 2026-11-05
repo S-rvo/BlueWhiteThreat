@@ -290,9 +290,46 @@ quasi-doublons plutôt qu'à un signal généralisable.
 
 **Décision (2026-11-05) :** documenter maintenant, ne pas retrancher/retrainer
 la production dans la foulée — c'est une décision de promotion/produit, pas
-un correctif technique à prendre seul. Prochaine étape si on veut trancher :
-quantifier directement, sur les plis réels utilisés pour `iteration-3`
-(`iteration-3-development-combined.jsonl` + `training_data.csv`), combien de
-paires train/dev dépassent le seuil de similarité Jaccard de
-`internal/dedup/shingles.go` — ça donnerait un chiffre causal plutôt qu'une
-coïncidence de calendrier.
+un correctif technique à prendre seul.
+
+**Correction (2026-11-05, suite) — l'hypothèse quasi-doublons ci-dessus est
+quantitativement insuffisante, et une 2e hypothèse testée est réfutée :**
+
+1. Les diagnostics déjà présents dans la reproduction contredisent l'ampleur
+   nécessaire pour expliquer l'écart. `training_documents_excluded_for_near_development_overlap: 0`
+   et `development_near_duplicate_component_diagnostics` ne montrent que
+   **4 composantes multi-documents sur 1047, toutes de taille 2**, dans
+   l'ensemble de développement de 1051 documents. Une poignée de paires
+   quasi-dupliquées ne peut pas expliquer un basculement TP/FP/FN/TN de
+   (298/61/33/659) à (315/248/16/472) — l'écart est trop petit en magnitude
+   pour la fuite train/dev décrite plus haut comme cause principale.
+
+2. Deuxième piste testée et **réfutée par expérience contrôlée** :
+   `internal/tfidf/structural.go` (non commité) ajoute 7 nouveaux indicateurs
+   structurels (boilerplate marketplace/corporate/hosting, fraude financière,
+   gambling, annuaire darkweb, preuve de compromission) et des features de
+   conjonction (`<page_type>_with_evidence`/`_without_evidence`), appelés
+   sans condition par `terms()` — donc actifs même pour la config gagnante
+   `stable_terms_word_reserve`, pas seulement pour les configs à
+   `familyBudgets`. Hypothèse : ce changement de vocabulaire (pas la fuite
+   CV) expliquerait l'écart. **Test :** `git stash` sur ce seul fichier pour
+   revenir à sa version commitée (4 indicateurs de base, sans conjonctions),
+   rebuild, même commande de reproduction exacte. **Résultat : aucun
+   changement significatif** — precision 0,5597/recall 0,949
+   (tp=314/fp=247/fn=17/tn=473) contre 0,5595/0,952 (tp=315/fp=248/fn=16/tn=472)
+   avec le code complet. Écart dans le bruit. Hypothèse réfutée.
+
+**État actuel : les deux causes examinées (fuite CV par quasi-doublons,
+nouveaux indicateurs structurels) sont toutes les deux insuffisantes pour
+expliquer l'écart de ~27 points de précision.** La cause réelle reste
+non identifiée. Candidats non encore testés : (a) le jeu de poids/L2 candidat
+ou la logique `selectThresholdBySource`/`better()` elle-même a pu changer
+depuis le 20/10 (pas seulement `shingles.go`/`structural.go`) ; (b)
+`training_data.csv` à cette date a pu différer de sa version actuelle même
+si ses derniers commits précèdent le 20/10 (modifications non commitées
+possibles à l'époque, maintenant perdues) ; (c) le jeu
+`iteration-3-development-combined.jsonl`/`-consensus.json` a pu lui-même
+être retouché après la promotion. Sans accès à un snapshot git du code et
+des données au 20/10, une reproduction exacte n'est probablement pas
+possible — seule une nouvelle campagne d'évaluation live (point 8) donne un
+signal fiable sur la performance réelle actuelle du modèle promu.
