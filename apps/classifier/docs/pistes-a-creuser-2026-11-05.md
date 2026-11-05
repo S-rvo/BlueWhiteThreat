@@ -57,6 +57,19 @@ pas été vérifié directement dans `model.json`. À clarifier : quel `min-df` 
 réellement produit le vocabulaire de production, et si ce n'est pas 10,
 pourquoi l'écart avec les runs CV documentés n'a jamais été discuté.
 
+**Résolu (2026-11-05) :** le modèle de production vient de
+`data/iteration-2026-10-20/iteration-3-candidate.json`
+(`model_version`/`promoted_at` identiques), dont le rapport compagnon
+`iteration-3-candidate.json.selection.json` montre `"feature_config":
+"stable_terms_word_reserve"` — **min-df=2** (réserve de 1500 mots), pas
+min-df=1 (défaut `tfidf.Fit` de `cmd/train/main.go`) ni min-df=10 (runs CV
+documentés). Les trois pipelines (`cmd/train`, runs CV, `cmd/traincandidate`
+réel) ont donc chacun un `min-df` différent, jamais réconcilié — mais testé
+en session (voir point 9) : ajouter un candidat min-df=10 à la grille de
+`cmd/traincandidate` ne change rien (précision quasi identique, légèrement
+pire), donc l'écart de `min-df` lui-même n'explique pas de perte de
+performance mesurable. Le vrai problème découvert est ailleurs — voir point 9.
+
 ## 5. Relier l'audit de poids à un vrai jeu de validation stratifié par source
 
 `cmd/auditweights -eval`/`-ablate` n'a été testé qu'avec un CSV synthétique
@@ -228,3 +241,58 @@ disponible, et on ne retente pas de seconde campagne avant que le corpus
 retenter : `exportpipeline -limit 0` puis comparer le total dédupliqué à
 4100 — pas la peine de rebâtir un pool enrichi si ce chiffre n'a pas
 sensiblement augmenté.
+
+## 9. (Priorité la plus haute, à égalité avec le point 8) Les métriques OOF de promotion (precision 0,830) semblent inflées par une fuite train/dev via quasi-doublons
+
+En cherchant une vraie amélioration du modèle (tester un candidat min-df=10
+dans `cmd/traincandidate/crossfit.go`), tentative de reproduire d'abord le
+run exact qui a produit le modèle de production
+(`iteration-3-candidate.json`, mêmes fichiers d'entrée : `training_data.csv`,
+`iteration-3-development-combined.jsonl`,
+`iteration-3-development-consensus.json`, `-cross-fit`). **La reproduction
+ne retombe pas sur les métriques de promotion :**
+
+| | seuil | precision | recall |
+|---|---|---|---|
+| Production promue (`iteration-3-candidate.json.selection.json`) | 0,4888 | 0,830 | 0,900 |
+| Reproduction avec le code actuel (mêmes données, même config `stable_terms_word_reserve`) | 0,318 | 0,560 | 0,952 |
+
+Testé sur les 4 configs existantes + un 5e candidat min-df=10 ajouté pour
+l'occasion : **toutes** donnent un plafond de précision autour de 0,52-0,56
+à rappel ~0,95 — pas une seule config ne s'approche de 0,830. Le candidat
+min-df=10 n'apporte rien (0,559 vs 0,560, dans le bruit) : l'hypothèse
+« mauvais min-df » du point 4 est donc écartée comme explication.
+
+Cause identifiée : `cmd/traincandidate` (jamais commité en git — aucun
+historique) dépend de `internal/dedup/shingles.go`
+(`MergeContentDuplicatesWithDiagnostics`, fusion par quasi-doublons à 80 %
+de similarité Jaccard sur shingles de 5 tokens), également non commité et
+visiblement ajouté/modifié après la promotion du 20/10 (le rapport actuel
+contient des clés de diagnostic — `near_duplicate_component_diagnostics`,
+`experimental_source_threshold_metrics` — absentes du rapport de production,
+et le nombre de documents d'entraînement après fusion diffère légèrement :
+2901 vs 2908). Cette fusion conditionne le regroupement
+`provenance_and_near_duplicate_connected_component` utilisé pour assigner
+les plis de la validation croisée groupée à 5 plis. Si cette fusion était
+absente ou plus faible au moment du run de production, des quasi-doublons
+ont pu se retrouver dans des plis différents (train vs dev tenu à l'écart),
+ce qui permet au modèle de « reconnaître » un document qu'il a presque déjà
+vu plutôt que de généraliser — inflation classique de précision par fuite.
+
+Ce n'est pas démontré de façon causale stricte (pas de comptage direct des
+paires quasi-dupliquées qui auraient traversé la frontière train/dev dans le
+run original — impossible à refaire à l'identique puisque le code qui a
+produit `iteration-3-candidate.json` n'existe dans aucune révision git), mais
+la cohérence avec le point 8 (precision live mesurée à 0,04 vs 0,758 promis)
+est frappante : les deux pointent vers la même histoire — le modèle promu
+doit une bonne partie de son score apparent à de la mémorisation de
+quasi-doublons plutôt qu'à un signal généralisable.
+
+**Décision (2026-11-05) :** documenter maintenant, ne pas retrancher/retrainer
+la production dans la foulée — c'est une décision de promotion/produit, pas
+un correctif technique à prendre seul. Prochaine étape si on veut trancher :
+quantifier directement, sur les plis réels utilisés pour `iteration-3`
+(`iteration-3-development-combined.jsonl` + `training_data.csv`), combien de
+paires train/dev dépassent le seuil de similarité Jaccard de
+`internal/dedup/shingles.go` — ça donnerait un chiffre causal plutôt qu'une
+coïncidence de calendrier.
