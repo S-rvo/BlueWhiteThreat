@@ -333,3 +333,53 @@ possibles à l'époque, maintenant perdues) ; (c) le jeu
 des données au 20/10, une reproduction exacte n'est probablement pas
 possible — seule une nouvelle campagne d'évaluation live (point 8) donne un
 signal fiable sur la performance réelle actuelle du modèle promu.
+
+## 10. (Levier concret, probablement la vraie amélioration disponible dès maintenant) Les seuils par source, déjà câblés dans le code courant, récupèrent la précision perdue au point 9
+
+En creusant pourquoi la reproduction plafonne à precision 0,56 malgré un
+rappel confortable (0,95), `selected_metrics_by_source` de
+`repro-iteration-3-candidate.json.selection.json` montre que l'écart vient
+presque entièrement d'une seule source :
+
+| source | precision | recall | fp |
+|---|---|---|---|
+| `github-advisories` | 0,458 | 0,989 | 205 |
+| `ransomware.live` | 0,768 | 0,910 | 43 |
+
+Le seuil global unique (0,318) est tiré vers le bas pour satisfaire la
+contrainte de rappel ≥0,9 sur `github-advisories`, ce qui noie `ransomware.live`
+sous les faux positifs de l'autre source. `cmd/traincandidate/crossfit.go`
+calcule déjà un seuil par source (`sourceSpecificThresholds`, sur les mêmes
+prédictions OOF groupées à 5 plis que la sélection globale — donc pas de
+fuite supplémentaire par rapport à la méthode déjà utilisée pour le seuil
+unique) et l'écrit dans le candidat sous `source_thresholds` /
+`experimental_source_threshold_metrics`. Appliqué :
+
+| | seuil | precision | recall |
+|---|---|---|---|
+| Seuil global unique (`selected`) | 0,318 | 0,560 | 0,952 |
+| Seuils par source (`github-advisories`: 0,546, `ransomware.live`: 0,317) | — | **0,807** | **0,909** |
+
+0,807/0,909 est à ~2 points de precision de la promotion du 20/10
+(0,830/0,900) — **sur le code actuel, de façon reproductible**, sans dépendre
+du mystère non résolu du point 9. De plus, `internal/model/persist.go`
+(`SourceThresholds` + `Validate()`) et `internal/classify/classify.go`
+(ligne ~118 : bascule sur le seuil de la source si présent) savent déjà
+appliquer ce champ à l'inférence — ce n'est pas un chantier à construire,
+juste un candidat déjà produit par `-cross-fit` qui n'a jamais été
+promu avec ce champ rempli (le `model.json` et le `iteration-3-candidate.json`
+actuellement en production ont tous les deux `source_thresholds: null`).
+
+**Réserve honnête :** ce seuillage ajoute un degré de liberté par source,
+sélectionné sur le même échantillon OOF fini que le seuil global — un
+optimisme résiduel (sur-ajustement multiple-comparaisons) est possible,
+probablement plus faible qu'entre point 9 (0,56) et la promotion (0,830)
+mais non nul. Seule une vraie validation indépendante (nouvelle campagne
+vivante, point 8) confirmerait le chiffre hors échantillon.
+
+**Décision à prendre par l'utilisateur, pas par l'agent (cohérent avec
+« document now, retrain decision later ») :** entraîner un nouveau candidat
+via `cmd/traincandidate -cross-fit` sur les données actuelles, vérifier que
+son `source_thresholds` reste stable/sain, et décider s'il remplace
+`model.json` en production. C'est la piste la plus directe vers une
+amélioration mesurable identifiée dans cette session.
