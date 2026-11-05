@@ -334,7 +334,7 @@ des données au 20/10, une reproduction exacte n'est probablement pas
 possible — seule une nouvelle campagne d'évaluation live (point 8) donne un
 signal fiable sur la performance réelle actuelle du modèle promu.
 
-## 10. (Levier concret, probablement la vraie amélioration disponible dès maintenant) Les seuils par source, déjà câblés dans le code courant, récupèrent la précision perdue au point 9
+## 10. Les seuils par source, déjà câblés dans le code courant, récupèrent la précision perdue au point 9 — mais ne mesurent toujours pas le trafic réel (voir correctif ci-dessous)
 
 En creusant pourquoi la reproduction plafonne à precision 0,56 malgré un
 rappel confortable (0,95), `selected_metrics_by_source` de
@@ -377,9 +377,31 @@ probablement plus faible qu'entre point 9 (0,56) et la promotion (0,830)
 mais non nul. Seule une vraie validation indépendante (nouvelle campagne
 vivante, point 8) confirmerait le chiffre hors échantillon.
 
-**Décision à prendre par l'utilisateur, pas par l'agent (cohérent avec
-« document now, retrain decision later ») :** entraîner un nouveau candidat
-via `cmd/traincandidate -cross-fit` sur les données actuelles, vérifier que
-son `source_thresholds` reste stable/sain, et décider s'il remplace
-`model.json` en production. C'est la piste la plus directe vers une
-amélioration mesurable identifiée dans cette session.
+**Correctif (2026-11-05, suite immédiate) — ce levier ne répare probablement
+pas le vrai problème.** En vérifiant la composition des sources de
+`iteration-3-development-combined.jsonl` (le jeu qui alimente tout l'OOF des
+points 9 et 10) : **uniquement `github-advisories` et `ransomware.live`,
+zéro `darkweb_page`.** `training_data.csv` n'a même pas de colonne `source`.
+Le point 8 a déjà établi que le flux de production réel ne produit que du
+`darkweb_page`, et que sur un vrai échantillon de trafic `darkweb_page` le
+modèle actuel mesure precision=0,04 (tp=1, fp=24). Autrement dit : le point
+10 répare la précision sur deux sources qui, d'après le point 8, ne
+représentent quasiment pas le trafic que le modèle voit en vrai — l'une
+d'elles (`github-advisories`) n'a même aucun chemin d'ingestion vers la
+production (point 7). Le gain 0,56 → 0,807 est réel et reproductible, mais
+porte sur la mauvaise distribution. Il ne faut pas s'attendre à ce qu'il
+déplace le chiffre de 0,04 sur `darkweb_page`.
+
+**Conséquence pour la priorisation :** le vrai verrou reste le point 8 — il
+n'existe aujourd'hui aucun jeu d'évaluation étiqueté avec assez de positifs
+`darkweb_page` réels pour mesurer quoi que ce soit de fiable (campagne
+`not_qualified`, 1 à 4 positifs/140, et la tentative d'enrichissement par
+score a buté sur 96 % de quasi-doublons d'entraînement). Tant que ce jeu
+n'existe pas, ni le point 9 ni le point 10 ne peuvent être traduits en gain
+mesurable sur le trafic réel — l'étape suivante utile n'est pas d'entraîner
+un nouveau candidat avec seuils par source, mais de débloquer point 8 :
+obtenir de vrais positifs `darkweb_page` par recherche ciblée (mots-clés
+identifiants une page de compromission : fuite de données, accès initial,
+rançon, etc., combinés à une exclusion explicite des quasi-doublons
+d'entraînement) plutôt que par échantillonnage aléatoire ou par score du
+modèle actuel.
