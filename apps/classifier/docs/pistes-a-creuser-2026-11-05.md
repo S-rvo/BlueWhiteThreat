@@ -108,3 +108,68 @@ construire si on veut vraiment que cette source soit classifiée en continu.
 `github-advisories` doit rester un stratum d'évaluation ponctuel, ou devenir
 une source ingérée en continu (ce qui redéfinirait aussi la priorité du
 chantier du point 6 ci-dessus) ?
+
+## 8. (Priorité la plus haute) Le modèle de production n'a jamais été évalué sur son vrai trafic
+
+Le jeu de test indépendant qui a servi à promouvoir le modèle actuel
+(`model.json.evaluation.json`, iteration 3, 400 documents,
+`data/iteration-2026-10-20/iteration-3-independent-test-400.jsonl`) est
+composé à 100 % de `ransomware.live` (200) et `github-advisories` (200) —
+confirmé en comptant les paires `(source, source_type)` du fichier. **Zéro
+document `darkweb_page`.** Or le point 7 ci-dessus établit que le seul flux
+qui tourne réellement en continu en production est `sites.RunDarkwebScraper()`,
+qui ne produit que du `darkweb_page` (7583 documents en base dev). Les
+métriques de promotion (precision 0,758 / recall 0,911) ne mesurent donc
+littéralement rien sur ce que le modèle classe en vrai ; `github-advisories`,
+en plus de ne jamais être ingéré en continu (point 7), n'a même jamais servi
+qu'à évaluer un modèle qui ne le voit jamais en production.
+
+À faire, avant toute autre piste de ce document (1 à 7 inclus) : construire un
+jeu d'évaluation étiqueté à partir d'un échantillon stratifié de vrais
+`darkweb_page` tirés de la collection `article` live, selon le protocole
+décrit dans `docs/annotation-policy-v1.md`. L'outillage existe déjà pour la
+partie extraction (`cmd/exportpipeline`, qui gèle un corpus non étiqueté
+depuis le pipeline réel) et pour la partie campagne/annotation
+(`scripts/automatic_campaign.py` + `scripts/annotate_autoeval.py`, qui
+pilotent des annotateurs IA locaux via Ollama — confirmé disponible en local,
+modèles `qwen3:8b` et autres déjà chargés). Le point bloquant est que
+`exportpipeline` ne renseigne pas les champs `stratum`/`language` qu'exige
+`automatic_campaign.py freeze` pour la stratification — à définir avant de
+pouvoir lancer une vraie campagne sur du `darkweb_page` (par ex. stratifier
+par langue détectée et/ou par host plutôt que par type de source, puisque
+tout vient de la même source ici).
+
+Tant que ce point n'est pas traité, toute optimisation issue des points 1-7
+(seuil par source, encodeur multilingue, min-df, audit de poids) s'appuie sur
+une mesure qui ne représente pas le trafic réel.
+
+**Mise à jour (2026-11-05, campagne exécutée) :** `cmd/exportpipeline` a été
+étendu avec une stratification heuristique par langue détectée (script
+disposable, aucune dépendance ajoutée), produisant un pool de 4100 documents
+`darkweb_page` live. `scripts/automatic_campaign.py freeze` puis
+`scripts/run_automatic_campaign.py` (annotation IA locale `qwen3:8b` +
+`gemma4:e2b`, calibrate, puis evaluate du test gelé) ont tourné de bout en
+bout sur ce pool — voir `data/darkweb-live-eval-2026-11-05/` (gitignoré,
+contenu brut sensible).
+
+Résultat sur le split test (200 docs, 140 en consensus IA, couverture 70 %,
+54 abstentions, 6 désaccords) : **au seuil de production actuel (0,4888),
+precision = 0,04, recall = 1,0 (tp=1, fp=24, fn=0, tn=115)** — sur 25
+documents remontés comme menace, 24 sont des faux positifs. Le seuil
+recalibré par la campagne (0,7626, choisi en repli car l'objectif
+recall≥0,9/precision≥0,5 était infaisable sur la validation) donne
+precision=0, recall=0 (pire). Statut formel de la campagne :
+`not_qualified` — seulement 1 à 4 documents positifs en consensus sur 140,
+largement sous le minimum statistique (`per_stratum_class=10`) que le
+protocole exige lui-même pour certifier un chiffre.
+
+Donc ces chiffres ne sont pas certifiables au sens du protocole, mais l'écart
+avec la precision annoncée au moment de la promotion (0,758) est bien assez
+large (0,04 vs 0,758) pour ne pas être un artefact d'échantillonnage : sur le
+trafic réel, le modèle de production remonte presque uniquement des faux
+positifs. Prochaine étape : élargir le pool/l'échantillon pour dépasser les
+minimums statistiques (en particulier obtenir plus de documents positifs
+réels côté `darkweb_page`, ce qui demande probablement une recherche ciblée
+plutôt qu'un tirage aléatoire, le forum darkweb étant très majoritairement du
+bruit/commerce/pages mortes), avant de pouvoir recalibrer un seuil de
+production fiable pour cette source.
