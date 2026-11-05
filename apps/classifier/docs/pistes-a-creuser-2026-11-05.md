@@ -173,3 +173,44 @@ réels côté `darkweb_page`, ce qui demande probablement une recherche ciblée
 plutôt qu'un tirage aléatoire, le forum darkweb étant très majoritairement du
 bruit/commerce/pages mortes), avant de pouvoir recalibrer un seuil de
 production fiable pour cette source.
+
+**Mise à jour (2026-11-05, tentative d'enrichissement par score — plafond
+structurel atteint) :** pour obtenir plus de positifs, tentative de
+restratifier le pool par bande de score du modèle de production
+(`score_high`/`score_mid`/`score_low`) au lieu de la langue, afin de
+concentrer l'échantillon là où le modèle est confiant. Deux échecs de
+`automatic_campaign.py freeze` ont révélé un plafond structurel, pas un bug
+de script :
+
+- Les documents à score élevé sont majoritairement des quasi-doublons du jeu
+  d'entraînement lui-même : sur une bande resserrée de 370 documents
+  `score_high`, 357/370 (96 %) sont exclus par `freeze()` comme `known_id`
+  ou `reference_near_duplicate`. Le score élevé du modèle corrèle donc
+  surtout avec « ce document ressemble à ce que le modèle a mémorisé », pas
+  avec un signal généralisable indépendant.
+- Un nouvel export complet (`cmd/exportpipeline -limit 0`) confirme que le
+  corpus `darkweb_page` live dédupliqué contient exactement **4100**
+  documents uniques, identique à l'export précédent — rien de nouveau n'est
+  arrivé depuis. Sur ces 4100, seuls **580** passent le filtre de nouveauté
+  de `freeze()` (hors entraînement/fixtures/doublons internes), et la
+  première campagne en a déjà consommé **400**. Il ne reste donc qu'environ
+  **180** documents réellement neufs et éligibles dans tout le corpus live
+  actuel — largement sous les 400 qu'exige une seconde campagne
+  indépendante, quelle que soit la stratification choisie (confirmé en
+  repassant à une stratification par tercile de score sur tout le pool
+  restant : seulement 222 éligibles au total).
+
+Conclusion : le problème n'est pas la méthode d'échantillonnage mais le
+volume du corpus live lui-même. Une seconde campagne vraiment indépendante
+n'est pas possible tant que le crawler n'a pas accumulé davantage de pages
+`darkweb_page` nouvelles (le flux `sites.RunDarkwebScraper()` tourne en
+continu mais le volume net de contenu *nouveau et non dupliqué* est faible).
+Options pour la suite, non tranchées : (a) attendre que le corpus live
+grossisse puis retenter l'extraction/stratification par score ; (b) relâcher
+l'exigence d'indépendance et réutiliser une partie des documents déjà
+éligibles de la première campagne (même annotateurs IA, donc pas une mesure
+indépendante, mais permettrait de dépasser le plancher statistique
+`per_stratum_class=10`) ; (c) accepter pour l'instant le résultat
+`not_qualified` de la première campagne comme la meilleure mesure disponible
+et ne pas forcer une seconde campagne tant que le corpus n'a pas
+suffisamment grossi.
