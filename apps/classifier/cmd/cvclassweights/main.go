@@ -256,6 +256,7 @@ func run() error {
 	blockWords := flag.Int("block-words", 0, "experimental normalized block pooling; 0 keeps whole-document transform")
 	wordReserve := flag.Int("word-reserve", 0, "experimental unigram slots within the unchanged 5000-feature cap")
 	scriptReserve := flag.Int("script-reserve", 0, "experimental non-Latin feature slots, minimum frequency 3; OOF only")
+	nonLatinMinDF := flag.Int("nonlatin-min-df", 0, "experimental: lower min-df to this value for non-Latin tokens only, no reserved budget (pure chi-square competition); OOF only")
 	minDF := flag.Int("min-df", 1, "experimental minimum training-document frequency before vocabulary ranking")
 	familyPath := flag.String("fold-families", "", "experimental JSON arrays of representative IDs constrained to the same fold")
 	fitCandidate := flag.Bool("fit-candidate", false, "also save a provisional full-train candidate compatible with the production vectorizer")
@@ -589,6 +590,8 @@ func run() error {
 			var fitErr error
 			if *scriptReserve > 0 {
 				v, fitErr = tfidf.FitWithScriptReserve(trainTexts, trainY, *minDF, *scriptReserve, 3)
+			} else if *nonLatinMinDF > 0 {
+				v, fitErr = tfidf.FitWithNonLatinMinDF(trainTexts, trainY, *minDF, *nonLatinMinDF)
 			} else {
 				v, fitErr = tfidf.FitWithWordReserve(trainTexts, trainY, *minDF, *wordReserve)
 			}

@@ -34,6 +34,28 @@ un `min-df` plus bas spécifiquement pour les tokens non-ASCII (plutôt qu'une
 réserve de places dans le budget chi-deux), pour voir si le mécanisme de
 rejet est vraiment la compétition chi-deux ou le plancher `min-df` lui-même.
 
+**Résolu (2026-11-06) :** c'est bien la compétition chi-deux, pas le
+plancher `min-df`. Ajout de `tfidf.FitWithNonLatinMinDF` (minimum abaissé
+pour les tokens non-Latins seuls, **sans** budget réservé — ils rivalisent
+normalement pour les 5000 places sur le même classement chi-deux que tout le
+reste) et d'un flag `-nonlatin-min-df` dans `cmd/cvclassweights` pour le
+tester via le même harnais que `-script-reserve`. Diagnostic sur
+`training_data.csv` (2325 documents, proxy — le snapshot gelé
+`data/confirmation-campaign/` du protocole CV de référence est absent de ce
+worktree, comme déjà noté pour la piste identity_fraud ci-dessus) : abaisser
+le seuil de 10 à 3 pour les tokens non-Latins admet 15896 nouveaux candidats,
+mais **un seul** survit à la compétition chi-deux pour les 5000 places
+(vocabulaire non-Latin total : 1 → 2 tokens). Le plancher `min-df` n'est donc
+pas le goulot — même en l'abaissant, l'écrasante majorité des tokens
+non-Latins perd la course chi-deux face aux tokens latins/structurels
+existants. Ça explique pourquoi `--script-reserve` (qui force une réserve
+plutôt que de laisser rivaliser) était le seul des deux mécanismes à changer
+quoi que ce soit, et pourquoi même ce gain forcé restait localisé sans
+bouger la matrice de confusion globale (point déjà conclu « non concluant »
+deux fois) : le signal non-Latin existe mais est structurellement trop rare
+et trop dispersé pour rivaliser à armes égales dans un budget chi-deux
+partagé avec le reste du vocabulaire.
+
 ## 3. Deux FN sur contenu quasi vide (pages de connexion) : problème de collecte, pas de modèle
 
 Les deux "Black Hat Chat" dans le cluster FN (`cv-analyse-fp-fn-20261018.md`)
