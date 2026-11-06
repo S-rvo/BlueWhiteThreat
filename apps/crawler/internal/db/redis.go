@@ -161,6 +161,17 @@ func queueAtCapacity() (bool, error) {
 	return size >= maxQueueSize, nil
 }
 
+// QueueCapacityRatio expose maxQueueSize (privé) sous forme de ratio, pour
+// que des outils externes (ex: cmd/alerting) puissent détecter une file qui
+// approche la limite sans dupliquer la constante.
+func QueueCapacityRatio() (float64, error) {
+	size, err := GetQueueSize()
+	if err != nil {
+		return 0, err
+	}
+	return float64(size) / float64(maxQueueSize), nil
+}
+
 // AddURLToQueue ajoute une URL à la file d'attente si elle n'a pas déjà été traitée
 func AddURLToQueue(url string) error {
 	cleaned := cleanOnionURL(url)

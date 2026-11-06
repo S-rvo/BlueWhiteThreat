@@ -50,6 +50,49 @@ services:
       - NEO4J_PASSWORD=password
     restart: unless-stopped
 
+  # Réplicas additionnels pour le scaling horizontal : GetNextURLFromQueue
+  # dépile Redis de façon atomique, donc plusieurs process peuvent consommer
+  # la même file sans collision ni changement de code. Toujours gratés dans
+  # les 3 mêmes proxys Tor (tor1-3) -- ne pas ajouter de nouveaux conteneurs
+  # tor4/tor5 sans vérifier d'abord que ces 3 là sont bien le goulot
+  # d'étranglement réel (un conteneur Tor sert déjà plusieurs connexions
+  # simultanées), plutôt que de les ajouter par réflexe.
+  crawler2:
+    build:
+      context: .
+      dockerfile: apps/crawler/Dockerfile.dev
+    container_name: crawler_service_2
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+      - neo4j
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+    restart: unless-stopped
+
+  crawler3:
+    build:
+      context: .
+      dockerfile: apps/crawler/Dockerfile.dev
+    container_name: crawler_service_3
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+      - neo4j
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password
+    restart: unless-stopped
+
   # Scheduling réel pour l'approvisionnement en seeds (point 3 du plan de
   # fraîcheur) : désactivé par défaut (profile dédié), à lancer explicitement
   # avec `docker compose --profile seeds up collectseeds`. Tourne en boucle
@@ -70,6 +113,28 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+    restart: unless-stopped
+
+  # Alerting léger (sans Prometheus/Grafana) : vérifie périodiquement
+  # queue_size/oldest_crawled_age_seconds et notifie un webhook en cas de
+  # dérive. Opt-in (profile dédié) ; sans ALERT_WEBHOOK_URL il logue
+  # seulement, utile pour tester sans configurer de webhook.
+  alerting:
+    build:
+      context: .
+      dockerfile: apps/crawler/Dockerfile.dev
+    container_name: alerting_service
+    profiles:
+      - alerting
+    command: ["go", "run", "./cmd/alerting", "-loop"]
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
     restart: unless-stopped
 
   redis:
