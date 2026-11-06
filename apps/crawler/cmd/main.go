@@ -4,11 +4,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/api"
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/crawler"
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/db"
+	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/seeddata"
 	"github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter"
 )
 
@@ -24,6 +26,16 @@ func main() {
 	// Ajouter les URLs de départ
 	startURLs := []string{
 		"http://6nhmgdpnyoljh5uzr5kwlatx2u3diou4ldeommfxjz3wkhalzgjqxzqd.onion",
+	}
+	// Seeds additionnels : adresses de sites de leak ransomware connus,
+	// issues d'une source CTI clearnet publique (ThreatCluster, 2026-11-06),
+	// nécessaires car le seed unique précédent a un graphe de liens déjà
+	// entièrement exploré (voir pistes-a-creuser point 11).
+	for _, line := range strings.Split(seeddata.SeedURLsFile, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			startURLs = append(startURLs, line)
+		}
 	}
 	for _, url := range startURLs {
 		if err := db.AddURLToQueue(url); err != nil {
@@ -72,17 +84,55 @@ func startAPI() {
 	log.Fatal(srv.ListenAndServe())
 }
 
-// startCrawler gère la boucle principale de crawling
+// Sans la puissance de calcul de Google, la fraîcheur du graphe de liens ne
+// peut venir que d'un re-crawl périodique, borné, du contenu déjà visité
+// (voir pistes-a-creuser point 11) : un sweep modeste plutôt qu'un balayage
+// massif qu'on n'a pas les ressources Tor pour absorber.
+const (
+	staleRequeueMaxAge = 7 * 24 * time.Hour
+	staleRequeueLimit  = 200
+	staleRequeueEvery  = 30 * time.Minute
+	idleRetryInterval  = 2 * time.Minute
+)
+
+// startCrawler gère la boucle principale de crawling. Elle ne se termine
+// jamais : une file vide est un état transitoire (tout le graphe connu a été
+// visité récemment), pas une fin de tâche -- contrairement à l'ancien
+// comportement qui faisait sortir le process et comptait sur
+// `restart: unless-stopped` pour "relancer" une queue déjà vide.
 func startCrawler(maxDepth int) {
+	lastStaleSweep := time.Now()
+
+	maybeRequeueStale := func() {
+		if time.Since(lastStaleSweep) < staleRequeueEvery {
+			return
+		}
+		lastStaleSweep = time.Now()
+		requeued, err := db.RequeueStaleURLs(staleRequeueMaxAge, staleRequeueLimit)
+		if err != nil {
+			log.Printf("Error requeuing stale URLs: %v", err)
+			return
+		}
+		if requeued > 0 {
+			log.Printf("Requeued %d stale URLs for re-crawl", requeued)
+		}
+	}
+
 	for {
+		maybeRequeueStale()
+
 		queueSize, err := db.GetQueueSize()
 		if err != nil {
-			log.Fatalf("Error getting queue size: %v", err)
+			log.Printf("Error getting queue size: %v", err)
+			time.Sleep(idleRetryInterval)
+			continue
 		}
 
 		if queueSize == 0 {
-			log.Println("Queue is empty. Crawler has completed.")
-			break
+			crawled, _ := db.GetCrawledCount()
+			log.Printf("Queue is empty. Idling %s before checking again. Total crawled so far: %d", idleRetryInterval, crawled)
+			time.Sleep(idleRetryInterval)
+			continue
 		}
 
 		url, err := db.GetNextURLFromQueue()
@@ -112,9 +162,6 @@ func startCrawler(maxDepth int) {
 		processURL(url, maxDepth)
 		time.Sleep(500 * time.Millisecond)
 	}
-
-	crawled, _ := db.GetCrawledCount()
-	log.Printf("Crawling complete! Total URLs crawled: %d", crawled)
 }
 
 // processURL traite une URL spécifique : crawling + stockage
