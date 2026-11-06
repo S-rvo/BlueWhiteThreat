@@ -147,11 +147,31 @@ func rebuildPriorityQueue() error {
 }
 
 // maxQueueSize borne la file d'attente : sans la puissance de calcul de
-// Google, un seul worker à ~2 URLs/s ne peut pas absorber une file qui
-// grossirait sans limite (seeds + liens découverts + requeue de fraîcheur).
-// Au-delà, les nouveaux ajouts sont silencieusement ignorés (backpressure)
-// plutôt que de laisser la file dériver vers une taille ingérable.
+// Google, les quelques workers de ce projet (à ~2 URLs/s chacun) ne peuvent
+// pas absorber une file qui grossirait sans limite (seeds + liens découverts
+// + requeue de fraîcheur). Au-delà, les nouveaux ajouts sont silencieusement
+// ignorés (backpressure) plutôt que de laisser la file dériver vers une
+// taille ingérable.
 const maxQueueSize = 5000
+
+// alertCooldownKeyPrefix préfixe les clés Redis utilisées par
+// TryMarkAlertSent pour que le cooldown d'alerte (cmd/alerting) survive un
+// redémarrage du conteneur, sans introduire de nouvelle structure dédiée.
+const alertCooldownKeyPrefix = "alerting:cooldown:"
+
+// TryMarkAlertSent renvoie true si l'alerte `condition` peut être envoyée
+// maintenant (et marque son cooldown dans Redis via une clé à expiration),
+// false si une alerte pour cette même condition a déjà été envoyée pendant
+// la fenêtre `cooldown`. Le marquage est atomique (SET ... NX) : utile le
+// jour où plusieurs instances d'alerting tournent en parallèle.
+func TryMarkAlertSent(condition string, cooldown time.Duration) (bool, error) {
+	key := alertCooldownKeyPrefix + condition
+	ok, err := RedisClient.SetNX(ctx, key, time.Now().Unix(), cooldown).Result()
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
+}
 
 func queueAtCapacity() (bool, error) {
 	size, err := GetQueueSize()

@@ -51,12 +51,15 @@ services:
     restart: unless-stopped
 
   # Réplicas additionnels pour le scaling horizontal : GetNextURLFromQueue
-  # dépile Redis de façon atomique, donc plusieurs process peuvent consommer
-  # la même file sans collision ni changement de code. Toujours gratés dans
-  # les 3 mêmes proxys Tor (tor1-3) -- ne pas ajouter de nouveaux conteneurs
-  # tor4/tor5 sans vérifier d'abord que ces 3 là sont bien le goulot
-  # d'étranglement réel (un conteneur Tor sert déjà plusieurs connexions
-  # simultanées), plutôt que de les ajouter par réflexe.
+  # dépile Redis de façon atomique (SPop, ou SRandMemberN+SRem conditionné sur
+  # removed>0), donc plusieurs process peuvent consommer la même file sans
+  # collision ni changement de code. Toujours gratés dans les 3 mêmes proxys
+  # Tor (tor1-3) -- ne pas ajouter de nouveaux conteneurs tor4/tor5 sans
+  # vérifier d'abord que ces 3 là sont bien le goulot d'étranglement réel :
+  # `docker compose logs crawler crawler2 crawler3 | grep -i "proxy\|timeout"`
+  # sur une fenêtre de quelques heures. Un taux d'erreurs/timeouts proxy en
+  # hausse avec le nombre de réplicas (et non juste le volume d'URLs) est le
+  # signal à chercher, pas une intuition.
   crawler2:
     build:
       context: .

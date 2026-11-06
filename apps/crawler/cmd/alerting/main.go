@@ -38,11 +38,25 @@ const (
 	maxCheckInterval     = 6 * time.Hour
 
 	// alertCooldown évite de spammer le webhook à chaque tick une fois un
-	// seuil franchi. Gardé en mémoire du process (pas persisté dans Redis) :
-	// un redémarrage du conteneur peut réémettre une alerte déjà envoyée,
-	// compromis accepté pour rester simple.
+	// seuil franchi. Persisté dans Redis (db.TryMarkAlertSent) : un
+	// redémarrage du conteneur ne réémet pas une alerte déjà envoyée.
 	alertCooldown = 6 * time.Hour
 )
+
+// condition identifie un type d'alerte, utilisé comme clé de cooldown.
+type condition string
+
+const (
+	conditionQueueCapacity condition = "queue_capacity"
+	conditionFreshness     condition = "freshness"
+)
+
+// alert associe une condition déclenchée à son message, pour séparer
+// l'évaluation des seuils (pure, testable) de l'envoi (effets de bord).
+type alert struct {
+	condition condition
+	message   string
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -71,10 +85,12 @@ func run() error {
 	}
 	defer db.CloseRedis()
 
-	lastSent := map[string]time.Time{}
+	trySend := func(c condition) (bool, error) {
+		return db.TryMarkAlertSent(string(c), alertCooldown)
+	}
 
 	checkOnce := func() {
-		if err := checkThresholds(webhookURL, lastSent); err != nil {
+		if err := checkThresholds(webhookURL, trySend); err != nil {
 			log.Printf("Erreur vérification des seuils: %v", err)
 		}
 	}
@@ -90,45 +106,75 @@ func run() error {
 	}
 }
 
-func checkThresholds(webhookURL string, lastSent map[string]time.Time) error {
+// checkThresholds lit les métriques courantes depuis Redis, détermine quelles
+// alertes doivent se déclencher (evaluateThresholds, pure), puis les émet
+// (maybeAlert, avec cooldown via trySend).
+func checkThresholds(webhookURL string, trySend func(condition) (bool, error)) error {
 	ratio, err := db.QueueCapacityRatio()
 	if err != nil {
 		return fmt.Errorf("lecture ratio de capacité: %w", err)
-	}
-	if ratio >= queueCapacityWarnRatio {
-		maybeAlert(webhookURL, lastSent, "queue_capacity",
-			fmt.Sprintf("Crawler: file d'attente à %.0f%% de sa capacité (seuil: %.0f%%)", ratio*100, queueCapacityWarnRatio*100))
 	}
 
 	stats, err := db.FetchCrawlerStats()
 	if err != nil {
 		return fmt.Errorf("lecture des stats: %w", err)
 	}
+	var oldestAge time.Duration
+	hasAge := false
 	if raw, ok := stats["oldest_crawled_age_seconds"]; ok {
 		ageSeconds, err := strconv.ParseInt(raw, 10, 64)
 		if err == nil {
-			age := time.Duration(ageSeconds) * time.Second
-			if age > staleAgeWarnThreshold {
-				maybeAlert(webhookURL, lastSent, "freshness",
-					fmt.Sprintf("Crawler: l'URL la plus ancienne non re-crawlée date de %s (seuil: %s) -- le sweep de fraîcheur semble bloqué", age.Round(time.Hour), staleAgeWarnThreshold))
-			}
+			oldestAge = time.Duration(ageSeconds) * time.Second
+			hasAge = true
 		}
 	}
 
+	for _, a := range evaluateThresholds(ratio, oldestAge, hasAge) {
+		maybeAlert(webhookURL, trySend, a)
+	}
 	return nil
 }
 
-func maybeAlert(webhookURL string, lastSent map[string]time.Time, condition, message string) {
-	if last, ok := lastSent[condition]; ok && time.Since(last) < alertCooldown {
+// evaluateThresholds décide, à partir de métriques déjà lues, quelles
+// alertes doivent se déclencher. Aucun appel réseau/Redis ici : testable
+// sans dépendance externe.
+func evaluateThresholds(queueRatio float64, oldestAge time.Duration, hasAge bool) []alert {
+	var alerts []alert
+
+	if queueRatio >= queueCapacityWarnRatio {
+		alerts = append(alerts, alert{
+			condition: conditionQueueCapacity,
+			message:   fmt.Sprintf("Crawler: file d'attente à %.0f%% de sa capacité (seuil: %.0f%%)", queueRatio*100, queueCapacityWarnRatio*100),
+		})
+	}
+
+	if hasAge && oldestAge > staleAgeWarnThreshold {
+		alerts = append(alerts, alert{
+			condition: conditionFreshness,
+			message:   fmt.Sprintf("Crawler: l'URL la plus ancienne non re-crawlée date de %s (seuil: %s) -- le sweep de fraîcheur semble bloqué", oldestAge.Round(time.Hour), staleAgeWarnThreshold),
+		})
+	}
+
+	return alerts
+}
+
+// maybeAlert envoie l'alerte sauf si trySend indique qu'elle est encore en
+// cooldown (déjà envoyée récemment pour cette condition).
+func maybeAlert(webhookURL string, trySend func(condition) (bool, error), a alert) {
+	shouldSend, err := trySend(a.condition)
+	if err != nil {
+		log.Printf("Erreur vérification du cooldown pour %s: %v", a.condition, err)
 		return
 	}
-	lastSent[condition] = time.Now()
+	if !shouldSend {
+		return
+	}
 
-	log.Printf("ALERTE: %s", message)
+	log.Printf("ALERTE: %s", a.message)
 	if webhookURL == "" {
 		return
 	}
-	if err := sendWebhook(webhookURL, message); err != nil {
+	if err := sendWebhook(webhookURL, a.message); err != nil {
 		log.Printf("Erreur envoi webhook: %v", err)
 	}
 }
