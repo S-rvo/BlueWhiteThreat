@@ -1,5 +1,11 @@
 # Documents de conception archi / logicielle — DARKINT
 
+## État implémenté : accès aux sites — 6 novembre 2026
+
+Le scraper dispose d’une extension optionnelle d’accès par site : `config.go` charge les paramètres, `access.go` orchestre inscription/connexion/challenge et cookies, `credentials.go` chiffre les identifiants en AES-256-GCM. Le fichier d’état privé est lié à l’origine (schéma, hôte, port), remplacé atomiquement et sérialisé par un verrou local au processus. La clé est externe au fichier d’état, chargée via `.credentials.env` ou l’environnement. Les cookies sont protégés par permissions, sans chiffrement applicatif.
+
+Ce stockage n’est pas le registre des pages suivies : aucune admission NLP/IA n’est déclenchée par l’enregistrement d’un compte. Le verrou n’est pas distribué, le solveur externe reste à fournir et les états/reprises du cadrage MVP ne sont pas tous implémentés. Contrat, configuration et tests : [guide d’accès du scraper](scraper-access.md).
+
 ## Vue d'ensemble du pipeline
 
 ```mermaid

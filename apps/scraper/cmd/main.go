@@ -13,6 +13,10 @@ import (
 var DefaultInterval = 30 // 30 min par défaut
 
 func main() {
+	// Load the private key file first; existing process environment remains authoritative.
+	if err := godotenv.Load(".credentials.env"); err != nil && !os.IsNotExist(err) {
+		log.Fatal("Lecture du fichier de clé privée échouée.")
+	}
 	err := godotenv.Load()
 	if err != nil {
 		log.Println("Aucun .env trouvé ou problème de lecture.")

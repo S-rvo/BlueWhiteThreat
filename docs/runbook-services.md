@@ -86,6 +86,8 @@ REDIS_PORT=6379
 SITES_CONFIG_PATH=./data/sites.json
 ```
 
+Le scraper charge aussi `apps/scraper/.credentials.env`, réservé à sa clé `BWT_CREDENTIALS_KEY`. Ce fichier privé est transmis uniquement au service scraper par Compose ; ne pas placer la clé dans le `.env` partagé avec MongoDB et le parser. Sur une nouvelle installation, suivre la [préparation de la clé](scraper-access.md#préparer-une-nouvelle-installation). Ne jamais remplacer une clé existante pour un simple redémarrage.
+
 Ajouter côté classifieur :
 
 ```dotenv
@@ -436,7 +438,30 @@ go test ./...
 
 **Critère prêt.** Les URL non traitées sont consommées, les documents sont upsertés dans `BlueWhiteThreat.article` et les URL terminées rejoignent `urls_scraped`.
 
-**Configuration de connexion optionnelle.** `apps/scraper/data/sites.json` ne doit contenir que les noms des variables d'environnement, jamais les identifiants eux-mêmes.
+**Configuration de connexion optionnelle.** `apps/scraper/data/sites.json` contient les URL, sélecteurs, chemins d’état et noms des variables d’environnement, jamais les identifiants eux-mêmes. Partir de `examples/sites.json` et suivre le [guide d’accès du scraper](scraper-access.md).
+
+- Avec `state_file`, `credentials_key_env` vaut par défaut `BWT_CREDENTIALS_KEY`.
+- Le fichier d’état lie les identifiants chiffrés à une origine ; ne pas le partager entre sites.
+- Les cookies sont restaurés en premier ; après expiration, le compte enregistré sert à la connexion.
+- `registration_attempted` évite les inscriptions répétées, même après un timeout.
+- Le solveur est un adaptateur HTTP à configurer, pas un service de résolution livré avec le projet.
+- Les clés et fichiers d’état sont à sauvegarder séparément ; les cookies ne sont pas chiffrés par cette implémentation.
+- La présence d’un compte n’influence pas les verdicts NLP/IA.
+
+Après modification de l’environnement, recréer le scraper :
+
+```bash
+docker compose up -d --no-deps --force-recreate scraper
+```
+
+Tests complémentaires depuis `apps/scraper` :
+
+```bash
+go test -race ./internal/sites
+go vet ./...
+```
+
+Les tests unitaires couvrent le chiffrement et la restauration, le lien au site, les clés invalides, les permissions, la configuration par défaut et le contrat HTTP du solveur. Les formulaires réels nécessitent encore une validation navigateur.
 
 **Limite importante.** Le code marque actuellement une URL comme scrapée même après un échec, afin d'éviter les boucles infinies. L'opérateur doit donc utiliser les logs pour distinguer succès et abandon ; un statut de tentative persistant reste à concevoir.
 

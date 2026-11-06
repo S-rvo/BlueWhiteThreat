@@ -25,6 +25,17 @@ Ce projet vise à fournir un outil de veille automatisée sur les menaces issues
 - [`docs/runbook-services.md`](docs/runbook-services.md) : datasheet pour préparer, lancer, tester, diagnostiquer et modifier chaque service selon les rôles technicien, analyste et développeur.
 - [`monitoring/README.md`](monitoring/README.md) : démarrage et exploitation du dashboard Grafana, des métriques Prometheus et des logs Loki.
 
+## Accès authentifié des scrapers
+
+Le scraper peut conserver un compte par site, réutiliser ses cookies puis se reconnecter avec les identifiants enregistrés. Les identifiants sont chiffrés en AES-256-GCM ; les cookies restent sensibles et protégés par les permissions du fichier. Une inscription optionnelle est limitée à une tentative persistante. Un adaptateur HTTP de résolution de challenge est disponible, sans fournisseur intégré ni prise en charge générique de reCAPTCHA/Turnstile.
+
+- Configuration et exploitation : [`docs/scraper-access.md`](docs/scraper-access.md).
+- Exemple de connecteur : [`apps/scraper/examples/sites.json`](apps/scraper/examples/sites.json).
+- Clé locale : `apps/scraper/.credentials.env`, ignorée par Git ; ne jamais la publier ni la régénérer au redémarrage.
+- Aucun site réel n'est préconfiguré. Un compte enregistré ne vaut pas admission au suivi CTI.
+
+Cette extension est distincte du périmètre MVP historique : voir la note du cadrage.
+
 ## Pipeline cible du MVP
 
 Les scrapers d'exploration découvrent des pages. Après contrôle de sûreté, le NLP puis l'IA décident automatiquement des pages à conserver et à suivre, avec extraction et validation des IOC. Des scrapers de suivi distincts reviennent sur ces pages à cadence configurable ; aucune validation humaine initiale ou périodique n'est requise. Chaque contenu modifié repasse par le même pipeline. Les restrictions d'accès restent applicables indépendamment de la pertinence CTI.

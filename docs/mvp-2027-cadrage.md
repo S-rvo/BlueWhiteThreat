@@ -1,8 +1,14 @@
 # Cadrage de référence — MVP BlueWhiteThreat, janvier 2027
 
 > Statut : brouillon de travail à valider par les deux étudiants  
-> Dernière mise à jour : 19 octobre 2026
+> Dernière mise à jour documentaire : 6 novembre 2026
 > Ticket de référence : GitHub #22
+
+## Note d’implémentation — extension des accès, 6 novembre 2026
+
+Le cadrage ci-dessous conserve le contrat MVP historique, notamment sa matrice des obstacles. Le code du scraper comporte désormais une extension optionnelle distincte : inscription bornée, sessions persistantes, identifiants chiffrés liés au site et adaptateur HTTP de challenge. Voir le [guide d’accès du scraper](scraper-access.md) pour le comportement réellement implémenté et ses limites. Cette extension ne constitue pas une validation de l’ensemble des exigences du MVP.
+
+En particulier, les cookies actuels sont stockés dans un fichier 0600, sans chiffrement applicatif ; le coffre référencé depuis MongoDB, la rotation automatisée, les états opérationnels complets et la reprise planifiée restent des objectifs, pas des fonctions livrées. L’admission CTI demeure indépendante de la possession d’un compte.
 
 ## 1. Finalité du MVP
 

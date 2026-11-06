@@ -1,0 +1,29 @@
+{
+  "example.test": {
+    "login_url": "https://example.test/login",
+    "username_selector": "#username",
+    "password_selector": "#password",
+    "submit_selector": "#login-submit",
+    "success_selector": "#logout",
+    "username_env": "FORUM_USER",
+    "password_env": "FORUM_PASSWORD",
+    "state_file": "/run/bwt-sessions/example.json",
+    "registration": {
+      "url": "https://example.test/register",
+      "fields": {
+        "#username": "FORUM_USER",
+        "#password": "FORUM_PASSWORD",
+        "#email": "FORUM_EMAIL"
+      },
+      "submit_selector": "#register-submit",
+      "success_selector": "#registration-complete"
+    },
+    "captcha": {
+      "selector": "#captcha-challenge",
+      "answer_selector": "#captcha-answer",
+      "solver_url": "https://solver.example.test/solve",
+      "token_env": "CAPTCHA_SOLVER_TOKEN"
+    },
+    "credentials_key_env": "BWT_CREDENTIALS_KEY"
+  }
+}

@@ -75,6 +75,7 @@ services:
       - MONGO_HOST=mongodb
     env_file:
       - ./apps/scraper/.env
+      - ./apps/scraper/.credentials.env
     restart: unless-stopped
 
   classifier:

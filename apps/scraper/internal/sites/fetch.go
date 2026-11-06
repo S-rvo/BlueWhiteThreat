@@ -50,17 +50,11 @@ func envOrEmpty(name string) string {
 // si cfg est non-nil, puis renvoie le texte brut du body.
 func FetchPage(ctx context.Context, targetURL string, cfg *SiteConfig) (string, error) {
 	if cfg != nil {
-		username := envOrEmpty(cfg.UsernameEnv)
-		password := envOrEmpty(cfg.PasswordEnv)
-		if err := chromedp.Run(ctx,
-			chromedp.Navigate(cfg.LoginURL),
-			chromedp.WaitVisible(cfg.UsernameSelector, chromedp.ByQuery),
-			chromedp.SendKeys(cfg.UsernameSelector, username, chromedp.ByQuery),
-			chromedp.SendKeys(cfg.PasswordSelector, password, chromedp.ByQuery),
-			chromedp.Click(cfg.SubmitSelector, chromedp.ByQuery),
-		); err != nil {
-			return "", fmt.Errorf("login failed for %s: %w", targetURL, err)
+		release, err := prepareAccess(ctx, targetURL, cfg)
+		if err != nil {
+			return "", err
 		}
+		defer release()
 	}
 
 	var html string
@@ -71,6 +65,18 @@ func FetchPage(ctx context.Context, targetURL string, cfg *SiteConfig) (string, 
 		return "", fmt.Errorf("fetch failed for %s: %w", targetURL, err)
 	}
 
+	if cfg != nil {
+		if err := checkChallenge(ctx, cfg.CAPTCHA); err != nil {
+			return "", err
+		}
+		// A standalone challenge may have navigated to the actual content.
+		if err := chromedp.Run(ctx, chromedp.OuterHTML("body", &html, chromedp.ByQuery)); err != nil {
+			return "", err
+		}
+		if err := saveSession(ctx, cfg.StateFile); err != nil {
+			return "", err
+		}
+	}
 	content, err := ExtractMainContent(html)
 	if err != nil {
 		return "", fmt.Errorf("extract content for %s: %w", targetURL, err)
