@@ -405,3 +405,56 @@ identifiants une page de compromission : fuite de données, accès initial,
 rançon, etc., combinés à une exclusion explicite des quasi-doublons
 d'entraînement) plutôt que par échantillonnage aléatoire ou par score du
 modèle actuel.
+
+## 11. Le verrou volumétrique du point 8 a une cause identifiée : le crawler est à l'arrêt depuis son premier passage
+
+En creusant le point 8 (pourquoi le pool `darkweb_page` est plafonné à 4100
+documents), `docker logs crawler_service` montre le conteneur en boucle
+`restart: unless-stopped` toutes les ~60s depuis la fin de son unique passage
+(« Queue is empty. Crawler has completed. Total URLs crawled: 22923 ») — il
+ne découvre plus aucune URL neuve. Ce n'est pas un problème de volume de
+cibles .onion, c'est un problème de frontière de découverte : avant le
+fetch HTTP, `apps/crawler/internal/crawler/crawler.go` filtrait déjà les
+liens suivis avec `isRelevantLink` (mots-clés CTI dans l'URL/texte du lien),
+ce qui limite drastiquement les pages découvertes dès la première passe —
+une fois ce sous-graphe épuisé, la queue Redis reste vide pour de bon.
+
+**Un correctif existait déjà, non committé, non buildé, dans l'arbre de
+travail** (probablement une tentative antérieure dans cette même session,
+jamais finalisée) :
+- `crawler.go` : supprime le filtre `isRelevantLink` sur le suivi de lien —
+  la pertinence CTI se décide en aval, pas à la découverte ; les contrôles
+  CSAM/fermes bloquées restent appliqués avant toute requête.
+- `redis.go` (crawler et scraper) : ajoute un index de priorité
+  (`urls_to_crawl_priority`) par mots-clés de scoring, au-dessus de la queue
+  durable `urls_to_crawl` (source de vérité inchangée).
+- `scraper/internal/sites/page.go` + `Darkweb.go` : tague chaque page
+  sauvegardée avec `source_type: "darkweb_page"` et réécrit
+  `SaveScrapedPage` en pipeline Mongo atomique (ne préserve `relevance` que
+  si le contenu est inchangé).
+- `docker-compose.yaml` : retire le conteneur sidecar `classifier-model-sync`
+  et passe `classifier-prd` en bind-mount direct (lecture seule) du dépôt au
+  lieu d'un volume Docker.
+
+**Vérifié (2026-11-05/06) :** `go vet`/`go build`/`go test ./...` passent sans
+erreur sur `apps/crawler` et `apps/scraper` avec ces changements — aucune
+régression sur les tests existants. Aucun de ces tests n'exerce le nouveau
+comportement (suppression du filtre, priorité, écriture Mongo) : ça confirme
+seulement « ça compile et rien de connu n'a cassé », pas que le nouveau
+comportement est correct. Les conteneurs n'ont pas été rebuild ni redéployés
+— décision explicitement laissée à l'utilisateur (changement de périmètre de
+crawl sur le dark web + écriture Mongo, sur une infra qui tourne réellement).
+
+**Pourquoi c'est la piste la plus directe vers une amélioration réelle du
+modèle :** points 9/10 sont bloqués par l'absence de signal `darkweb_page`
+(point 8), et point 8 est bloqué par l'absence de nouvelles pages collectées.
+Ce correctif attaque directement cette cause racine. Tant qu'il n'est pas
+déployé et laissé tourner assez longtemps pour regarnir le pool au-delà de
+4100 documents, aucune nouvelle campagne d'évaluation ni aucun nouveau
+candidat entraîné sur du signal `darkweb_page` réel n'est possible — on
+tournerait en rond sur le même pool épuisé.
+
+**Décision à prendre par l'utilisateur :** rebuild + redéploiement des
+conteneurs `crawler`/`scraper` (et le changement `docker-compose.yaml`
+associé pour `classifier-prd`), puis surveillance pour confirmer que le
+crawler recommence à découvrir des URLs neuves.
