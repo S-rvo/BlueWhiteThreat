@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Exige un `git fetch` récent avant de committer, pour qu'un agent (Claude,
+# Codex, ou humain) ne commite jamais à l'aveugle sans avoir vu si un autre
+# agent a déjà poussé du travail entre-temps. Contexte : un agent a cru devoir
+# "récupérer" un commit d'un autre agent qui était déjà présent localement --
+# ce hook force à vérifier l'état réel avant d'agir, pas après.
+
+max_age_seconds=600
+
+git_dir=$(git rev-parse --git-common-dir)
+fetch_head="$git_dir/FETCH_HEAD"
+
+# Pas de remote configuré : rien à fetcher, on laisse passer.
+if ! git remote | grep -q .; then
+    exit 0
+fi
+
+if [[ ! -f "$fetch_head" ]]; then
+    echo "Commit rejeté : aucun 'git fetch' n'a jamais été fait dans ce repo." >&2
+    echo "  lancez d'abord : git fetch origin" >&2
+    exit 1
+fi
+
+if [[ "$(uname)" == "Darwin" ]]; then
+    last_fetch=$(stat -f %m "$fetch_head")
+else
+    last_fetch=$(stat -c %Y "$fetch_head")
+fi
+
+now=$(date +%s)
+age=$((now - last_fetch))
+
+if (( age > max_age_seconds )); then
+    echo "Commit rejeté : dernier 'git fetch' il y a $((age / 60)) min (max ${max_age_seconds}s)." >&2
+    echo "  lancez d'abord : git fetch origin" >&2
+    exit 1
+fi
+
+exit 0

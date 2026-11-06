@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Rejette tout message de commit qui ne suit pas la convention déjà en place
+# dans l'historique de ce repo (feat/fix/docs/chore/tune/security(scope): ...).
+# Empêche un agent (Claude, Codex, ou humain) de committer avec un message
+# générique du type "update" ou "wip" qui perd le contexte du pourquoi.
+
+msg_file="$1"
+first_line=$(head -n1 "$msg_file")
+
+pattern='^(feat|fix|docs|chore|tune|security|refactor|test|perf)\([a-zA-Z0-9_.,\/ -]+\): .+'
+
+if [[ "$first_line" =~ $pattern ]]; then
+    exit 0
+fi
+
+echo "Commit rejeté : le message doit suivre la convention type(scope): description" >&2
+echo "  reçu    : $first_line" >&2
+echo "  attendu : feat(crawler): description, fix(scraper): description, etc." >&2
+exit 1
