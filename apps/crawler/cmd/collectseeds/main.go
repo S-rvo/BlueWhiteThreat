@@ -23,10 +23,12 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/db"
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/seeddata"
+	"golang.org/x/net/proxy"
 )
 
 // knownFiles liste les fichiers markdown du dépôt fastfire/deepdarkCTI
@@ -69,9 +71,24 @@ const (
 	// CTI source ne change pas assez vite pour justifier plus qu'un passage
 	// hebdomadaire, et on n'a pas la capacité réseau/Redis pour plus.
 	loopInterval = 7 * 24 * time.Hour
+
+	// livenessWorkers borne le nombre de vérifications Tor concurrentes :
+	// le dépôt CTI référence des adresses historiques (marketplaces/gangs
+	// saisis ou fermés) sans garantie de fraîcheur -- sans ce filtre, un
+	// lot de seeds peut être presque entièrement mort (constaté le
+	// 2026-11-08). Réparti sur les 3 proxies tor1-3 déjà utilisés par le
+	// crawler (voir internal/crawler/crawler.go) pour ne pas saturer un seul
+	// proxy.
+	livenessWorkers = 12
+
+	// livenessTimeout couvre la construction du circuit Tor, observée
+	// jusqu'à ~13s pour un service vivant lors du diagnostic manuel.
+	livenessTimeout = 20 * time.Second
 )
 
 var onionPattern = regexp.MustCompile(`(?i)[a-z2-7]{16,56}\.onion`)
+
+var torProxies = []string{"tor1:9050", "tor2:9050", "tor3:9050"}
 
 func main() {
 	if err := run(); err != nil {
@@ -143,6 +160,10 @@ func runOnce(files []string, dryRun bool) error {
 	}
 
 	log.Printf("Total adresses .onion uniques: %d", len(found))
+
+	found = filterLiveAddresses(found)
+	log.Printf("Adresses vivantes après vérification Tor: %d", len(found))
+
 	if dryRun {
 		for addr := range found {
 			fmt.Println("http://" + addr)
@@ -202,4 +223,88 @@ func fetchOnionAddresses(client *http.Client, file string, found map[string]bool
 		found[strings.ToLower(m)] = true
 	}
 	return len(found) - before, nil
+}
+
+// filterLiveAddresses sonde chaque adresse via Tor et élimine celles qui ne
+// répondent pas (service saisi/fermé). N'importe quelle réponse HTTP compte
+// comme "vivante", y compris une erreur applicative (4xx/5xx) : seul l'échec
+// de connexion/résolution au niveau Tor (HSDir introuvable, timeout...)
+// disqualifie une adresse -- même logique que le diagnostic manuel qui a
+// identifié ce problème (un 500 de Facebook onion valait comme succès).
+func filterLiveAddresses(addrs map[string]bool) map[string]bool {
+	type probeResult struct {
+		addr  string
+		alive bool
+	}
+
+	jobs := make(chan string)
+	results := make(chan probeResult)
+	var wg sync.WaitGroup
+
+	for i := 0; i < livenessWorkers; i++ {
+		client, err := newTorHTTPClient(torProxies[i%len(torProxies)])
+		if err != nil {
+			log.Printf("Erreur création client Tor: %v", err)
+			continue
+		}
+		wg.Add(1)
+		go func(client *http.Client) {
+			defer wg.Done()
+			for addr := range jobs {
+				results <- probeResult{addr: addr, alive: isReachable(client, addr)}
+			}
+		}(client)
+	}
+
+	go func() {
+		for addr := range addrs {
+			jobs <- addr
+		}
+		close(jobs)
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	live := map[string]bool{}
+	deadCount := 0
+	for r := range results {
+		if r.alive {
+			live[r.addr] = true
+		} else {
+			deadCount++
+		}
+	}
+	log.Printf("Vérification de vivacité Tor: %d vivantes, %d injoignables (sur %d)", len(live), deadCount, len(addrs))
+	return live
+}
+
+func newTorHTTPClient(proxyAddr string) (*http.Client, error) {
+	dialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+	if err != nil {
+		return nil, err
+	}
+	contextDialer, ok := dialer.(proxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf("le dialer SOCKS5 pour %s ne supporte pas le contexte", proxyAddr)
+	}
+	return &http.Client{
+		Transport: &http.Transport{DialContext: contextDialer.DialContext},
+		Timeout:   livenessTimeout,
+	}, nil
+}
+
+func isReachable(client *http.Client, addr string) bool {
+	req, err := http.NewRequest(http.MethodGet, "http://"+addr, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return true
 }
