@@ -76,14 +76,11 @@ func Crawler(startURL string, depthMax int) ([]string, []string, int, error) {
 		c.OnHTML("a[href]", func(e *colly.HTMLElement) {
 			link := e.Attr("href")
 			absLink := e.Request.AbsoluteURL(link)
-			linkText := e.Text
 
-			// Ajouter seulement si c'est un lien .onion pertinent (mots-clés
-			// cyber-threat-intel dans l'URL ou le texte du lien) et non
-			// bloqué : le check se fait ici, avant la requête HTTP, pas
-			// seulement à l'ajout dans la queue Redis, pour que Colly ne
-			// suive jamais récursivement les backends CSAM connus.
-			if onionRegex.MatchString(absLink) && isRelevantLink(absLink, linkText) && !csamfilter.IsBlockedURL(absLink) && !db.IsFarmBackend(absLink) {
+			// La collecte de production reste indépendante du modèle et de ses
+			// mots-clés : la pertinence CTI est décidée en aval. Les contrôles de
+			// contenu bloqué et de fermes restent appliqués avant toute requête.
+			if onionRegex.MatchString(absLink) && !csamfilter.IsBlockedURL(absLink) && !db.IsFarmBackend(absLink) {
 				mu.Lock()
 				foundLinks = append(foundLinks, absLink)
 				mu.Unlock()
