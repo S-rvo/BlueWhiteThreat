@@ -103,6 +103,30 @@ func FinishClaim(u, token string, success bool, delay time.Duration, status ...i
 	}
 	return err
 }
+// DropClaim acknowledges the current lease without rescheduling: the URL is
+// moved to the blocked dead-letter ("crawler:blocked") instead of being
+// recycled through "crawler:scheduled". Use this for URLs rejected by policy
+// (CSAM/farm), as opposed to FinishClaim's transient-failure retry path.
+func DropClaim(u, token string) error {
+	host, err := HostKey(u)
+	if err != nil {
+		return err
+	}
+	v, err := RedisClient.Eval(ctx, `
+ if redis.call('HGET',KEYS[1],ARGV[1])~=ARGV[2] or tonumber(redis.call('ZSCORE',KEYS[2],ARGV[1]) or '0')<=tonumber(ARGV[3]) then return 0 end
+ redis.call('HDEL',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1])
+ local host=ARGV[4]
+ redis.call('HSET','crawler:host_ready',host,ARGV[3])
+ redis.call('ZADD','crawler:hosts',ARGV[3],host)
+ redis.call('ZADD','crawler:blocked',ARGV[3],ARGV[1])
+ redis.call('HDEL','crawler:attempts',ARGV[1])
+ redis.call('HINCRBY','crawler:stats','blocked_dropped_total',1)
+ return 1`, []string{"crawler:tokens", "crawler:inflight"}, u, token, time.Now().Unix(), host).Int()
+	if err == nil && v == 0 {
+		return fmt.Errorf("expired or superseded lease")
+	}
+	return err
+}
 func boolInt(b bool) int {
 	if b {
 		return 1

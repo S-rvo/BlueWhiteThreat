@@ -170,8 +170,8 @@ func crawlerWorker(ctx context.Context, maxDepth int, sweep bool) {
 		// l'ajout, sinon ces entrées historiques sont crawlées en
 		// direct sur Tor sans aucun contrôle.
 		if csamfilter.IsBlockedURL(url) || db.IsFarmBackend(url) {
-			if err := db.FinishClaim(url, token, true, 30*24*time.Hour, http.StatusForbidden); err != nil {
-				log.Printf("Error marking blocked URL as crawled: %v", err)
+			if err := db.DropClaim(url, token); err != nil {
+				log.Printf("Error dropping blocked URL: %v", err)
 			}
 			continue
 		}
