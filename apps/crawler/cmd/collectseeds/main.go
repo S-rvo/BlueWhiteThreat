@@ -20,6 +20,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"regexp"
@@ -79,7 +80,20 @@ var extraSources = []string{
 // Aligné sur les signaux CTI déjà priorisés par le crawler (queuePriority).
 var ctiSearchKeywords = []string{"ransomware", "leak", "market", "forum", "stealer", "breach", "exploit"}
 
-const ahmiaSearchBase = "https://ahmia.fi/search/?q="
+// Depuis 2026 Ahmia protège sa recherche par un champ caché anti-bot (nom ET
+// valeur randomisés à chaque chargement, lié à un cookie de session) : sans
+// lui, tout GET /search/?q= est redirigé 302 vers l'accueil. On récupère donc
+// d'abord l'accueil (cookie posé dans le jar partagé du client), on en parse
+// le jeton, puis on l'injecte dans chaque requête. ahmiaTokenPattern capture
+// (nom, valeur) de ce champ ; sur échec de parsing on ignore Ahmia (best
+// effort). Ces URLs restent en dur (ahmiaHomeURL/ahmiaSearchBase) -- comme
+// knownFiles, aucune URL arbitraire opérateur n'est fetchée.
+const (
+	ahmiaHomeURL    = "https://ahmia.fi/"
+	ahmiaSearchBase = "https://ahmia.fi/search/?q="
+)
+
+var ahmiaTokenPattern = regexp.MustCompile(`(?i)<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*value="([^"]+)"`)
 
 const (
 	rawBaseURL      = "https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/"
@@ -146,27 +160,86 @@ func run() error {
 	}
 }
 
-// sourceURLs assemble la liste bornée et en dur des sources clearnet publiques
-// moissonnées à chaque passage : fichiers deepdarkCTI, annuaires/trackers
-// (levier ②) et une requête de recherche Ahmia par mot-clé CTI (levier ③).
-// Toutes les URLs sont en dur -- comme knownFiles, aucune URL arbitraire
-// fournie par l'opérateur n'est fetchée.
+// sourceURLs assemble la part statique des sources clearnet moissonnées à
+// chaque passage : fichiers deepdarkCTI et annuaires/trackers (levier ②). Les
+// requêtes de recherche Ahmia (levier ③) sont ajoutées séparément par
+// ahmiaSearchURLs car elles exigent un jeton résolu à l'exécution. Toutes les
+// URLs sont en dur -- comme knownFiles, aucune URL arbitraire opérateur.
 func sourceURLs(files []string) []string {
-	sources := make([]string, 0, len(files)+len(extraSources)+len(ctiSearchKeywords))
+	sources := make([]string, 0, len(files)+len(extraSources))
 	for _, f := range files {
 		sources = append(sources, rawBaseURL+f)
 	}
 	sources = append(sources, extraSources...)
-	for _, kw := range ctiSearchKeywords {
-		sources = append(sources, ahmiaSearchBase+url.QueryEscape(kw))
-	}
 	return sources
+}
+
+// ahmiaSearchURLs résout le formulaire de recherche Ahmia (voir
+// ahmiaTokenPattern) et construit une URL de recherche par mot-clé CTI, jeton
+// anti-bot inclus. Best effort : sur accueil injoignable ou jeton introuvable,
+// log et renvoie nil -- la collecte continue sur les autres sources. Le client
+// passé doit porter le cookie jar partagé pour que le cookie de session posé
+// par l'accueil accompagne les requêtes de recherche.
+func ahmiaSearchURLs(client *http.Client) []string {
+	resp, err := client.Get(ahmiaHomeURL)
+	if err != nil {
+		log.Printf("Ahmia: accueil injoignable, recherche ignorée: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		log.Printf("Ahmia: lecture accueil échouée, recherche ignorée: %v", err)
+		return nil
+	}
+	m := ahmiaTokenPattern.FindStringSubmatch(string(body))
+	if m == nil {
+		log.Printf("Ahmia: jeton anti-bot introuvable (formulaire modifié ?), recherche ignorée")
+		return nil
+	}
+	token := url.QueryEscape(m[1]) + "=" + url.QueryEscape(m[2])
+	urls := make([]string, 0, len(ctiSearchKeywords))
+	for _, kw := range ctiSearchKeywords {
+		urls = append(urls, ahmiaSearchBase+url.QueryEscape(kw)+"&"+token)
+	}
+	return urls
+}
+
+// onionLocationHarvester capte l'en-tête Onion-Location sur chaque réponse HTTP
+// de la chaîne, y compris les redirections 3xx intermédiaires que le client
+// suit automatiquement (levier ④). Sans ce transport, un miroir Tor annoncé sur
+// un 302 serait perdu car fetchOnionAddresses ne voit que la réponse finale.
+type onionLocationHarvester struct {
+	base  http.RoundTripper
+	found map[string]bool
+}
+
+func (h *onionLocationHarvester) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := h.base.RoundTrip(req)
+	if resp != nil {
+		for _, m := range onionPattern.FindAllString(resp.Header.Get("Onion-Location"), -1) {
+			h.found[strings.ToLower(m)] = true
+		}
+	}
+	return resp, err
 }
 
 func runOnce(files []string, dryRun bool) error {
 	found := map[string]bool{}
-	client := &http.Client{Timeout: fetchTimeout}
+	// Jar partagé : Ahmia lie son jeton anti-bot à un cookie de session posé
+	// par l'accueil (voir ahmiaSearchURLs). Transport harvester : capte les
+	// Onion-Location sur toute la chaîne de redirection (levier ④).
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return fmt.Errorf("cookie jar: %w", err)
+	}
+	client := &http.Client{
+		Timeout:   fetchTimeout,
+		Jar:       jar,
+		Transport: &onionLocationHarvester{base: http.DefaultTransport, found: found},
+	}
 	sources := sourceURLs(files)
+	sources = append(sources, ahmiaSearchURLs(client)...)
 	fetchFailures := 0
 	for _, source := range sources {
 		n, err := fetchOnionAddresses(client, source, found)
