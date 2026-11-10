@@ -181,6 +181,14 @@ func crawlerWorker(ctx context.Context, maxDepth int, sweep bool) {
 	}
 }
 
+// releaseForRetry relâche la lease en échec : la politesse hôte est rendue,
+// le compteur de tentatives avance, le dead-letter reste atteignable.
+func releaseForRetry(url, token string) {
+	if e := db.FinishClaim(url, token, false, db.RetryDelay(url)); e != nil {
+		log.Printf("release: %v", e)
+	}
+}
+
 // processURL traite une URL spécifique : crawling + stockage
 func processURL(parent context.Context, url, token string, maxDepth int) {
 	workCtx, cancel := context.WithCancel(parent)
@@ -214,6 +222,7 @@ func processURL(parent context.Context, url, token string, maxDepth int) {
 	metadata, err := db.FetchMetadata(url)
 	if err != nil {
 		log.Printf("metadata: %v", err)
+		releaseForRetry(url, token)
 		return
 	}
 	fetchStarted := time.Now()
@@ -241,6 +250,7 @@ func processURL(parent context.Context, url, token string, maxDepth int) {
 	// Persist discovery before acknowledgment so a storage failure is replayed.
 	if err := db.SaveURL(url); err != nil {
 		log.Printf("graph: %v", err)
+		releaseForRetry(url, token)
 		return
 	}
 	acceptedLinks := make([]string, 0, len(result.Links))
@@ -251,6 +261,7 @@ func processURL(parent context.Context, url, token string, maxDepth int) {
 		reason, err := db.AddURLToQueue(link)
 		if err != nil {
 			log.Printf("enqueue: %v", err)
+			releaseForRetry(url, token)
 			return
 		}
 
@@ -260,12 +271,14 @@ func processURL(parent context.Context, url, token string, maxDepth int) {
 	}
 	if err := db.SaveLinks(url, acceptedLinks); err != nil {
 		log.Printf("graph: %v", err)
+		releaseForRetry(url, token)
 		return
 	}
 	interval := crawler.RevisitInterval(result, metadata)
 	if result.Status != http.StatusNotModified {
 		if err := db.SaveClaimMetadata(url, token, result.ETag, result.Modified, result.Hash); err != nil {
 			log.Printf("metadata: %v", err)
+			releaseForRetry(url, token)
 			return
 		}
 	}
