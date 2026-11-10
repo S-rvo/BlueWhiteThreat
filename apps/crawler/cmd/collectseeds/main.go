@@ -58,10 +58,13 @@ var knownFiles = map[string]bool{
 	"telegram_threat_actors.md": true,
 }
 
-// defaultFiles cible les catégories les plus pertinentes pour amorcer un
-// crawl darkweb CTI (forums, marketplaces, groupes ransomware), plutôt que
-// les 5 fichiers déjà référencés (mais jamais branchés) côté scraper.
-const defaultFiles = "forum.md,markets.md,ransomware_gang.md,maas.md,exploits.md,search_engines.md"
+// defaultFiles cible les catégories deepdarkCTI les plus riches en adresses
+// .onion pour amorcer un crawl darkweb CTI. Levier ① (élargir les points
+// d'entrée) : au-delà des forums/marketplaces/ransomware, on moissonne aussi
+// phishing, RAT, échantillons malware, contrefaçon, defacement et le fourre-tout
+// "others" — chaque catégorie supplémentaire ouvre des régions du graphe que le
+// link-following seul n'atteint jamais. Rester <= maxFilesAllowed.
+const defaultFiles = "forum.md,markets.md,ransomware_gang.md,maas.md,exploits.md,search_engines.md,phishing.md,rat.md,malware_samples.md,counterfeit_goods.md,defacement.md,others.md"
 
 // extraSources complète les fichiers deepdarkCTI par des annuaires et trackers
 // CTI clearnet publics (levier ② : diversifier les sources de seeds). Liste en
@@ -71,6 +74,14 @@ const defaultFiles = "forum.md,markets.md,ransomware_gang.md,maas.md,exploits.md
 var extraSources = []string{
 	"https://dark.fail/",
 	"https://raw.githubusercontent.com/joshhighet/ransomwatch/main/groups.json",
+	// Le README deepdarkCTI agrège des .onion de toutes les catégories (y
+	// compris celles non listées dans defaultFiles) : une porte d'entrée large
+	// et stable, même dépôt que rawBaseURL.
+	"https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/README.md",
+	// ransomware.live : tracker CTI public de gangs ransomware, publie les
+	// adresses .onion des sites de fuite. Best effort -- vérifier/ajuster le
+	// chemin s'il casse (l'API versionne).
+	"https://ransomware.live/",
 }
 
 // ctiSearchKeywords pilote le levier ③ : chaque mot-clé devient une requête de
@@ -78,7 +89,12 @@ var extraSources = []string{
 // emprunte la couverture d'un moteur Tor existant au lieu de ne compter que
 // sur le link-following, tari dès que la composante connexe est explorée.
 // Aligné sur les signaux CTI déjà priorisés par le crawler (queuePriority).
-var ctiSearchKeywords = []string{"ransomware", "leak", "market", "forum", "stealer", "breach", "exploit"}
+var ctiSearchKeywords = []string{
+	"ransomware", "leak", "market", "forum", "stealer", "breach", "exploit",
+	"carding", "fraud", "credentials", "dump", "botnet", "malware", "phishing",
+	"hacking", "cvv", "database", "counterfeit", "drugs", "vendor", "trojan",
+	"rat", "darkweb", "paste",
+}
 
 // Depuis 2026 Ahmia protège sa recherche par un champ caché anti-bot (nom ET
 // valeur randomisés à chaque chargement, lié à un cookie de session) : sans
@@ -97,7 +113,7 @@ var ahmiaTokenPattern = regexp.MustCompile(`(?i)<input[^>]*type="hidden"[^>]*nam
 
 const (
 	rawBaseURL      = "https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/"
-	maxFilesAllowed = 6
+	maxFilesAllowed = 18      // tout knownFiles peut être demandé (18 catégories deepdarkCTI)
 	maxBodyBytes    = 8 << 20 // 8 MiB : couvre les pages d'annuaire et les listes/recherches Ahmia, plus volumineuses qu'un simple markdown
 	fetchTimeout    = 15 * time.Second
 

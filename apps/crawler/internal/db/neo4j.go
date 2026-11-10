@@ -17,23 +17,32 @@ var driver neo4j.DriverWithContext
 func InitNeo4jDriver(uri, username, password string) error {
 	var err error
 	driver, err = neo4j.NewDriverWithContext(uri, neo4j.BasicAuth(username, password, ""))
-	return err
+	if err != nil {
+		return err
+	}
+	if err := EnsureGraphSchema(); err != nil {
+		driver.Close(context.Background())
+		return err
+	}
+	return nil
 }
 
 // SaveURL crée un nœud URL s'il n'existe pas déjà
 func SaveURL(url string) error {
+	c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	cleanedURL := cleanOnionURL(url)
-	session := driver.NewSession(context.Background(), neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
-	defer session.Close(context.Background())
+	session := driver.NewSession(c, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(c)
 
-	_, err := session.ExecuteWrite(context.Background(), func(tx neo4j.ManagedTransaction) (any, error) {
-		result, err := tx.Run(context.Background(),
+	_, err := session.ExecuteWrite(c, func(tx neo4j.ManagedTransaction) (any, error) {
+		result, err := tx.Run(c,
 			"MERGE (u:URL {url: $url})",
 			map[string]interface{}{"url": cleanedURL})
 		if err != nil {
 			return nil, err
 		}
-		_, err = result.Consume(context.Background())
+		_, err = result.Consume(c)
 		return nil, err
 	})
 	return err
@@ -128,4 +137,21 @@ func Ready() error {
 		return err
 	}
 	return driver.VerifyConnectivity(c)
+}
+
+// EnsureGraphSchema is migration v1. Existing duplicates cause an actionable
+// startup error; no existing nodes are removed or merged automatically.
+func EnsureGraphSchema() error {
+	c, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	session := driver.NewSession(c, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(c)
+	result, err := session.Run(c, "CREATE CONSTRAINT crawler_url_unique IF NOT EXISTS FOR (u:URL) REQUIRE u.url IS UNIQUE", nil)
+	if err == nil {
+		_, err = result.Consume(c)
+	}
+	if err != nil {
+		return fmt.Errorf("crawler schema v1 (URL.url uniqueness): inspect duplicate URLs before migration: %w", err)
+	}
+	return nil
 }

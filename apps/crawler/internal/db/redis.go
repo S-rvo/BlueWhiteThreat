@@ -86,7 +86,7 @@ func SetupRedisQueues() error {
 		return fmt.Errorf("backfill urls_crawled_at: %w", err)
 	}
 
-	return nil
+	return ReconcileFrontier()
 }
 
 func backfillCrawledAt() error {
@@ -209,8 +209,9 @@ const (
 // traitée, et renvoie la raison du résultat (voir QueueReason*).
 func AddURLToQueue(url string) (string, error) {
 	cleaned := cleanOnionURL(url)
-	host, valid := discoveryKey(cleaned)
-	if !valid {
+	_, valid := discoveryKey(cleaned)
+	host, hostErr := HostKey(cleaned)
+	if !valid || hostErr != nil {
 		return "trap", nil
 	}
 
@@ -221,14 +222,23 @@ func AddURLToQueue(url string) (string, error) {
 		return QueueReasonFarm, nil
 	}
 
-	return RedisClient.Eval(ctx, `
+	return RedisClient.Eval(ctx, indexURLLua+`
  if redis.call('SISMEMBER',KEYS[1],ARGV[1])==1 or redis.call('SISMEMBER',KEYS[2],ARGV[1])==1 or redis.call('ZSCORE',KEYS[3],ARGV[1]) or redis.call('ZSCORE',KEYS[4],ARGV[1]) or redis.call('ZSCORE','crawler:dead',ARGV[1]) then return 'duplicate' end
- if tonumber(redis.call('HGET','crawler:discovery_budget',ARGV[4]) or '0')>=10000 then
- redis.call('HINCRBY','crawler:stats','budget_rejected_total',1); return 'budget' end
- redis.call('HINCRBY','crawler:discovery_budget',ARGV[4],1)
+
+ if redis.call('HEXISTS','crawler:url_host',ARGV[1])==0 then
+ if redis.call('HLEN','crawler:url_host')>=1000000 or tonumber(redis.call('HGET','crawler:stored_per_host',ARGV[4]) or '0')>=50000 then
+ redis.call('HINCRBY','crawler:stats','storage_rejected_total',1); return 'storage' end
+ redis.call('HSET','crawler:url_host',ARGV[1],ARGV[4])
+ redis.call('HINCRBY','crawler:stored_per_host',ARGV[4],1)
+ end
+ local budget='crawler:discovery_daily:'..ARGV[4]..':'..math.floor(tonumber(ARGV[3])/86400)
+ if tonumber(redis.call('GET',budget) or '0')>=10000 then
+ redis.call('ZADD',KEYS[3],(math.floor(tonumber(ARGV[3])/86400)+1)*86400,ARGV[1])
+ redis.call('HINCRBY','crawler:stats','budget_deferred_total',1); return 'budget' end
+ redis.call('INCR',budget); redis.call('EXPIRE',budget,172800)
  if redis.call('SCARD',KEYS[1])>=tonumber(ARGV[2]) then
  redis.call('ZADD',KEYS[3],ARGV[3],ARGV[1]); redis.call('HINCRBY','crawler:stats','deferred_total',1); return 'capacity' end
- redis.call('SADD',KEYS[1],ARGV[1]); redis.call('HINCRBY','crawler:stats','urls_queued',1); return 'added'
+ redis.call('SADD',KEYS[1],ARGV[1]); indexURL(ARGV[1],ARGV[3]); redis.call('HINCRBY','crawler:stats','urls_queued',1); return 'added'
  `, []string{"urls_to_crawl", "urls_crawled", "crawler:scheduled", "crawler:inflight"}, cleaned, maxQueueSize, time.Now().Unix(), host).Text()
 
 }
@@ -357,10 +367,10 @@ func RequeueStaleURLs(maxAge time.Duration, limit int64) (int64, error) {
 
 	var requeued int64
 	for _, url := range stale {
-		added, err := RedisClient.Eval(ctx, `
+		added, err := RedisClient.Eval(ctx, indexURLLua+`
  if redis.call('SCARD',KEYS[1])>=tonumber(ARGV[2]) then return 0 end
  if redis.call('ZSCORE',KEYS[2],ARGV[1]) or redis.call('ZSCORE',KEYS[3],ARGV[1]) then return 0 end
- return redis.call('SADD',KEYS[1],ARGV[1])`, []string{"urls_to_crawl", "crawler:scheduled", "crawler:inflight"}, url, maxQueueSize).Int64()
+ local added=redis.call('SADD',KEYS[1],ARGV[1]); indexURL(ARGV[1],0); return added`, []string{"urls_to_crawl", "crawler:scheduled", "crawler:inflight"}, url, maxQueueSize).Int64()
 		if err != nil {
 			return requeued, err
 		}

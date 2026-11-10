@@ -25,3 +25,10 @@ func TestAdaptiveRevisit(t *testing.T) {
 		})
 	}
 }
+
+func TestHighValueFreshnessCeiling(t *testing.T) {
+	interval := RevisitInterval(Result{Status: 304}, map[string]string{"cti_priority": "3", "interval_seconds": "86400"})
+	if interval != 6*time.Hour {
+		t.Fatal(interval)
+	}
+}

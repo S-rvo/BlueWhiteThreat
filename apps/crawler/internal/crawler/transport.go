@@ -13,6 +13,16 @@ import (
 )
 
 const responseLimit = 2 * 1024 * 1024
+const robotsLimit = 256 * 1024
+const robotsEntries = 128 // at most 32 MiB of cached bodies
+type robotsUnavailable struct {
+	status int
+	retry  time.Duration
+}
+
+func (e *robotsUnavailable) Error() string {
+	return fmt.Sprintf("robots temporarily unavailable: HTTP %d", e.status)
+}
 
 type robotsEntry struct {
 	body    []byte
@@ -68,12 +78,16 @@ func (t *boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		resp.Header.Del("Content-Encoding")
 		resp.Uncompressed = true
 	}
-	body, err := io.ReadAll(io.LimitReader(reader, responseLimit+1))
+	limit := responseLimit
+	if robots {
+		limit = robotsLimit
+	}
+	body, err := io.ReadAll(io.LimitReader(reader, int64(limit)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > responseLimit {
-		return nil, fmt.Errorf("response exceeds %d decoded bytes", responseLimit)
+	if len(body) > limit {
+		return nil, fmt.Errorf("response exceeds %d decoded bytes", limit)
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	resp.ContentLength = int64(len(body))
@@ -84,17 +98,17 @@ func (t *boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if robots {
 		// Transient failures must reach the retry scheduler, never become an allow-all cache entry.
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
-			return nil, fmt.Errorf("robots temporarily unavailable: HTTP %d", resp.StatusCode)
+			return nil, &robotsUnavailable{resp.StatusCode, retryAfter(resp.Header.Get("Retry-After"), time.Now())}
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 || resp.StatusCode == 404 || resp.StatusCode == 410 {
 			robotsCache.Lock()
-			if len(robotsCache.entries) >= 2048 {
+			if len(robotsCache.entries) >= robotsEntries {
 				for k, v := range robotsCache.entries {
 					if time.Now().After(v.expires) {
 						delete(robotsCache.entries, k)
 					}
 				}
-				if len(robotsCache.entries) >= 2048 {
+				if len(robotsCache.entries) >= robotsEntries {
 					for k := range robotsCache.entries {
 						delete(robotsCache.entries, k)
 						break

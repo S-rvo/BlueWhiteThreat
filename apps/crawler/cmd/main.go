@@ -5,9 +5,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/api"
@@ -18,13 +20,15 @@ import (
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	// Initialisation des bases de données
 	initDatabases()
 	defer db.CloseRedis()
 	defer db.CloseNeo4j()
 
 	// Lancer l'API en parallèle
-	go startAPI()
+	go startAPI(ctx)
 
 	// Ajouter les URLs de départ
 	startURLs := []string{
@@ -47,7 +51,7 @@ func main() {
 	}
 
 	// Démarrer le crawler
-	startCrawler(0)
+	startCrawler(ctx, 0)
 }
 
 // initDatabases initialise Redis et Neo4j
@@ -73,7 +77,7 @@ func initDatabases() {
 }
 
 // startAPI lance l'API HTTP
-func startAPI() {
+func startAPI(ctx context.Context) {
 
 	router := api.NewRouter()
 	srv := &http.Server{
@@ -84,7 +88,15 @@ func startAPI() {
 		IdleTimeout:  120 * time.Second,
 	}
 	log.Println("API listening at http://localhost:8080")
-	log.Fatal(srv.ListenAndServe())
+	go func() {
+		<-ctx.Done()
+		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(c)
+	}()
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("API: %v", err)
+	}
 }
 
 // Sans la puissance de calcul de Google, la fraîcheur du graphe de liens ne
@@ -103,7 +115,7 @@ const (
 // visité récemment), pas une fin de tâche -- contrairement à l'ancien
 // comportement qui faisait sortir le process et comptait sur
 // `restart: unless-stopped` pour "relancer" une queue déjà vide.
-func startCrawler(maxDepth int) {
+func startCrawler(ctx context.Context, maxDepth int) {
 	workers := 4
 	if n, err := strconv.Atoi(os.Getenv("CRAWLER_WORKERS")); err == nil && n >= 1 && n <= 32 {
 		workers = n
@@ -111,11 +123,11 @@ func startCrawler(maxDepth int) {
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func(sweep bool) { defer wg.Done(); crawlerWorker(maxDepth, sweep) }(i == 0)
+		go func(sweep bool) { defer wg.Done(); crawlerWorker(ctx, maxDepth, sweep) }(i == 0)
 	}
 	wg.Wait()
 }
-func crawlerWorker(maxDepth int, sweep bool) {
+func crawlerWorker(ctx context.Context, maxDepth int, sweep bool) {
 	lastStaleSweep := time.Now()
 
 	maybeRequeueStale := func() {
@@ -133,17 +145,22 @@ func crawlerWorker(maxDepth int, sweep bool) {
 		}
 	}
 
-	for {
+	for ctx.Err() == nil {
 		maybeRequeueStale()
+		if sweep {
+			if err := db.DrainRenderedLinks(); err != nil {
+				log.Printf("rendered links: %v", err)
+			}
+		}
 
 		url, token, err := db.ClaimURL()
 		if err != nil {
 			log.Printf("Claim failed: %v", err)
-			time.Sleep(time.Second)
+			pause(ctx, time.Second)
 			continue
 		}
 		if url == "" {
-			time.Sleep(time.Second)
+			pause(ctx, time.Second)
 			continue
 		}
 
@@ -159,14 +176,14 @@ func crawlerWorker(maxDepth int, sweep bool) {
 			continue
 		}
 
-		processURL(url, token, maxDepth)
-		time.Sleep(500 * time.Millisecond)
+		processURL(ctx, url, token, maxDepth)
+		pause(ctx, 500*time.Millisecond)
 	}
 }
 
 // processURL traite une URL spécifique : crawling + stockage
-func processURL(url, token string, maxDepth int) {
-	workCtx, cancel := context.WithCancel(context.Background())
+func processURL(parent context.Context, url, token string, maxDepth int) {
+	workCtx, cancel := context.WithCancel(parent)
 	defer cancel()
 	started := time.Now()
 	defer func() {
@@ -199,7 +216,14 @@ func processURL(url, token string, maxDepth int) {
 		log.Printf("metadata: %v", err)
 		return
 	}
+	fetchStarted := time.Now()
 	result, err := crawler.FetchContext(workCtx, url, metadata)
+	if e := db.RecordHostFetch(url, result.Status, time.Since(fetchStarted), err != nil); e != nil {
+		log.Printf("host metrics: %v", e)
+	}
+	if workCtx.Err() != nil {
+		return
+	}
 	if err != nil {
 		delay := db.RetryDelay(url)
 		if result.RetryAfter > delay {
@@ -219,17 +243,22 @@ func processURL(url, token string, maxDepth int) {
 		log.Printf("graph: %v", err)
 		return
 	}
+	acceptedLinks := make([]string, 0, len(result.Links))
 	for _, link := range result.Links {
 		if workCtx.Err() != nil {
 			return
 		}
-		if _, err := db.AddURLToQueue(link); err != nil {
+		reason, err := db.AddURLToQueue(link)
+		if err != nil {
 			log.Printf("enqueue: %v", err)
 			return
 		}
 
+		if reason != "storage" && reason != "trap" && reason != db.QueueReasonBlocked && reason != db.QueueReasonFarm {
+			acceptedLinks = append(acceptedLinks, link)
+		}
 	}
-	if err := db.SaveLinks(url, result.Links); err != nil {
+	if err := db.SaveLinks(url, acceptedLinks); err != nil {
 		log.Printf("graph: %v", err)
 		return
 	}
@@ -242,5 +271,14 @@ func processURL(url, token string, maxDepth int) {
 	}
 	if err := db.FinishClaim(url, token, true, interval, result.Status); err != nil {
 		log.Printf("ack: %v", err)
+	}
+}
+
+func pause(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
 	}
 }
