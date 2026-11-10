@@ -11,16 +11,27 @@ import (
 var testRedis *miniredis.Miniredis
 
 func setupTestRedisClient(t *testing.T) {
-	if RedisClient != nil {
+	// Idempotence keyed on our OWN miniredis handle, never on RedisClient:
+	// if an earlier test (or integration flow) left RedisClient pointing at a
+	// real Redis, we must still stand up an isolated miniredis and rebind to
+	// it — otherwise cleanFreshnessKeys would Del against production. This is
+	// not hypothetical: a stale RedisClient here wiped the live frontier once.
+	if testRedis != nil {
 		return
 	}
 	server := miniredis.RunT(t)
 	testRedis = server
 	RedisClient = redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { RedisClient.Close(); RedisClient = nil })
+	t.Cleanup(func() { RedisClient.Close(); RedisClient = nil; testRedis = nil })
 }
 
 func cleanFreshnessKeys() {
+	// Last line of defense: these Del targets are the durable frontier itself.
+	// Refuse to run unless RedisClient is provably our isolated miniredis, so a
+	// misconfigured client can never delete production keys.
+	if testRedis == nil || RedisClient == nil || RedisClient.Options().Addr != testRedis.Addr() {
+		panic("cleanFreshnessKeys: refusing to Del against a non-miniredis Redis (call setupTestRedisClient first)")
+	}
 	RedisClient.Del(ctx, "urls_crawled", "urls_crawled_at", "urls_to_crawl", "urls_to_crawl_priority", "crawler:stats", "crawler:scheduled", "crawler:inflight", "crawler:tokens", "crawler:host_ready", "crawler:attempts")
 }
 
