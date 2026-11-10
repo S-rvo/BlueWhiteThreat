@@ -3,9 +3,11 @@ package crawler
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +26,14 @@ type Result struct {
 	RetryAfter           time.Duration
 	Denied               bool
 }
+
+// onionInBody surfaces v3 .onion addresses that appear as plain text -- forum
+// posts, paste dumps, directory listings -- rather than as <a href> links.
+// On Tor this is the dominant way addresses spread, and the only way to keep
+// discovering once the hyperlinked component reachable from the seeds is
+// exhausted. Exactly 56 base32 chars (v3 only) keeps false positives in
+// arbitrary page bodies negligible; v2 addresses are dead since Tor 0.4.6.
+var onionInBody = regexp.MustCompile(`(?i)[a-z2-7]{56}\.onion`)
 
 func allowed(raw string) bool {
 	u, err := url.Parse(raw)
@@ -51,7 +61,7 @@ func FetchContext(ctx context.Context, raw string, metadata map[string]string) (
 	rp := func(r *http.Request) (*url.URL, error) {
 		proxyMutex.Lock()
 		defer proxyMutex.Unlock()
-		return sharedProxy(r)
+		return sharedProxy(r.Clone(r.Context()))
 	}
 	return fetchContext(ctx, raw, metadata, rp, allowed)
 }
@@ -61,6 +71,7 @@ func fetch(raw string, metadata map[string]string, proxyFn colly.ProxyFunc, acce
 }
 func fetchContext(ctx context.Context, raw string, metadata map[string]string, proxyFn colly.ProxyFunc, accept func(string) bool) (Result, error) {
 	var result Result
+	redirectedDiscovery := false
 	if !accept(raw) {
 		return result, fmt.Errorf("invalid or blocked URL")
 	}
@@ -74,8 +85,16 @@ func fetchContext(ctx context.Context, raw string, metadata map[string]string, p
 	var robotSitemaps []string
 	c.WithTransport(&boundedTransport{base: transport, sitemaps: &robotSitemaps, ctx: ctx})
 	c.RedirectHandler = func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 || !accept(req.URL.String()) || (len(via) > 0 && !strings.EqualFold(req.URL.Host, via[0].URL.Host)) {
+		if len(via) >= 10 || !accept(req.URL.String()) {
 			return fmt.Errorf("redirect rejected")
+		}
+		if len(via) > 0 && (via[0].URL.Path != "/robots.txt" || !strings.EqualFold(req.URL.Host, via[0].URL.Host)) {
+			// Admit the destination as a separate task: its own robots policy and host budget apply.
+			if via[0].URL.Path != "/robots.txt" {
+				result.Links = append(result.Links, req.URL.String())
+				redirectedDiscovery = true
+			}
+			return http.ErrUseLastResponse
 		}
 		// Conditional validators belong to the original resource only.
 		req.Header.Del("If-None-Match")
@@ -119,10 +138,34 @@ func fetchContext(ctx context.Context, raw string, metadata map[string]string, p
 	c.OnHTML("a[href]", func(e *colly.HTMLElement) { addLink(e.Request.AbsoluteURL(e.Attr("href"))) })
 	// Sitemap indexes and URL sets enter the same durable frontier as HTML links.
 	c.OnXML("//*[local-name()='loc']", func(e *colly.XMLElement) { addLink(e.Request.AbsoluteURL(strings.TrimSpace(e.Text))) })
+	// Plain-text .onion mentions (bodies of forums, pastes, directories) and
+	// Onion-Location mirror headers are admitted as separate durable tasks,
+	// just like hyperlinks: their own robots policy and host budget apply.
+	c.OnResponse(func(r *colly.Response) {
+		for _, host := range onionInBody.FindAllString(r.Headers.Get("Onion-Location"), -1) {
+			addLink("http://" + strings.ToLower(host))
+		}
+		ct := strings.ToLower(r.Headers.Get("Content-Type"))
+		if ct != "" && !strings.HasPrefix(ct, "text/") && !strings.Contains(ct, "xml") && !strings.Contains(ct, "json") {
+			return
+		}
+		for _, host := range onionInBody.FindAllString(string(r.Body), -1) {
+			addLink("http://" + strings.ToLower(host))
+		}
+	})
 
 	err := c.Visit(raw)
+	var unavailable *robotsUnavailable
+	if errors.As(err, &unavailable) {
+		result.Status = unavailable.status
+		result.RetryAfter = unavailable.retry
+		return result, err
+	}
 	for _, sitemap := range robotSitemaps {
 		addLink(sitemap)
+	}
+	if redirectedDiscovery && result.Status >= 300 && result.Status < 400 {
+		return result, nil
 	}
 	if err == colly.ErrRobotsTxtBlocked {
 		result.Denied = true

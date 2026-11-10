@@ -20,6 +20,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -59,12 +60,31 @@ var knownFiles = map[string]bool{
 // defaultFiles cible les catégories les plus pertinentes pour amorcer un
 // crawl darkweb CTI (forums, marketplaces, groupes ransomware), plutôt que
 // les 5 fichiers déjà référencés (mais jamais branchés) côté scraper.
-const defaultFiles = "forum.md,markets.md,ransomware_gang.md"
+const defaultFiles = "forum.md,markets.md,ransomware_gang.md,maas.md,exploits.md,search_engines.md"
+
+// extraSources complète les fichiers deepdarkCTI par des annuaires et trackers
+// CTI clearnet publics (levier ② : diversifier les sources de seeds). Liste en
+// dur, même raison que knownFiles : ne jamais fetcher une URL arbitraire. Ces
+// endpoints sont best effort -- un 404/erreur réseau est logué et la collecte
+// continue sur les autres sources (vérifier/ajuster les chemins si l'un casse).
+var extraSources = []string{
+	"https://dark.fail/",
+	"https://raw.githubusercontent.com/joshhighet/ransomwatch/main/groups.json",
+}
+
+// ctiSearchKeywords pilote le levier ③ : chaque mot-clé devient une requête de
+// recherche Ahmia (clearnet) dont on moissonne les résultats .onion -- on
+// emprunte la couverture d'un moteur Tor existant au lieu de ne compter que
+// sur le link-following, tari dès que la composante connexe est explorée.
+// Aligné sur les signaux CTI déjà priorisés par le crawler (queuePriority).
+var ctiSearchKeywords = []string{"ransomware", "leak", "market", "forum", "stealer", "breach", "exploit"}
+
+const ahmiaSearchBase = "https://ahmia.fi/search/?q="
 
 const (
 	rawBaseURL      = "https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/"
 	maxFilesAllowed = 6
-	maxBodyBytes    = 2 << 20 // 2 MiB : une page markdown ne dépasse jamais cette taille
+	maxBodyBytes    = 8 << 20 // 8 MiB : couvre les pages d'annuaire et les listes/recherches Ahmia, plus volumineuses qu'un simple markdown
 	fetchTimeout    = 15 * time.Second
 
 	// loopInterval borne la fréquence de re-fetch en mode -loop : la liste
@@ -126,22 +146,40 @@ func run() error {
 	}
 }
 
+// sourceURLs assemble la liste bornée et en dur des sources clearnet publiques
+// moissonnées à chaque passage : fichiers deepdarkCTI, annuaires/trackers
+// (levier ②) et une requête de recherche Ahmia par mot-clé CTI (levier ③).
+// Toutes les URLs sont en dur -- comme knownFiles, aucune URL arbitraire
+// fournie par l'opérateur n'est fetchée.
+func sourceURLs(files []string) []string {
+	sources := make([]string, 0, len(files)+len(extraSources)+len(ctiSearchKeywords))
+	for _, f := range files {
+		sources = append(sources, rawBaseURL+f)
+	}
+	sources = append(sources, extraSources...)
+	for _, kw := range ctiSearchKeywords {
+		sources = append(sources, ahmiaSearchBase+url.QueryEscape(kw))
+	}
+	return sources
+}
+
 func runOnce(files []string, dryRun bool) error {
 	found := map[string]bool{}
 	client := &http.Client{Timeout: fetchTimeout}
+	sources := sourceURLs(files)
 	fetchFailures := 0
-	for _, file := range files {
-		n, err := fetchOnionAddresses(client, file, found)
+	for _, source := range sources {
+		n, err := fetchOnionAddresses(client, source, found)
 		if err != nil {
-			log.Printf("Erreur fetch %s: %v", file, err)
+			log.Printf("Erreur fetch %s: %v", source, err)
 			fetchFailures++
 			continue
 		}
-		log.Printf("%s: %d adresses .onion trouvées", file, n)
+		log.Printf("%s: %d adresses .onion trouvées", source, n)
 	}
 
 	fallbackUsed := false
-	if len(found) == 0 && fetchFailures == len(files) {
+	if len(found) == 0 && fetchFailures == len(sources) {
 		// La source réseau est totalement indisponible (dépôt déplacé, panne
 		// GitHub...). Plutôt que de ne rien ajouter silencieusement, on
 		// retombe sur la même liste statique de secours que le crawler
@@ -214,8 +252,12 @@ func recordStats(totalFound int, fallbackUsed bool, breakdown map[string]int) {
 	}
 }
 
-func fetchOnionAddresses(client *http.Client, file string, found map[string]bool) (int, error) {
-	resp, err := client.Get(rawBaseURL + file)
+// fetchOnionAddresses récupère une source clearnet publique (fichier markdown
+// CTI, annuaire, JSON de tracker, résultats de recherche Ahmia) et en extrait
+// les adresses .onion : par regex sur le corps, et via l'en-tête HTTP
+// Onion-Location si la source annonce son miroir Tor (levier ④).
+func fetchOnionAddresses(client *http.Client, source string, found map[string]bool) (int, error) {
+	resp, err := client.Get(source)
 	if err != nil {
 		return 0, err
 	}
@@ -224,14 +266,16 @@ func fetchOnionAddresses(client *http.Client, file string, found map[string]bool
 		return 0, fmt.Errorf("statut HTTP %d", resp.StatusCode)
 	}
 
+	before := len(found)
+	for _, m := range onionPattern.FindAllString(resp.Header.Get("Onion-Location"), -1) {
+		found[strings.ToLower(m)] = true
+	}
+
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
 		return 0, err
 	}
-
-	matches := onionPattern.FindAllString(string(body), -1)
-	before := len(found)
-	for _, m := range matches {
+	for _, m := range onionPattern.FindAllString(string(body), -1) {
 		found[strings.ToLower(m)] = true
 	}
 	return len(found) - before, nil
