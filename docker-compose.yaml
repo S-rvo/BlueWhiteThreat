@@ -108,7 +108,7 @@ services:
     container_name: collectseeds_service
     profiles:
       - seeds
-    command: ["go", "run", "./cmd/collectseeds", "-loop"]
+    command: ["go", "run", "./cmd/collectseeds", "-loop", "-interval=24h", "-files=forum.md,markets.md,ransomware_gang.md,phishing.md,maas.md,commercial_services.md"]
     volumes:
       - .:/app
     depends_on:
@@ -143,10 +143,48 @@ services:
   redis:
     image: redis:8.0-rc1-alpine
     container_name: redis_service
+    # AOF (appendfsync everysec) en plus des snapshots RDB : la frontière est
+    # la source de vérité durable du crawler ; sans AOF, un crash perd jusqu'à
+    # une heure de file (fenêtre RDB `save 3600 1`). everysec borne la perte à
+    # ~1s tout en gardant un débit correct. RDB reste actif pour les restore
+    # rapides et les backups ponctuels.
+    #
+    # rename-command "" neutralise FLUSHALL/FLUSHDB : le crawler n'en a jamais
+    # besoin, et l'AOF n'offre AUCUNE protection contre un wipe logique (un
+    # flush est appendé comme toute commande). Ferme au niveau serveur la
+    # classe d'incident du 2026-11-10 (suppression accidentelle de la file).
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--rename-command", "FLUSHALL", "", "--rename-command", "FLUSHDB", ""]
     volumes:
       - ./db/redis:/data
     ports:
       - "6379:6379"
+    restart: unless-stopped
+
+  # Snapshots RDB rotés hors du volume de travail : seule défense permettant un
+  # restore point-in-time AVANT une suppression logique ou une panne du disque
+  # hôte (AOF/RDB du volume vivent et meurent avec lui). `redis-cli --rdb`
+  # demande un dump cohérent au serveur sans toucher /data. Garde 14 jours.
+  redis-backup:
+    image: redis:8.0-rc1-alpine
+    container_name: redis_backup
+    volumes:
+      - ./db/redis-backups:/backups
+    depends_on:
+      - redis
+    entrypoint:
+      - sh
+      - -c
+      - >
+        while true; do
+        ts=$$(date +%Y%m%d-%H%M%S);
+        if redis-cli -h redis --rdb /backups/dump-$$ts.rdb; then
+        echo "backup ok: dump-$$ts.rdb";
+        else
+        echo "backup FAILED: $$ts" >&2;
+        fi;
+        ls -t /backups/dump-*.rdb 2>/dev/null | tail -n +15 | xargs -r rm -f;
+        sleep 86400;
+        done
     restart: unless-stopped
 
   scraper:
