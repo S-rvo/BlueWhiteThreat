@@ -116,6 +116,39 @@ func TestRequeueStaleURLs_RespectsLimit(t *testing.T) {
 	}
 }
 
+// Invariant du contrat de fraîcheur consommé par le scraper : tout membre de
+// "urls_crawled" doit conserver un score dans "urls_crawled_at", y compris après
+// un requeue de staleness. Si un requeue retirait le score (ou retirait l'URL de
+// urls_crawled_at sans la retirer de urls_crawled), le scraper la verrait comme
+// la plus ancienne et la déprioriserait indûment. RequeueStaleURLs ne doit
+// jamais toucher "urls_crawled_at".
+func TestRequeueStaleURLs_PreservesCrawledAtInvariant(t *testing.T) {
+	setupTestRedisClient(t)
+	cleanFreshnessKeys()
+	defer cleanFreshnessKeys()
+
+	stale := "http://inv-stale.onion"
+	fresh := "http://inv-fresh.onion"
+	now := time.Now()
+	RedisClient.SAdd(ctx, "urls_crawled", stale, fresh)
+	RedisClient.ZAdd(ctx, "urls_crawled_at", redis.Z{Score: float64(now.Add(-10 * 24 * time.Hour).Unix()), Member: stale})
+	RedisClient.ZAdd(ctx, "urls_crawled_at", redis.Z{Score: float64(now.Unix()), Member: fresh})
+
+	if _, err := RequeueStaleURLs(7*24*time.Hour, 200); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	members, err := RedisClient.SMembers(ctx, "urls_crawled").Result()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, m := range members {
+		if _, err := RedisClient.ZScore(ctx, "urls_crawled_at", m).Result(); err != nil {
+			t.Errorf("invariant rompu: %s est dans urls_crawled sans score urls_crawled_at: %v", m, err)
+		}
+	}
+}
+
 func TestBackfillCrawledAt_SeedsNowAndNeverOverwrites(t *testing.T) {
 	setupTestRedisClient(t)
 	cleanFreshnessKeys()
