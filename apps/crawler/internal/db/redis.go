@@ -150,8 +150,7 @@ func rebuildPriorityQueue() error {
 // Google, les quelques workers de ce projet (à ~2 URLs/s chacun) ne peuvent
 // pas absorber une file qui grossirait sans limite (seeds + liens découverts
 // + requeue de fraîcheur). Au-delà, les nouveaux ajouts sont silencieusement
-// ignorés (backpressure) plutôt que de laisser la file dériver vers une
-// taille ingérable.
+// différés durablement dans crawler:scheduled pour éviter de perdre les liens.
 const maxQueueSize = 5000
 
 // alertCooldownKeyPrefix préfixe les clés Redis utilisées par
@@ -210,6 +209,10 @@ const (
 // traitée, et renvoie la raison du résultat (voir QueueReason*).
 func AddURLToQueue(url string) (string, error) {
 	cleaned := cleanOnionURL(url)
+	host, valid := discoveryKey(cleaned)
+	if !valid {
+		return "trap", nil
+	}
 
 	if csamfilter.IsBlockedURL(cleaned) {
 		return QueueReasonBlocked, nil
@@ -218,41 +221,16 @@ func AddURLToQueue(url string) (string, error) {
 		return QueueReasonFarm, nil
 	}
 
-	atCapacity, err := queueAtCapacity()
-	if err != nil {
-		return "", err
-	}
-	if atCapacity {
-		return QueueReasonCapacity, nil
-	}
+	return RedisClient.Eval(ctx, `
+ if redis.call('SISMEMBER',KEYS[1],ARGV[1])==1 or redis.call('SISMEMBER',KEYS[2],ARGV[1])==1 or redis.call('ZSCORE',KEYS[3],ARGV[1]) or redis.call('ZSCORE',KEYS[4],ARGV[1]) or redis.call('ZSCORE','crawler:dead',ARGV[1]) then return 'duplicate' end
+ if tonumber(redis.call('HGET','crawler:discovery_budget',ARGV[4]) or '0')>=10000 then
+ redis.call('HINCRBY','crawler:stats','budget_rejected_total',1); return 'budget' end
+ redis.call('HINCRBY','crawler:discovery_budget',ARGV[4],1)
+ if redis.call('SCARD',KEYS[1])>=tonumber(ARGV[2]) then
+ redis.call('ZADD',KEYS[3],ARGV[3],ARGV[1]); redis.call('HINCRBY','crawler:stats','deferred_total',1); return 'capacity' end
+ redis.call('SADD',KEYS[1],ARGV[1]); redis.call('HINCRBY','crawler:stats','urls_queued',1); return 'added'
+ `, []string{"urls_to_crawl", "urls_crawled", "crawler:scheduled", "crawler:inflight"}, cleaned, maxQueueSize, time.Now().Unix(), host).Text()
 
-	pipe := RedisClient.Pipeline()
-	isCrawledCmd := pipe.SIsMember(ctx, "urls_crawled", cleaned)
-	isQueuedCmd := pipe.SIsMember(ctx, "urls_to_crawl", cleaned)
-	_, err = pipe.Exec(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	isCrawled, _ := isCrawledCmd.Result()
-	isQueued, _ := isQueuedCmd.Result()
-
-	if isCrawled || isQueued {
-		return QueueReasonDuplicate, nil
-	}
-
-	pipe = RedisClient.Pipeline()
-	pipe.SAdd(ctx, "urls_to_crawl", cleaned)
-	if queuePriority(cleaned) > 0 {
-		pipe.SAdd(ctx, "urls_to_crawl_priority", cleaned)
-	}
-	if _, err = pipe.Exec(ctx); err != nil {
-		return "", err
-	}
-	RedisClient.HIncrBy(ctx, "crawler:stats", "urls_queued", 1)
-	log.Printf("Added URL to queue: %s", cleaned)
-
-	return QueueReasonAdded, nil
 }
 
 // GetNextURLFromQueue récupère une URL de la file d'attente et la supprime
@@ -377,25 +355,16 @@ func RequeueStaleURLs(maxAge time.Duration, limit int64) (int64, error) {
 
 	sortByPriorityDesc(stale)
 
-	now := float64(time.Now().Unix())
 	var requeued int64
 	for _, url := range stale {
-		pipe := RedisClient.Pipeline()
-		addedCmd := pipe.SAdd(ctx, "urls_to_crawl", url)
-		// Bump the timestamp now, not after the crawl succeeds, so a stale
-		// entry can't be pulled into every sweep until it's actually revisited.
-		pipe.ZAdd(ctx, "urls_crawled_at", redis.Z{Score: now, Member: url})
-		if _, err := pipe.Exec(ctx); err != nil {
+		added, err := RedisClient.Eval(ctx, `
+ if redis.call('SCARD',KEYS[1])>=tonumber(ARGV[2]) then return 0 end
+ if redis.call('ZSCORE',KEYS[2],ARGV[1]) or redis.call('ZSCORE',KEYS[3],ARGV[1]) then return 0 end
+ return redis.call('SADD',KEYS[1],ARGV[1])`, []string{"urls_to_crawl", "crawler:scheduled", "crawler:inflight"}, url, maxQueueSize).Int64()
+		if err != nil {
 			return requeued, err
 		}
-		if queuePriority(url) > 0 {
-			if err := RedisClient.SAdd(ctx, "urls_to_crawl_priority", url).Err(); err != nil {
-				return requeued, err
-			}
-		}
-		if added, _ := addedCmd.Result(); added > 0 {
-			requeued++
-		}
+		requeued += added
 	}
 	if requeued > 0 {
 		RedisClient.HIncrBy(ctx, "crawler:stats", "stale_requeued_total", requeued)
@@ -449,6 +418,11 @@ func FetchCrawlerStats() (map[string]string, error) {
 		stats["oldest_crawled_age_seconds"] = fmt.Sprintf("%d", ageSeconds)
 	}
 
+	for name, key := range map[string]string{"inflight_count": "crawler:inflight", "scheduled_count": "crawler:scheduled", "dead_count": "crawler:dead"} {
+		if n, err := RedisClient.ZCard(ctx, key).Result(); err == nil {
+			stats[name] = fmt.Sprint(n)
+		}
+	}
 	return stats, nil
 }
 

@@ -9,6 +9,7 @@ func NewRouter() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", HealthCheckHandler)
+	mux.HandleFunc("/ready", ReadinessHandler)
 	mux.HandleFunc("/stats", GetCrawlerStatsHandler())
 
 	return CORS(mux)

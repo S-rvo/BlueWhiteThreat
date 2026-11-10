@@ -1,29 +1,27 @@
 package db
 
 import (
-	"os"
+	"github.com/alicebob/miniredis/v2"
 	"testing"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
+var testRedis *miniredis.Miniredis
+
 func setupTestRedisClient(t *testing.T) {
 	if RedisClient != nil {
 		return
 	}
-	host := os.Getenv("REDIS_HOST")
-	if host == "" {
-		host = "localhost"
-	}
-	RedisClient = redis.NewClient(&redis.Options{Addr: host + ":6379"})
-	if err := RedisClient.Ping(ctx).Err(); err != nil {
-		t.Skipf("Redis non disponible (%v) — lancer `docker compose up -d redis`", err)
-	}
+	server := miniredis.RunT(t)
+	testRedis = server
+	RedisClient = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { RedisClient.Close(); RedisClient = nil })
 }
 
 func cleanFreshnessKeys() {
-	RedisClient.Del(ctx, "urls_crawled", "urls_crawled_at", "urls_to_crawl", "urls_to_crawl_priority", "crawler:stats")
+	RedisClient.Del(ctx, "urls_crawled", "urls_crawled_at", "urls_to_crawl", "urls_to_crawl_priority", "crawler:stats", "crawler:scheduled", "crawler:inflight", "crawler:tokens", "crawler:host_ready", "crawler:attempts")
 }
 
 func TestMarkURLAsCrawled_RecordsTimestamp(t *testing.T) {
@@ -76,14 +74,13 @@ func TestRequeueStaleURLs_RequeuesOnlyEntriesOlderThanMaxAge(t *testing.T) {
 		t.Error("fresh URL should not have been requeued")
 	}
 
-	// The stale URL's timestamp must be bumped so a second sweep doesn't
-	// immediately pick it again before it's actually revisited.
+	// Scheduling must preserve the timestamp of the last successful fetch.
 	score, err := RedisClient.ZScore(ctx, "urls_crawled_at", stale).Result()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if int64(score) < now.Unix() {
-		t.Errorf("stale URL timestamp not bumped: %v", score)
+	if int64(score) != now.Add(-10*24*time.Hour).Unix() {
+		t.Errorf("success timestamp changed before fetch: %v", score)
 	}
 }
 

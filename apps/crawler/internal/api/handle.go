@@ -34,3 +34,11 @@ func GetCrawlerStatsHandler() http.HandlerFunc {
 		}
 	}
 }
+
+func ReadinessHandler(w http.ResponseWriter, r *http.Request) {
+	if err := db.Ready(); err != nil {
+		http.Error(w, "dependencies unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	HealthCheckHandler(w, r)
+}

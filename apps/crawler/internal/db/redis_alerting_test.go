@@ -95,7 +95,7 @@ func TestTryMarkAlertSent_ExpiresAfterCooldown(t *testing.T) {
 		t.Fatal("expected first call to succeed")
 	}
 
-	time.Sleep(700 * time.Millisecond)
+	testRedis.FastForward(700 * time.Millisecond)
 
 	ok, err = TryMarkAlertSent("test_condition", 500*time.Millisecond)
 	if err != nil {

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/api"
@@ -44,7 +47,7 @@ func main() {
 	}
 
 	// Démarrer le crawler
-	startCrawler(1)
+	startCrawler(0)
 }
 
 // initDatabases initialise Redis et Neo4j
@@ -101,10 +104,22 @@ const (
 // comportement qui faisait sortir le process et comptait sur
 // `restart: unless-stopped` pour "relancer" une queue déjà vide.
 func startCrawler(maxDepth int) {
+	workers := 4
+	if n, err := strconv.Atoi(os.Getenv("CRAWLER_WORKERS")); err == nil && n >= 1 && n <= 32 {
+		workers = n
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(sweep bool) { defer wg.Done(); crawlerWorker(maxDepth, sweep) }(i == 0)
+	}
+	wg.Wait()
+}
+func crawlerWorker(maxDepth int, sweep bool) {
 	lastStaleSweep := time.Now()
 
 	maybeRequeueStale := func() {
-		if time.Since(lastStaleSweep) < staleRequeueEvery {
+		if !sweep || time.Since(lastStaleSweep) < staleRequeueEvery {
 			return
 		}
 		lastStaleSweep = time.Now()
@@ -121,29 +136,14 @@ func startCrawler(maxDepth int) {
 	for {
 		maybeRequeueStale()
 
-		queueSize, err := db.GetQueueSize()
+		url, token, err := db.ClaimURL()
 		if err != nil {
-			log.Printf("Error getting queue size: %v", err)
-			time.Sleep(idleRetryInterval)
-			continue
-		}
-
-		if queueSize == 0 {
-			crawled, _ := db.GetCrawledCount()
-			log.Printf("Queue is empty. Idling %s before checking again. Total crawled so far: %d", idleRetryInterval, crawled)
-			time.Sleep(idleRetryInterval)
-			continue
-		}
-
-		url, err := db.GetNextURLFromQueue()
-		if err != nil {
-			log.Printf("Error getting next URL from queue: %v", err)
-			time.Sleep(1 * time.Second)
+			log.Printf("Claim failed: %v", err)
+			time.Sleep(time.Second)
 			continue
 		}
 		if url == "" {
-			log.Println("No URL returned from queue, but queue is not empty. Retrying...")
-			time.Sleep(1 * time.Second)
+			time.Sleep(time.Second)
 			continue
 		}
 
@@ -153,55 +153,94 @@ func startCrawler(maxDepth int) {
 		// l'ajout, sinon ces entrées historiques sont crawlées en
 		// direct sur Tor sans aucun contrôle.
 		if csamfilter.IsBlockedURL(url) || db.IsFarmBackend(url) {
-			if err := db.MarkURLAsCrawled(url); err != nil {
+			if err := db.FinishClaim(url, token, true, 30*24*time.Hour, http.StatusForbidden); err != nil {
 				log.Printf("Error marking blocked URL as crawled: %v", err)
 			}
 			continue
 		}
 
-		processURL(url, maxDepth)
+		processURL(url, token, maxDepth)
 		time.Sleep(500 * time.Millisecond)
 	}
 }
 
 // processURL traite une URL spécifique : crawling + stockage
-func processURL(url string, maxDepth int) {
-	log.Printf("Crawling URL: %s", url)
-
-	_, links, statusCode, err := crawler.Crawler(url, maxDepth)
-	if err != nil {
-		log.Printf("Error crawling URL %s: %v", url, err)
-		if err := db.MarkURLAsCrawled(url); err != nil {
-			log.Printf("Error marking URL as crawled: %v", err)
+func processURL(url, token string, maxDepth int) {
+	workCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := time.Now()
+	defer func() {
+		if err := db.RecordProcessingDuration(time.Since(started)); err != nil {
+			log.Printf("metrics: %v", err)
 		}
+	}()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if err := db.RenewClaim(url, token); err != nil {
+					log.Printf("lease renewal: %v", err)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	metadata, err := db.FetchMetadata(url)
+	if err != nil {
+		log.Printf("metadata: %v", err)
 		return
 	}
-
-	log.Printf("Crawled URL: %s - Status: %d, Found %d links", url, statusCode, len(links))
-
-	// Marquer l'URL comme crawlée
-	if err := db.MarkURLAsCrawled(url); err != nil {
-		log.Printf("Error marking URL as crawled: %v", err)
+	result, err := crawler.FetchContext(workCtx, url, metadata)
+	if err != nil {
+		delay := db.RetryDelay(url)
+		if result.RetryAfter > delay {
+			delay = result.RetryAfter
+		}
+		if e := db.FinishClaim(url, token, false, delay); e != nil {
+			log.Printf("retry: %v", e)
+		}
+		log.Printf("fetch %s: %v", url, err)
+		return
 	}
-
-	// Sauvegarder l'URL de départ dans Neo4j
+	if workCtx.Err() != nil {
+		return
+	}
+	// Persist discovery before acknowledgment so a storage failure is replayed.
 	if err := db.SaveURL(url); err != nil {
-		log.Printf("Error saving URL in Neo4j: %v", err)
+		log.Printf("graph: %v", err)
+		return
 	}
-
-	// Traiter les liens trouvés
-	for _, newURL := range links {
-		// Ajouter en queue Redis
-		if _, err := db.AddURLToQueue(newURL); err != nil {
-			log.Printf("Error adding new URL to queue: %v", err)
+	for _, link := range result.Links {
+		if workCtx.Err() != nil {
+			return
 		}
-		// Enregistrer la relation Neo4j
-		if err := db.SaveLink(url, newURL); err != nil {
-			log.Printf("Error saving link in Neo4j: %v", err)
+		if _, err := db.AddURLToQueue(link); err != nil {
+			log.Printf("enqueue: %v", err)
+			return
+		}
+
+	}
+	if err := db.SaveLinks(url, result.Links); err != nil {
+		log.Printf("graph: %v", err)
+		return
+	}
+	interval := crawler.RevisitInterval(result, metadata)
+	if result.Status != http.StatusNotModified {
+		if err := db.SaveClaimMetadata(url, token, result.ETag, result.Modified, result.Hash); err != nil {
+			log.Printf("metadata: %v", err)
+			return
 		}
 	}
-
-	crawled, _ := db.GetCrawledCount()
-	queued, _ := db.GetQueueSize()
-	log.Printf("Stats - Crawled: %d, Queued: %d", crawled, queued)
+	if err := db.FinishClaim(url, token, true, interval, result.Status); err != nil {
+		log.Printf("ack: %v", err)
+	}
 }
