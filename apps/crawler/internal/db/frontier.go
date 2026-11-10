@@ -93,6 +93,7 @@ func FinishClaim(u, token string, success bool, delay time.Duration, status ...i
  if ARGV[3]=='1' and ((tonumber(ARGV[6])>=200 and tonumber(ARGV[6])<300) or ARGV[6]=='304') then
   redis.call('SADD','urls_crawled',ARGV[1]); redis.call('ZADD','urls_crawled_at',ARGV[4],ARGV[1])
   redis.call('HSET','crawler:page:'..ARGV[1],'interval_seconds',tonumber(ARGV[5])-tonumber(ARGV[4]))
+  redis.call('EXPIRE','crawler:page:'..ARGV[1],7776000)
   redis.call('HDEL','crawler:attempts',ARGV[1]); redis.call('HINCRBY','crawler:stats','fetch_success_total',1)
  else redis.call('HINCRBY','crawler:stats','fetch_failure_total',1) end
  if ARGV[3]=='0' and tonumber(redis.call('HGET','crawler:attempts',ARGV[1]) or '0')>=10 then
@@ -176,6 +177,7 @@ func SaveClaimMetadata(u, token, etag, modified, hash string) error {
  if redis.call('HGET','crawler:tokens',ARGV[1])~=ARGV[2] or tonumber(redis.call('ZSCORE','crawler:inflight',ARGV[1]) or '0')<=tonumber(ARGV[3]) then return 0 end
 
  redis.call('HSET',KEYS[1],'etag',ARGV[4],'modified',ARGV[5],'hash',ARGV[6])
+ redis.call('EXPIRE',KEYS[1],7776000)
  if ARGV[6]~='' then
   local key='crawler:content:'..ARGV[6]
   local old=redis.call('GET',key)

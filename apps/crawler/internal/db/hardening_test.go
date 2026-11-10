@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"github.com/redis/go-redis/v9"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -41,6 +42,60 @@ func TestRecordHostFetchExcludesStatusZero(t *testing.T) {
 	}
 	if n, _ := RedisClient.HGet(ctx, "crawler:host_stats:statuszero.onion", "errors").Int(); n != 1 {
 		t.Fatal("errors not incremented")
+	}
+}
+func TestSaveClaimMetadataSetsPageTTL(t *testing.T) {
+	setupTestRedisClient(t)
+	u := "http://ttl-page.onion"
+	if _, err := AddURLToQueue(u); err != nil {
+		t.Fatal(err)
+	}
+	claimed, token, err := ClaimURL()
+	if err != nil || claimed != u {
+		t.Fatalf("%q %v", claimed, err)
+	}
+	if err := SaveClaimMetadata(u, token, "etag", "modified", ""); err != nil {
+		t.Fatal(err)
+	}
+	ttl, err := RedisClient.TTL(ctx, "crawler:page:"+u).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl <= 0 {
+		t.Fatalf("crawler:page TTL not set: %v", ttl)
+	}
+}
+func TestFinishClaimSetsPageTTL(t *testing.T) {
+	setupTestRedisClient(t)
+	u := "http://ttl-finish.onion"
+	if _, err := AddURLToQueue(u); err != nil {
+		t.Fatal(err)
+	}
+	_, token, err := ClaimURL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := FinishClaim(u, token, true, time.Hour, 200); err != nil {
+		t.Fatal(err)
+	}
+	ttl, err := RedisClient.TTL(ctx, "crawler:page:"+u).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl <= 0 {
+		t.Fatalf("crawler:page TTL not set: %v", ttl)
+	}
+}
+func TestFarmPrefixesSetsTTL(t *testing.T) {
+	setupTestRedisClient(t)
+	hash := strings.Repeat("a2", 28)
+	IsFarmBackend("http://prefix1." + hash + ".onion")
+	ttl, err := RedisClient.TTL(ctx, "farm:prefixes:"+hash).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl <= 0 {
+		t.Fatalf("farm:prefixes TTL not set: %v", ttl)
 	}
 }
 func TestStorageLimitIncludesDeferredAndMigrated(t *testing.T) {
