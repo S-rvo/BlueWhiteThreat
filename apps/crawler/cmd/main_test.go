@@ -10,7 +10,7 @@ func TestStoppedWorkersDoNotClaim(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	done := make(chan struct{})
-	go func() { startCrawler(ctx, 0); close(done) }()
+	go func() { startCrawler(ctx); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(time.Second):

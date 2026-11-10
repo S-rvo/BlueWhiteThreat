@@ -51,7 +51,7 @@ func main() {
 	}
 
 	// Démarrer le crawler
-	startCrawler(ctx, 0)
+	startCrawler(ctx)
 }
 
 // initDatabases initialise Redis et Neo4j
@@ -115,7 +115,7 @@ const (
 // visité récemment), pas une fin de tâche -- contrairement à l'ancien
 // comportement qui faisait sortir le process et comptait sur
 // `restart: unless-stopped` pour "relancer" une queue déjà vide.
-func startCrawler(ctx context.Context, maxDepth int) {
+func startCrawler(ctx context.Context) {
 	workers := 4
 	if n, err := strconv.Atoi(os.Getenv("CRAWLER_WORKERS")); err == nil && n >= 1 && n <= 32 {
 		workers = n
@@ -123,11 +123,11 @@ func startCrawler(ctx context.Context, maxDepth int) {
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func(sweep bool) { defer wg.Done(); crawlerWorker(ctx, maxDepth, sweep) }(i == 0)
+		go func(sweep bool) { defer wg.Done(); crawlerWorker(ctx, sweep) }(i == 0)
 	}
 	wg.Wait()
 }
-func crawlerWorker(ctx context.Context, maxDepth int, sweep bool) {
+func crawlerWorker(ctx context.Context, sweep bool) {
 	lastStaleSweep := time.Now()
 
 	maybeRequeueStale := func() {
@@ -176,7 +176,7 @@ func crawlerWorker(ctx context.Context, maxDepth int, sweep bool) {
 			continue
 		}
 
-		processURL(ctx, url, token, maxDepth)
+		processURL(ctx, url, token)
 		pause(ctx, 500*time.Millisecond)
 	}
 }
@@ -190,7 +190,7 @@ func releaseForRetry(url, token string) {
 }
 
 // processURL traite une URL spécifique : crawling + stockage
-func processURL(parent context.Context, url, token string, maxDepth int) {
+func processURL(parent context.Context, url, token string) {
 	workCtx, cancel := context.WithCancel(parent)
 	defer cancel()
 	started := time.Now()

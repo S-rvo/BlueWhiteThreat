@@ -103,6 +103,7 @@ func FinishClaim(u, token string, success bool, delay time.Duration, status ...i
 	}
 	return err
 }
+
 // DropClaim acknowledges the current lease without rescheduling: the URL is
 // moved to the blocked dead-letter ("crawler:blocked") instead of being
 // recycled through "crawler:scheduled". Use this for URLs rejected by policy
@@ -142,9 +143,6 @@ func RetryDelay(u string) time.Duration {
 		n = 10
 	}
 	return time.Duration(1<<uint(n)) * 30 * time.Second
-}
-func SaveFetchMetadata(u, etag, modified, hash string) error {
-	return RedisClient.HSet(ctx, "crawler:page:"+u, map[string]interface{}{"etag": etag, "modified": modified, "hash": hash}).Err()
 }
 func FetchMetadata(u string) (map[string]string, error) {
 	return RedisClient.HGetAll(ctx, "crawler:page:"+u).Result()

@@ -48,28 +48,6 @@ func SaveURL(url string) error {
 	return err
 }
 
-// SaveLink crée une relation LINKS_TO entre deux URLs
-func SaveLink(sourceURL, targetURL string) error {
-	cleanedSource := cleanOnionURL(sourceURL)
-	cleanedTarget := cleanOnionURL(targetURL)
-	session := driver.NewSession(context.Background(), neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
-	defer session.Close(context.Background())
-
-	_, err := session.ExecuteWrite(context.Background(), func(tx neo4j.ManagedTransaction) (any, error) {
-		result, err := tx.Run(context.Background(),
-			`MATCH (src:URL {url: $source})
-			 MERGE (tgt:URL {url: $target})
-			 MERGE (src)-[:LINKS_TO]->(tgt)`,
-			map[string]interface{}{"source": cleanedSource, "target": cleanedTarget})
-		if err != nil {
-			return nil, err
-		}
-		_, err = result.Consume(context.Background())
-		return nil, err
-	})
-	return err
-}
-
 // CloseNeo4j ferme proprement la connexion Neo4j
 func CloseNeo4j() {
 	if driver != nil {

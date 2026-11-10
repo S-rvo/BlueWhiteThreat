@@ -243,51 +243,6 @@ func AddURLToQueue(url string) (string, error) {
 
 }
 
-// GetNextURLFromQueue récupère une URL de la file d'attente et la supprime
-func GetNextURLFromQueue() (string, error) {
-	// Prefer the derived index first. Stale members are harmless and removed
-	// while looking for one that is still present in the durable queue.
-	for {
-		priorityURL, err := RedisClient.SPop(ctx, "urls_to_crawl_priority").Result()
-		if err == redis.Nil {
-			break
-		}
-		if err != nil {
-			return "", err
-		}
-		removed, err := RedisClient.SRem(ctx, "urls_to_crawl", priorityURL).Result()
-		if err != nil {
-			return "", err
-		}
-		if removed > 0 {
-			return priorityURL, nil
-		}
-	}
-
-	// Redis sets are unordered. Sampling several candidates preserves broad
-	// collection while avoiding months of random backlog before descriptive
-	// CTI URLs are visited. Existing queue entries benefit without migration.
-	candidates, err := RedisClient.SRandMemberN(ctx, "urls_to_crawl", 512).Result()
-	if err != nil {
-		if err == redis.Nil {
-			return "", nil
-		}
-		return "", err
-	}
-	if len(candidates) == 0 {
-		return "", nil
-	}
-	url := selectPriorityURL(candidates)
-	removed, err := RedisClient.SRem(ctx, "urls_to_crawl", url).Result()
-	if err != nil {
-		return "", err
-	}
-	if removed == 0 {
-		return "", nil
-	}
-	return url, nil
-}
-
 func queuePriority(rawURL string) int {
 	low := strings.ToLower(rawURL)
 	for _, term := range []string{"initial-access", "access-broker", "ransomware", "infostealer", "credential-dump", "data-breach", "zero-day", "0day", "botnet"} {
@@ -318,19 +273,6 @@ func selectPriorityURL(urls []string) string {
 		}
 	}
 	return best
-}
-
-// MarkURLAsCrawled marque une URL comme visitée
-func MarkURLAsCrawled(url string) error {
-	cleaned := cleanOnionURL(url)
-	pipe := RedisClient.Pipeline()
-	pipe.SAdd(ctx, "urls_crawled", cleaned)
-	pipe.ZAdd(ctx, "urls_crawled_at", redis.Z{Score: float64(time.Now().Unix()), Member: cleaned})
-	if _, err := pipe.Exec(ctx); err != nil {
-		return err
-	}
-	RedisClient.HIncrBy(ctx, "crawler:stats", "urls_crawled", 1)
-	return nil
 }
 
 // RequeueStaleURLs re-surfaces already-crawled URLs whose last visit is older

@@ -35,26 +35,6 @@ func cleanFreshnessKeys() {
 	RedisClient.Del(ctx, "urls_crawled", "urls_crawled_at", "urls_to_crawl", "urls_to_crawl_priority", "crawler:stats", "crawler:scheduled", "crawler:inflight", "crawler:tokens", "crawler:host_ready", "crawler:attempts")
 }
 
-func TestMarkURLAsCrawled_RecordsTimestamp(t *testing.T) {
-	setupTestRedisClient(t)
-	cleanFreshnessKeys()
-	defer cleanFreshnessKeys()
-
-	url := "http://fresh-test-a.onion"
-	before := time.Now().Unix()
-	if err := MarkURLAsCrawled(url); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	score, err := RedisClient.ZScore(ctx, "urls_crawled_at", url).Result()
-	if err != nil {
-		t.Fatalf("expected timestamp for %s: %v", url, err)
-	}
-	if int64(score) < before {
-		t.Errorf("timestamp %v predates call start %v", score, before)
-	}
-}
-
 func TestRequeueStaleURLs_RequeuesOnlyEntriesOlderThanMaxAge(t *testing.T) {
 	setupTestRedisClient(t)
 	cleanFreshnessKeys()

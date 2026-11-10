@@ -47,9 +47,6 @@ var sharedProxy colly.ProxyFunc
 var proxyError error
 var proxyMutex sync.Mutex
 
-func Fetch(raw string, metadata map[string]string) (Result, error) {
-	return FetchContext(context.Background(), raw, metadata)
-}
 func FetchContext(ctx context.Context, raw string, metadata map[string]string) (Result, error) {
 	proxyOnce.Do(func() {
 		sharedProxy, proxyError = proxy.RoundRobinProxySwitcher("socks5://tor1:9050", "socks5://tor2:9050", "socks5://tor3:9050")
@@ -198,10 +195,4 @@ func retryAfter(value string, now time.Time) time.Duration {
 		return 24 * time.Hour
 	}
 	return d
-}
-
-// Crawler retains the historical API; depth is handled by the durable frontier.
-func Crawler(raw string, depth int) ([]string, []string, int, error) {
-	r, err := Fetch(raw, nil)
-	return []string{raw}, r.Links, r.Status, err
 }
