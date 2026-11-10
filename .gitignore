@@ -3,6 +3,15 @@
 *.env.prod
 /db
 
+# Données runtime de bases de données (jamais dans le dépôt).
+# /db couvre les bind-mounts actuels (redis, redis-backups). infra/db/ est un
+# ancien chemin de bind-mount MongoDB dont des blobs 100Mo polluent encore
+# l'historique de main — l'ignorer empêche toute récidive si un vieux compose
+# est restauré. Le compose actuel utilise un volume Docker nommé (mongodb_data).
+infra/db/
+# Binaire crawler compilé (ne doit jamais être committé ; 14Mo en historique).
+apps/crawler/crawler
+
 .worktrees/
 .DS_Store
 apps/classifier/retrain_loop.log
