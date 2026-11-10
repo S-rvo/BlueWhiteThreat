@@ -101,10 +101,17 @@ const (
 	maxBodyBytes    = 8 << 20 // 8 MiB : couvre les pages d'annuaire et les listes/recherches Ahmia, plus volumineuses qu'un simple markdown
 	fetchTimeout    = 15 * time.Second
 
-	// loopInterval borne la fréquence de re-fetch en mode -loop : la liste
-	// CTI source ne change pas assez vite pour justifier plus qu'un passage
-	// hebdomadaire, et on n'a pas la capacité réseau/Redis pour plus.
+	// loopInterval est la cadence de re-fetch PAR DÉFAUT en mode -loop,
+	// surchargeable par -interval. La liste CTI source ne change pas vite,
+	// mais la frontière, elle, se draine en minutes : une cadence trop lente
+	// laisse le crawler à sec entre deux collectes (incident du 2026-11-10,
+	// où le hebdomadaire ne re-semait pas après un wipe de l'historique).
 	loopInterval = 7 * 24 * time.Hour
+
+	// minLoopInterval protège les sources CTI (ahmia.fi, deepdarkCTI) d'un
+	// re-fetch abusif : un sweep de vivacité Tor dure déjà ~30 min, donc en
+	// dessous d'une heure les collectes se chevaucheraient inutilement.
+	minLoopInterval = time.Hour
 
 	// livenessWorkers borne le nombre de vérifications Tor concurrentes :
 	// le dépôt CTI référence des adresses historiques (marketplaces/gangs
@@ -134,8 +141,13 @@ func main() {
 func run() error {
 	filesFlag := flag.String("files", defaultFiles, "fichiers markdown deepdarkCTI à parcourir (bornés, séparés par des virgules)")
 	dryRun := flag.Bool("dry-run", false, "n'écrit rien dans Redis, affiche seulement les adresses .onion trouvées")
-	loop := flag.Bool("loop", false, fmt.Sprintf("relance toutes les %s au lieu de s'exécuter une seule fois", loopInterval))
+	loop := flag.Bool("loop", false, fmt.Sprintf("relance périodiquement (voir -interval) au lieu de s'exécuter une seule fois"))
+	interval := flag.Duration("interval", loopInterval, fmt.Sprintf("en mode -loop, délai entre deux collectes (borné à >= %s)", minLoopInterval))
 	flag.Parse()
+
+	if *loop && *interval < minLoopInterval {
+		return fmt.Errorf("interval trop court (%s < %s): protège les sources CTI d'un re-fetch abusif", *interval, minLoopInterval)
+	}
 
 	files := strings.Split(*filesFlag, ",")
 	if len(files) > maxFilesAllowed {
@@ -155,8 +167,8 @@ func run() error {
 		if err := runOnce(files, *dryRun); err != nil {
 			log.Printf("Erreur collectseeds: %v", err)
 		}
-		log.Printf("Prochaine collecte dans %s", loopInterval)
-		time.Sleep(loopInterval)
+		log.Printf("Prochaine collecte dans %s", *interval)
+		time.Sleep(*interval)
 	}
 }
 
