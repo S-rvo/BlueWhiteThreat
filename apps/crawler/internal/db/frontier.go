@@ -214,7 +214,9 @@ func RecordHostFetch(raw string, status int, duration time.Duration, failed bool
 	p := RedisClient.TxPipeline()
 	p.HIncrBy(ctx, key, "requests", 1)
 	p.HIncrBy(ctx, key, "milliseconds", duration.Milliseconds())
-	p.HIncrBy(ctx, key, fmt.Sprintf("status_%d", status), 1)
+	if status != 0 {
+		p.HIncrBy(ctx, key, fmt.Sprintf("status_%d", status), 1)
+	}
 	if failed {
 		p.HIncrBy(ctx, key, "errors", 1)
 	}

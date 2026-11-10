@@ -28,6 +28,21 @@ func TestHostIdentityAndExclusion(t *testing.T) {
 		t.Fatalf("concurrent same-host claim: %q %v", u, err)
 	}
 }
+func TestRecordHostFetchExcludesStatusZero(t *testing.T) {
+	setupTestRedisClient(t)
+	if err := RecordHostFetch("http://statuszero.onion/path", 0, time.Second, true); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := RedisClient.HExists(ctx, "crawler:host_stats:statuszero.onion", "status_0").Result(); ok {
+		t.Fatal("status_0 field written")
+	}
+	if n, _ := RedisClient.HGet(ctx, "crawler:host_stats:statuszero.onion", "requests").Int(); n != 1 {
+		t.Fatal("requests not incremented")
+	}
+	if n, _ := RedisClient.HGet(ctx, "crawler:host_stats:statuszero.onion", "errors").Int(); n != 1 {
+		t.Fatal("errors not incremented")
+	}
+}
 func TestStorageLimitIncludesDeferredAndMigrated(t *testing.T) {
 	setupTestRedisClient(t)
 	RedisClient.ZAdd(ctx, "crawler:scheduled", redis.Z{Score: float64(time.Now().Add(time.Hour).Unix()), Member: "http://a.onion/old"})
