@@ -177,26 +177,38 @@ func runOnce(files []string, dryRun bool) error {
 	defer db.CloseRedis()
 
 	before, _ := db.GetQueueSize()
+	breakdown := map[string]int{}
 	for addr := range found {
-		if err := db.AddURLToQueue("http://" + addr); err != nil {
+		reason, err := db.AddURLToQueue("http://" + addr)
+		if err != nil {
 			log.Printf("Erreur ajout en queue %s: %v", addr, err)
+			continue
 		}
+		breakdown[reason]++
 	}
 	after, _ := db.GetQueueSize()
 	log.Printf("Queue size: %d -> %d", before, after)
+	log.Printf("Détail: ajoutées=%d doublons=%d bloquées=%d fermes=%d capacité=%d",
+		breakdown[db.QueueReasonAdded], breakdown[db.QueueReasonDuplicate],
+		breakdown[db.QueueReasonBlocked], breakdown[db.QueueReasonFarm],
+		breakdown[db.QueueReasonCapacity])
 
-	recordStats(len(found), fallbackUsed)
+	recordStats(len(found), fallbackUsed, breakdown)
 	return nil
 }
 
 // recordStats alimente le hash "crawler:stats" déjà exposé par /stats, pour
 // pouvoir détecter depuis l'extérieur qu'une collecte a bien eu lieu (et
 // quand) sans avoir à éplucher les logs.
-func recordStats(totalFound int, fallbackUsed bool) {
+func recordStats(totalFound int, fallbackUsed bool, breakdown map[string]int) {
 	ctx := context.Background()
 	db.RedisClient.HIncrBy(ctx, "crawler:stats", "collectseeds_runs", 1)
 	db.RedisClient.HSet(ctx, "crawler:stats", "collectseeds_last_run_unix", time.Now().Unix())
 	db.RedisClient.HSet(ctx, "crawler:stats", "collectseeds_last_found", totalFound)
+	db.RedisClient.HSet(ctx, "crawler:stats", "collectseeds_last_added", breakdown[db.QueueReasonAdded])
+	db.RedisClient.HSet(ctx, "crawler:stats", "collectseeds_last_duplicate", breakdown[db.QueueReasonDuplicate])
+	db.RedisClient.HSet(ctx, "crawler:stats", "collectseeds_last_blocked", breakdown[db.QueueReasonBlocked])
+	db.RedisClient.HSet(ctx, "crawler:stats", "collectseeds_last_farm", breakdown[db.QueueReasonFarm])
 	if fallbackUsed {
 		db.RedisClient.HIncrBy(ctx, "crawler:stats", "collectseeds_fallback_used_total", 1)
 	}

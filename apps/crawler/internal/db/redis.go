@@ -192,20 +192,38 @@ func QueueCapacityRatio() (float64, error) {
 	return float64(size) / float64(maxQueueSize), nil
 }
 
-// AddURLToQueue ajoute une URL à la file d'attente si elle n'a pas déjà été traitée
-func AddURLToQueue(url string) error {
+// Raisons renvoyées par AddURLToQueue, pour que les appelants (notamment
+// collectseeds, qui traite un lot borné et veut savoir pourquoi la file n'a
+// presque pas grossi) puissent distinguer un ajout réel d'un no-op -- et
+// pourquoi. Avant cette classification, les trois cas de no-op (CSAM, ferme,
+// dédup) étaient indiscernables depuis les logs : un lot de seeds presque
+// entièrement rejeté ne laissait aucune trace de la raison.
+const (
+	QueueReasonAdded     = "added"
+	QueueReasonBlocked   = "blocked"
+	QueueReasonFarm      = "farm"
+	QueueReasonCapacity  = "capacity"
+	QueueReasonDuplicate = "duplicate"
+)
+
+// AddURLToQueue ajoute une URL à la file d'attente si elle n'a pas déjà été
+// traitée, et renvoie la raison du résultat (voir QueueReason*).
+func AddURLToQueue(url string) (string, error) {
 	cleaned := cleanOnionURL(url)
 
-	if csamfilter.IsBlockedURL(cleaned) || IsFarmBackend(cleaned) {
-		return nil
+	if csamfilter.IsBlockedURL(cleaned) {
+		return QueueReasonBlocked, nil
+	}
+	if IsFarmBackend(cleaned) {
+		return QueueReasonFarm, nil
 	}
 
 	atCapacity, err := queueAtCapacity()
 	if err != nil {
-		return err
+		return "", err
 	}
 	if atCapacity {
-		return nil
+		return QueueReasonCapacity, nil
 	}
 
 	pipe := RedisClient.Pipeline()
@@ -213,26 +231,28 @@ func AddURLToQueue(url string) error {
 	isQueuedCmd := pipe.SIsMember(ctx, "urls_to_crawl", cleaned)
 	_, err = pipe.Exec(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	isCrawled, _ := isCrawledCmd.Result()
 	isQueued, _ := isQueuedCmd.Result()
 
-	if !isCrawled && !isQueued {
-		pipe := RedisClient.Pipeline()
-		pipe.SAdd(ctx, "urls_to_crawl", cleaned)
-		if queuePriority(cleaned) > 0 {
-			pipe.SAdd(ctx, "urls_to_crawl_priority", cleaned)
-		}
-		if _, err = pipe.Exec(ctx); err != nil {
-			return err
-		}
-		RedisClient.HIncrBy(ctx, "crawler:stats", "urls_queued", 1)
-		log.Printf("Added URL to queue: %s", cleaned)
+	if isCrawled || isQueued {
+		return QueueReasonDuplicate, nil
 	}
 
-	return nil
+	pipe = RedisClient.Pipeline()
+	pipe.SAdd(ctx, "urls_to_crawl", cleaned)
+	if queuePriority(cleaned) > 0 {
+		pipe.SAdd(ctx, "urls_to_crawl_priority", cleaned)
+	}
+	if _, err = pipe.Exec(ctx); err != nil {
+		return "", err
+	}
+	RedisClient.HIncrBy(ctx, "crawler:stats", "urls_queued", 1)
+	log.Printf("Added URL to queue: %s", cleaned)
+
+	return QueueReasonAdded, nil
 }
 
 // GetNextURLFromQueue récupère une URL de la file d'attente et la supprime

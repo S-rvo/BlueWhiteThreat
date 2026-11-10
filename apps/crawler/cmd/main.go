@@ -38,7 +38,7 @@ func main() {
 		}
 	}
 	for _, url := range startURLs {
-		if err := db.AddURLToQueue(url); err != nil {
+		if _, err := db.AddURLToQueue(url); err != nil {
 			log.Printf("Error adding start URL to queue: %v", err)
 		}
 	}
@@ -192,7 +192,7 @@ func processURL(url string, maxDepth int) {
 	// Traiter les liens trouvés
 	for _, newURL := range links {
 		// Ajouter en queue Redis
-		if err := db.AddURLToQueue(newURL); err != nil {
+		if _, err := db.AddURLToQueue(newURL); err != nil {
 			log.Printf("Error adding new URL to queue: %v", err)
 		}
 		// Enregistrer la relation Neo4j
