@@ -315,10 +315,11 @@ func runOnce(files []string, dryRun bool) error {
 	}
 	defer db.CloseRedis()
 
+	ctx := context.Background()
 	before, _ := db.GetQueueSize()
 	breakdown := map[string]int{}
 	for addr := range found {
-		reason, err := db.AddURLToQueue("http://" + addr)
+		reason, err := db.AddURLToQueue(ctx, "http://"+addr)
 		if err != nil {
 			log.Printf("Erreur ajout en queue %s: %v", addr, err)
 			continue

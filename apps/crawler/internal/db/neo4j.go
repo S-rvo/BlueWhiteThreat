@@ -28,8 +28,8 @@ func InitNeo4jDriver(uri, username, password string) error {
 }
 
 // SaveURL crée un nœud URL s'il n'existe pas déjà
-func SaveURL(url string) error {
-	c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func SaveURL(ctx context.Context, url string) error {
+	c, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cleanedURL := cleanOnionURL(url)
 	session := driver.NewSession(c, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
@@ -73,7 +73,7 @@ func cleanOnionURL(raw string) string {
 }
 
 // SaveLinks persists a page's edges in bounded transactions.
-func SaveLinks(source string, links []string) error {
+func SaveLinks(ctx context.Context, source string, links []string) error {
 	for offset := 0; offset < len(links); offset += 250 {
 		end := offset + 250
 		if end > len(links) {
@@ -83,14 +83,14 @@ func SaveLinks(source string, links []string) error {
 		for _, link := range links[offset:end] {
 			batch = append(batch, cleanOnionURL(link))
 		}
-		if err := saveLinkBatch(source, batch); err != nil {
+		if err := saveLinkBatch(ctx, source, batch); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-func saveLinkBatch(source string, links []string) error {
-	c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func saveLinkBatch(ctx context.Context, source string, links []string) error {
+	c, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	session := driver.NewSession(c, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
 	defer session.Close(c)

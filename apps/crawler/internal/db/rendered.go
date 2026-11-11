@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -12,8 +13,8 @@ import (
 
 // Claims survive worker crashes. Failed events move to the tail, then a bounded
 // dead-letter list; one poison event must not block discovery for other pages.
-func DrainRenderedLinks() error { return drainRenderedLinks(SaveLinks) }
-func drainRenderedLinks(save func(string, []string) error) error {
+func DrainRenderedLinks(ctx context.Context) error { return drainRenderedLinks(ctx, SaveLinks) }
+func drainRenderedLinks(ctx context.Context, save func(context.Context, string, []string) error) error {
 	var failures []error
 	for i := 0; i < 100; i++ {
 		tokenBytes := make([]byte, 16)
@@ -50,7 +51,7 @@ redis.call('ZADD','crawler:rendered_leases',tonumber(ARGV[2])+600,ARGV[1]);retur
 			err = json.Unmarshal([]byte(raw), &event)
 		}
 		if err == nil {
-			reason, e := AddURLToQueue(event.Source)
+			reason, e := AddURLToQueue(ctx, event.Source)
 			err = e
 			if err == nil && (reason == "storage" || reason == "trap" || reason == QueueReasonBlocked || reason == QueueReasonFarm) {
 				err = fmt.Errorf("rendered source not admitted: %s", reason)
@@ -62,7 +63,7 @@ redis.call('ZADD','crawler:rendered_leases',tonumber(ARGV[2])+600,ARGV[1]);retur
 			} else {
 				accepted := make([]string, 0, len(event.Links))
 				for _, link := range event.Links {
-					reason, e := AddURLToQueue(link)
+					reason, e := AddURLToQueue(ctx, link)
 					if e != nil {
 						err = e
 						break
@@ -72,7 +73,7 @@ redis.call('ZADD','crawler:rendered_leases',tonumber(ARGV[2])+600,ARGV[1]);retur
 					}
 				}
 				if err == nil && len(accepted) > 0 {
-					err = save(event.Source, accepted)
+					err = save(ctx, event.Source, accepted)
 				}
 			}
 		}

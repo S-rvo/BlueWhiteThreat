@@ -48,7 +48,7 @@ func TestRequeueStaleURLs_RequeuesOnlyEntriesOlderThanMaxAge(t *testing.T) {
 	RedisClient.ZAdd(ctx, "urls_crawled_at", redis.Z{Score: float64(now.Add(-10 * 24 * time.Hour).Unix()), Member: stale})
 	RedisClient.ZAdd(ctx, "urls_crawled_at", redis.Z{Score: float64(now.Unix()), Member: fresh})
 
-	requeued, err := RequeueStaleURLs(7*24*time.Hour, 200)
+	requeued, err := RequeueStaleURLs(ctx, 7*24*time.Hour, 200)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestRequeueStaleURLs_RespectsLimit(t *testing.T) {
 		RedisClient.ZAdd(ctx, "urls_crawled_at", redis.Z{Score: old, Member: url})
 	}
 
-	requeued, err := RequeueStaleURLs(7*24*time.Hour, 2)
+	requeued, err := RequeueStaleURLs(ctx, 7*24*time.Hour, 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestRequeueStaleURLs_PreservesCrawledAtInvariant(t *testing.T) {
 	RedisClient.ZAdd(ctx, "urls_crawled_at", redis.Z{Score: float64(now.Add(-10 * 24 * time.Hour).Unix()), Member: stale})
 	RedisClient.ZAdd(ctx, "urls_crawled_at", redis.Z{Score: float64(now.Unix()), Member: fresh})
 
-	if _, err := RequeueStaleURLs(7*24*time.Hour, 200); err != nil {
+	if _, err := RequeueStaleURLs(ctx, 7*24*time.Hour, 200); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

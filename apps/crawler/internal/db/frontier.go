@@ -1,15 +1,17 @@
 package db
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"time"
 )
 
 // ClaimURL atomically moves a ready task into a ten minute lease. Expired
 // leases are recovered before selection; completion requires the lease token.
-func ClaimURL() (string, string, error) {
+func ClaimURL(ctx context.Context) (string, string, error) {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return "", "", err
@@ -72,7 +74,7 @@ func ClaimURL() (string, string, error) {
 // de fraîcheur pour prioriser les URLs les plus récemment crawlées (service
 // .onion le plus susceptible d'être encore en vie). Invariant : aucun membre de
 // "urls_crawled" ne doit exister sans score dans "urls_crawled_at".
-func FinishClaim(u, token string, success bool, delay time.Duration, status ...int) error {
+func FinishClaim(ctx context.Context, u, token string, success bool, delay time.Duration, status ...int) error {
 	host, err := HostKey(u)
 	if err != nil {
 		return err
@@ -109,7 +111,7 @@ func FinishClaim(u, token string, success bool, delay time.Duration, status ...i
 // moved to the blocked dead-letter ("crawler:blocked") instead of being
 // recycled through "crawler:scheduled". Use this for URLs rejected by policy
 // (CSAM/farm), as opposed to FinishClaim's transient-failure retry path.
-func DropClaim(u, token string) error {
+func DropClaim(ctx context.Context, u, token string) error {
 	host, err := HostKey(u)
 	if err != nil {
 		return err
@@ -135,7 +137,7 @@ func boolInt(b bool) int {
 	}
 	return 0
 }
-func RetryDelay(u string) time.Duration {
+func RetryDelay(ctx context.Context, u string) time.Duration {
 	n, err := RedisClient.HIncrBy(ctx, "crawler:attempts", u, 1).Result()
 	if err != nil {
 		return time.Minute
@@ -145,12 +147,12 @@ func RetryDelay(u string) time.Duration {
 	}
 	return time.Duration(1<<uint(n)) * 30 * time.Second
 }
-func FetchMetadata(u string) (map[string]string, error) {
+func FetchMetadata(ctx context.Context, u string) (map[string]string, error) {
 	return RedisClient.HGetAll(ctx, "crawler:page:"+u).Result()
 }
 
 // RenewClaim extends only an unexpired lease owned by this worker.
-func RenewClaim(u, token string) error {
+func RenewClaim(ctx context.Context, u, token string) error {
 	host, err := HostKey(u)
 	if err != nil {
 		return err
@@ -172,7 +174,7 @@ func RenewClaim(u, token string) error {
 }
 
 // SaveClaimMetadata fences mutable page state, unlike idempotent graph merges.
-func SaveClaimMetadata(u, token, etag, modified, hash string) error {
+func SaveClaimMetadata(ctx context.Context, u, token, etag, modified, hash string) error {
 	n, err := RedisClient.Eval(ctx, `
  if redis.call('HGET','crawler:tokens',ARGV[1])~=ARGV[2] or tonumber(redis.call('ZSCORE','crawler:inflight',ARGV[1]) or '0')<=tonumber(ARGV[3]) then return 0 end
 
@@ -199,7 +201,7 @@ func SaveClaimMetadata(u, token, etag, modified, hash string) error {
 }
 
 // RecordProcessingDuration exposes cumulative metrics (derive mean/rate externally).
-func RecordProcessingDuration(d time.Duration) error {
+func RecordProcessingDuration(ctx context.Context, d time.Duration) error {
 	pipe := RedisClient.TxPipeline()
 	pipe.HIncrBy(ctx, "crawler:stats", "processing_total", 1)
 	pipe.HIncrBy(ctx, "crawler:stats", "processing_milliseconds_total", d.Milliseconds())
@@ -207,7 +209,7 @@ func RecordProcessingDuration(d time.Duration) error {
 	return err
 }
 
-func RecordHostFetch(raw string, status int, duration time.Duration, failed bool) error {
+func RecordHostFetch(ctx context.Context, raw string, status int, duration time.Duration, failed bool) error {
 	host, err := HostKey(raw)
 	if err != nil {
 		return err
@@ -268,7 +270,11 @@ func ReconcileFrontier() error {
 			for _, u := range values {
 				host, err := HostKey(u)
 				if err != nil {
-					return err
+					// Pre-dates the http/https-only scheme restriction (old
+					// irc://, gopher:// discoveries): unroutable, not a
+					// reconciliation failure. Skip rather than abort startup.
+					log.Printf("ReconcileFrontier: skipping unroutable legacy entry %q: %v", u, err)
+					continue
 				}
 				if err := RedisClient.Eval(ctx, indexURLLua+`
 if redis.call('HSETNX','crawler:url_host',ARGV[1],ARGV[2])==1 then redis.call('HINCRBY','crawler:stored_per_host',ARGV[2],1) end

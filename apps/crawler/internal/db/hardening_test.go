@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"github.com/redis/go-redis/v9"
 	"strings"
@@ -16,22 +17,22 @@ func TestHostIdentityAndExclusion(t *testing.T) {
 		if err != nil || host != "a.onion" {
 			t.Fatalf("%s: %s %v", raw, host, err)
 		}
-		if _, err := AddURLToQueue(raw); err != nil {
+		if _, err := AddURLToQueue(ctx, raw); err != nil {
 			t.Fatal(err)
 		}
 	}
-	u, _, err := ClaimURL()
+	u, _, err := ClaimURL(ctx)
 	if err != nil || u == "" {
 		t.Fatalf("%q %v", u, err)
 	}
-	u, _, err = ClaimURL()
+	u, _, err = ClaimURL(ctx)
 	if err != nil || u != "" {
 		t.Fatalf("concurrent same-host claim: %q %v", u, err)
 	}
 }
 func TestRecordHostFetchExcludesStatusZero(t *testing.T) {
 	setupTestRedisClient(t)
-	if err := RecordHostFetch("http://statuszero.onion/path", 0, time.Second, true); err != nil {
+	if err := RecordHostFetch(ctx, "http://statuszero.onion/path", 0, time.Second, true); err != nil {
 		t.Fatal(err)
 	}
 	if ok, _ := RedisClient.HExists(ctx, "crawler:host_stats:statuszero.onion", "status_0").Result(); ok {
@@ -47,14 +48,14 @@ func TestRecordHostFetchExcludesStatusZero(t *testing.T) {
 func TestSaveClaimMetadataSetsPageTTL(t *testing.T) {
 	setupTestRedisClient(t)
 	u := "http://ttl-page.onion"
-	if _, err := AddURLToQueue(u); err != nil {
+	if _, err := AddURLToQueue(ctx, u); err != nil {
 		t.Fatal(err)
 	}
-	claimed, token, err := ClaimURL()
+	claimed, token, err := ClaimURL(ctx)
 	if err != nil || claimed != u {
 		t.Fatalf("%q %v", claimed, err)
 	}
-	if err := SaveClaimMetadata(u, token, "etag", "modified", ""); err != nil {
+	if err := SaveClaimMetadata(ctx, u, token, "etag", "modified", ""); err != nil {
 		t.Fatal(err)
 	}
 	ttl, err := RedisClient.TTL(ctx, "crawler:page:"+u).Result()
@@ -68,14 +69,14 @@ func TestSaveClaimMetadataSetsPageTTL(t *testing.T) {
 func TestFinishClaimSetsPageTTL(t *testing.T) {
 	setupTestRedisClient(t)
 	u := "http://ttl-finish.onion"
-	if _, err := AddURLToQueue(u); err != nil {
+	if _, err := AddURLToQueue(ctx, u); err != nil {
 		t.Fatal(err)
 	}
-	_, token, err := ClaimURL()
+	_, token, err := ClaimURL(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := FinishClaim(u, token, true, time.Hour, 200); err != nil {
+	if err := FinishClaim(ctx, u, token, true, time.Hour, 200); err != nil {
 		t.Fatal(err)
 	}
 	ttl, err := RedisClient.TTL(ctx, "crawler:page:"+u).Result()
@@ -110,7 +111,7 @@ func TestStorageLimitIncludesDeferredAndMigrated(t *testing.T) {
 		t.Fatalf("migration count %d", n)
 	}
 	RedisClient.HSet(ctx, "crawler:stored_per_host", "a.onion", 50000)
-	reason, err := AddURLToQueue("http://a.onion/new")
+	reason, err := AddURLToQueue(ctx, "http://a.onion/new")
 	if err != nil || reason != "storage" {
 		t.Fatalf("%s %v", reason, err)
 	}
@@ -124,8 +125,8 @@ func TestRenderedPoisonDoesNotBlockAndDeadLetters(t *testing.T) {
 	good := `{"Source":"http://a.onion","Links":["http://b.onion/x"]}`
 	RedisClient.RPush(ctx, "crawler:rendered_links", bad, good)
 	saved := 0
-	save := func(string, []string) error { saved++; return nil }
-	if err := drainRenderedLinks(save); err == nil {
+	save := func(context.Context, string, []string) error { saved++; return nil }
+	if err := drainRenderedLinks(ctx, save); err == nil {
 		t.Fatal("poison error missing")
 	}
 	if saved != 1 {
@@ -133,7 +134,7 @@ func TestRenderedPoisonDoesNotBlockAndDeadLetters(t *testing.T) {
 	}
 	for i := 0; i < 4; i++ {
 		RedisClient.ZAdd(ctx, "crawler:rendered_retry", redis.Z{Score: 0, Member: bad})
-		if err := drainRenderedLinks(save); err == nil {
+		if err := drainRenderedLinks(ctx, save); err == nil {
 			t.Fatal("poison error missing")
 		}
 	}
@@ -147,7 +148,7 @@ func TestRenderedExpiredLeaseRecovered(t *testing.T) {
 	RedisClient.HSet(ctx, "crawler:rendered_inflight", "expired", raw)
 	RedisClient.ZAdd(ctx, "crawler:rendered_leases", redis.Z{Score: 0, Member: "expired"})
 	calls := 0
-	if err := drainRenderedLinks(func(string, []string) error { calls++; return nil }); err != nil {
+	if err := drainRenderedLinks(ctx, func(context.Context, string, []string) error { calls++; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -161,7 +162,7 @@ func TestRenderedExpiredLeaseRecovered(t *testing.T) {
 func TestEmptyRenderedMessageIsRetriedNotStranded(t *testing.T) {
 	setupTestRedisClient(t)
 	RedisClient.RPush(ctx, "crawler:rendered_links", "")
-	if err := drainRenderedLinks(func(string, []string) error { return nil }); err == nil {
+	if err := drainRenderedLinks(ctx, func(context.Context, string, []string) error { return nil }); err == nil {
 		t.Fatal("empty payload accepted")
 	}
 	if n, _ := RedisClient.HLen(ctx, "crawler:rendered_inflight").Result(); n != 0 {
@@ -176,7 +177,7 @@ func TestRenderedSourceCannotBypassStorageCap(t *testing.T) {
 	RedisClient.HSet(ctx, "crawler:stored_per_host", "a.onion", 50000)
 	RedisClient.RPush(ctx, "crawler:rendered_links", `{"Source":"http://a.onion/new","Links":["http://b.onion/x"]}`)
 	writes := 0
-	if err := drainRenderedLinks(func(string, []string) error { writes++; return nil }); err == nil {
+	if err := drainRenderedLinks(ctx, func(context.Context, string, []string) error { writes++; return nil }); err == nil {
 		t.Fatal("source cap ignored")
 	}
 	if writes != 0 {
@@ -192,7 +193,7 @@ func TestRenderedConcurrentClaims(t *testing.T) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	seen := map[string]int{}
-	save := func(_ string, links []string) error {
+	save := func(_ context.Context, _ string, links []string) error {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, link := range links {
@@ -204,7 +205,7 @@ func TestRenderedConcurrentClaims(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := drainRenderedLinks(save); err != nil {
+			if err := drainRenderedLinks(ctx, save); err != nil {
 				t.Error(err)
 			}
 		}()

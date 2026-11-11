@@ -207,7 +207,7 @@ const (
 
 // AddURLToQueue ajoute une URL à la file d'attente si elle n'a pas déjà été
 // traitée, et renvoie la raison du résultat (voir QueueReason*).
-func AddURLToQueue(url string) (string, error) {
+func AddURLToQueue(ctx context.Context, url string) (string, error) {
 	cleaned := cleanOnionURL(url)
 	_, valid := discoveryKey(cleaned)
 	host, hostErr := HostKey(cleaned)
@@ -280,7 +280,7 @@ func selectPriorityURL(urls []string) string {
 // of brand-new URLs runs out. Bounded by limit: without Google's crawl
 // budget, a sweep must stay small per call rather than requeuing everything
 // stale at once. High-CTI-signal URLs are requeued first.
-func RequeueStaleURLs(maxAge time.Duration, limit int64) (int64, error) {
+func RequeueStaleURLs(ctx context.Context, maxAge time.Duration, limit int64) (int64, error) {
 	// Une file déjà pleine ne doit pas grossir davantage : le requeue de
 	// fraîcheur cède la place aux nouveaux liens découverts plutôt que
 	// d'aggraver un engorgement déjà en cours.

@@ -45,7 +45,7 @@ func main() {
 		}
 	}
 	for _, url := range startURLs {
-		if _, err := db.AddURLToQueue(url); err != nil {
+		if _, err := db.AddURLToQueue(ctx, url); err != nil {
 			log.Printf("Error adding start URL to queue: %v", err)
 		}
 	}
@@ -135,7 +135,7 @@ func crawlerWorker(ctx context.Context, sweep bool) {
 			return
 		}
 		lastStaleSweep = time.Now()
-		requeued, err := db.RequeueStaleURLs(staleRequeueMaxAge, staleRequeueLimit)
+		requeued, err := db.RequeueStaleURLs(ctx, staleRequeueMaxAge, staleRequeueLimit)
 		if err != nil {
 			log.Printf("Error requeuing stale URLs: %v", err)
 			return
@@ -148,12 +148,12 @@ func crawlerWorker(ctx context.Context, sweep bool) {
 	for ctx.Err() == nil {
 		maybeRequeueStale()
 		if sweep {
-			if err := db.DrainRenderedLinks(); err != nil {
+			if err := db.DrainRenderedLinks(ctx); err != nil {
 				log.Printf("rendered links: %v", err)
 			}
 		}
 
-		url, token, err := db.ClaimURL()
+		url, token, err := db.ClaimURL(ctx)
 		if err != nil {
 			log.Printf("Claim failed: %v", err)
 			pause(ctx, time.Second)
@@ -170,7 +170,7 @@ func crawlerWorker(ctx context.Context, sweep bool) {
 		// l'ajout, sinon ces entrées historiques sont crawlées en
 		// direct sur Tor sans aucun contrôle.
 		if csamfilter.IsBlockedURL(url) || db.IsFarmBackend(url) {
-			if err := db.DropClaim(url, token); err != nil {
+			if err := db.DropClaim(ctx, url, token); err != nil {
 				log.Printf("Error dropping blocked URL: %v", err)
 			}
 			continue
@@ -183,8 +183,8 @@ func crawlerWorker(ctx context.Context, sweep bool) {
 
 // releaseForRetry relâche la lease en échec : la politesse hôte est rendue,
 // le compteur de tentatives avance, le dead-letter reste atteignable.
-func releaseForRetry(url, token string) {
-	if e := db.FinishClaim(url, token, false, db.RetryDelay(url)); e != nil {
+func releaseForRetry(ctx context.Context, url, token string) {
+	if e := db.FinishClaim(ctx, url, token, false, db.RetryDelay(ctx, url)); e != nil {
 		log.Printf("release: %v", e)
 	}
 }
@@ -195,7 +195,7 @@ func processURL(parent context.Context, url, token string) {
 	defer cancel()
 	started := time.Now()
 	defer func() {
-		if err := db.RecordProcessingDuration(time.Since(started)); err != nil {
+		if err := db.RecordProcessingDuration(workCtx, time.Since(started)); err != nil {
 			log.Printf("metrics: %v", err)
 		}
 	}()
@@ -210,7 +210,7 @@ func processURL(parent context.Context, url, token string) {
 			case <-stop:
 				return
 			case <-ticker.C:
-				if err := db.RenewClaim(url, token); err != nil {
+				if err := db.RenewClaim(workCtx, url, token); err != nil {
 					log.Printf("lease renewal: %v", err)
 					cancel()
 					return
@@ -219,26 +219,26 @@ func processURL(parent context.Context, url, token string) {
 		}
 	}()
 	defer func() { close(stop); <-done }()
-	metadata, err := db.FetchMetadata(url)
+	metadata, err := db.FetchMetadata(workCtx, url)
 	if err != nil {
 		log.Printf("metadata: %v", err)
-		releaseForRetry(url, token)
+		releaseForRetry(workCtx, url, token)
 		return
 	}
 	fetchStarted := time.Now()
 	result, err := crawler.FetchContext(workCtx, url, metadata)
-	if e := db.RecordHostFetch(url, result.Status, time.Since(fetchStarted), err != nil); e != nil {
+	if e := db.RecordHostFetch(workCtx, url, result.Status, time.Since(fetchStarted), err != nil); e != nil {
 		log.Printf("host metrics: %v", e)
 	}
 	if workCtx.Err() != nil {
 		return
 	}
 	if err != nil {
-		delay := db.RetryDelay(url)
+		delay := db.RetryDelay(workCtx, url)
 		if result.RetryAfter > delay {
 			delay = result.RetryAfter
 		}
-		if e := db.FinishClaim(url, token, false, delay); e != nil {
+		if e := db.FinishClaim(workCtx, url, token, false, delay); e != nil {
 			log.Printf("retry: %v", e)
 		}
 		log.Printf("fetch %s: %v", url, err)
@@ -248,9 +248,9 @@ func processURL(parent context.Context, url, token string) {
 		return
 	}
 	// Persist discovery before acknowledgment so a storage failure is replayed.
-	if err := db.SaveURL(url); err != nil {
+	if err := db.SaveURL(workCtx, url); err != nil {
 		log.Printf("graph: %v", err)
-		releaseForRetry(url, token)
+		releaseForRetry(workCtx, url, token)
 		return
 	}
 	acceptedLinks := make([]string, 0, len(result.Links))
@@ -258,10 +258,10 @@ func processURL(parent context.Context, url, token string) {
 		if workCtx.Err() != nil {
 			return
 		}
-		reason, err := db.AddURLToQueue(link)
+		reason, err := db.AddURLToQueue(workCtx, link)
 		if err != nil {
 			log.Printf("enqueue: %v", err)
-			releaseForRetry(url, token)
+			releaseForRetry(workCtx, url, token)
 			return
 		}
 
@@ -269,20 +269,20 @@ func processURL(parent context.Context, url, token string) {
 			acceptedLinks = append(acceptedLinks, link)
 		}
 	}
-	if err := db.SaveLinks(url, acceptedLinks); err != nil {
+	if err := db.SaveLinks(workCtx, url, acceptedLinks); err != nil {
 		log.Printf("graph: %v", err)
-		releaseForRetry(url, token)
+		releaseForRetry(workCtx, url, token)
 		return
 	}
 	interval := crawler.RevisitInterval(result, metadata)
 	if result.Status != http.StatusNotModified {
-		if err := db.SaveClaimMetadata(url, token, result.ETag, result.Modified, result.Hash); err != nil {
+		if err := db.SaveClaimMetadata(workCtx, url, token, result.ETag, result.Modified, result.Hash); err != nil {
 			log.Printf("metadata: %v", err)
-			releaseForRetry(url, token)
+			releaseForRetry(workCtx, url, token)
 			return
 		}
 	}
-	if err := db.FinishClaim(url, token, true, interval, result.Status); err != nil {
+	if err := db.FinishClaim(workCtx, url, token, true, interval, result.Status); err != nil {
 		log.Printf("ack: %v", err)
 	}
 }

@@ -6,14 +6,14 @@ import (
 
 func TestDropClaimRemovesFromAllFrontierSetsAndDeadLetters(t *testing.T) {
 	setupTestRedisClient(t)
-	if _, err := AddURLToQueue("http://blocked.onion/x"); err != nil {
+	if _, err := AddURLToQueue(ctx, "http://blocked.onion/x"); err != nil {
 		t.Fatal(err)
 	}
-	url, token, err := ClaimURL()
+	url, token, err := ClaimURL(ctx)
 	if err != nil || url == "" {
 		t.Fatalf("claim: %q %v", url, err)
 	}
-	if err := DropClaim(url, token); err != nil {
+	if err := DropClaim(ctx, url, token); err != nil {
 		t.Fatalf("drop: %v", err)
 	}
 	if n, _ := RedisClient.ZScore(ctx, "crawler:scheduled", url).Result(); n != 0 {
@@ -33,7 +33,7 @@ func TestDropClaimRemovesFromAllFrontierSetsAndDeadLetters(t *testing.T) {
 	}
 
 	// A subsequent claim never resurfaces the dropped URL.
-	url2, _, err := ClaimURL()
+	url2, _, err := ClaimURL(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,14 +44,14 @@ func TestDropClaimRemovesFromAllFrontierSetsAndDeadLetters(t *testing.T) {
 
 func TestDropClaimWithBadTokenFails(t *testing.T) {
 	setupTestRedisClient(t)
-	if _, err := AddURLToQueue("http://blocked2.onion/x"); err != nil {
+	if _, err := AddURLToQueue(ctx, "http://blocked2.onion/x"); err != nil {
 		t.Fatal(err)
 	}
-	url, _, err := ClaimURL()
+	url, _, err := ClaimURL(ctx)
 	if err != nil || url == "" {
 		t.Fatalf("claim: %q %v", url, err)
 	}
-	if err := DropClaim(url, "wrong-token"); err == nil {
+	if err := DropClaim(ctx, url, "wrong-token"); err == nil {
 		t.Fatal("expected lease error for wrong token")
 	}
 	if n, _ := RedisClient.ZCard(ctx, "crawler:inflight").Result(); n != 1 {

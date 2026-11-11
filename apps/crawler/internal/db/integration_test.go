@@ -33,22 +33,22 @@ func TestDisposableIntegration(t *testing.T) {
 	started := time.Now()
 	for i := 0; i < 100; i++ {
 		u := fmt.Sprintf("http://fixture%d.onion/page", i)
-		if _, err := AddURLToQueue(u); err != nil {
+		if _, err := AddURLToQueue(ctx, u); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := 0; i < 100; i++ {
-		u, token, err := ClaimURL()
+		u, token, err := ClaimURL(ctx)
 		if err != nil || u == "" {
 			t.Fatalf("claim: %s %v", u, err)
 		}
-		if err := SaveLinks(u, []string{"http://destination.onion/page"}); err != nil {
+		if err := SaveLinks(ctx, u, []string{"http://destination.onion/page"}); err != nil {
 			t.Fatal(err)
 		}
-		if err := SaveClaimMetadata(u, token, "", "", "same-content"); err != nil {
+		if err := SaveClaimMetadata(ctx, u, token, "", "", "same-content"); err != nil {
 			t.Fatal(err)
 		}
-		if err := FinishClaim(u, token, true, time.Hour, 200); err != nil {
+		if err := FinishClaim(ctx, u, token, true, time.Hour, 200); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -58,7 +58,7 @@ func TestDisposableIntegration(t *testing.T) {
 	}
 	t.Logf("100 durable tasks + Neo4j edges: %s", time.Since(started))
 	for i := 0; i < 100; i++ {
-		if _, err := AddURLToQueue(fmt.Sprintf("http://parallel%d.onion/page", i)); err != nil {
+		if _, err := AddURLToQueue(ctx, fmt.Sprintf("http://parallel%d.onion/page", i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -69,7 +69,7 @@ func TestDisposableIntegration(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for {
-				u, token, err := ClaimURL()
+				u, token, err := ClaimURL(ctx)
 				if err != nil {
 					errors <- err
 					return
@@ -77,11 +77,11 @@ func TestDisposableIntegration(t *testing.T) {
 				if u == "" {
 					return
 				}
-				if err := SaveLinks(u, []string{"http://destination.onion/page"}); err != nil {
+				if err := SaveLinks(ctx, u, []string{"http://destination.onion/page"}); err != nil {
 					errors <- err
 					return
 				}
-				if err := FinishClaim(u, token, true, time.Hour, 200); err != nil {
+				if err := FinishClaim(ctx, u, token, true, time.Hour, 200); err != nil {
 					errors <- err
 					return
 				}
@@ -107,7 +107,7 @@ func TestDisposableIntegration(t *testing.T) {
 		writers.Add(1)
 		go func() {
 			defer writers.Done()
-			if err := SaveURL("http://unique-fixture.onion"); err != nil {
+			if err := SaveURL(ctx, "http://unique-fixture.onion"); err != nil {
 				t.Error(err)
 			}
 		}()
