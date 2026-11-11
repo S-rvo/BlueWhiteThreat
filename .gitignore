@@ -9,8 +9,9 @@
 # l'historique de main — l'ignorer empêche toute récidive si un vieux compose
 # est restauré. Le compose actuel utilise un volume Docker nommé (mongodb_data).
 infra/db/
-# Binaire crawler compilé (ne doit jamais être committé ; 14Mo en historique).
+# Binaires crawler compilés (ne doivent jamais être committés ; 14Mo en historique).
 apps/crawler/crawler
+apps/crawler/collectseeds
 
 .worktrees/
 .DS_Store

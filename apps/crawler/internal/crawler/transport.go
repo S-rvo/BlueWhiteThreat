@@ -68,7 +68,7 @@ func (t *boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	defer resp.Body.Close()
 	var reader io.Reader = resp.Body
-	if resp.Header.Get("Content-Encoding") == "gzip" || strings.HasSuffix(req.URL.Path, ".gz") && !resp.Uncompressed {
+	if (resp.Header.Get("Content-Encoding") == "gzip" || strings.HasSuffix(req.URL.Path, ".gz")) && !resp.Uncompressed {
 		gz, err := gzip.NewReader(reader)
 		if err != nil {
 			return nil, err
