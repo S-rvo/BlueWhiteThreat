@@ -44,7 +44,7 @@ Elle complète `docs/mvp-2027-cadrage.md`. Elle décrit l'existant observable da
 | parser CTI | futur `apps/parser` | **Planifié** | à définir | MongoDB, Ollama, Neo4j | Extraction d'entités structurées |
 | registre des sources | à définir | **Planifié** | à définir | API, base de données | Validation analyste des sources candidates |
 | connecteur forums | à définir | **Planifié** | aucun prévu | registre, MongoDB | Collecte de forums validés |
-| connecteur Telegram | futur service Go | **Planifié** | aucun prévu | registre, MongoDB | Collecte de canaux publics validés |
+| connecteur Telegram | `apps/telegram/cmd/telegram` | **Découverte et suivi paginé sans compte** | aucun | GitHub, Telegram ; MongoDB optionnel | Files découverte/suivi, curseurs, planificateur, sortie JSON ou MongoDB ; voir `apps/telegram/README.md` |
 | export STIX/TAXII | à définir | **Planifié** | à définir | Neo4j | Interopérabilité MISP/SIEM |
 | alerting | à définir | **Planifié** | à définir | Neo4j, API | Alertes acteur/TTP surveillé |
 
@@ -540,7 +540,7 @@ docker compose logs --tail=50 mongo-express
 
 ### 8.12 Services planifiés
 
-Les composants suivants ne sont pas présents dans le code : parser CTI, registre des sources, connecteurs forums/Telegram dédiés, export STIX/TAXII et alerting. Leur fiche opérationnelle devra être ajoutée lorsque leur premier exécutable et leur contrat de configuration existeront.
+Les composants suivants ne sont pas présents dans le code : parser CTI, registre des sources, connecteur forums dédié, export STIX/TAXII et alerting. Leur fiche opérationnelle devra être ajoutée lorsque leur premier exécutable et leur contrat de configuration existeront.
 
 Pour chacun, la Definition of Done documentaire minimale sera :
 

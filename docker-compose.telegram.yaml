@@ -1,0 +1,25 @@
+# Optional continuous discovery/follow worker. Text goes to the persistent JSON outbox; no NLP is started.
+services:
+  tor1:
+    build:
+      context: ./apps/proxy
+      dockerfile: Dockerfile.dev
+    ports:
+      - "9051:9050"
+    restart: unless-stopped
+
+  telegram:
+    build:
+      context: .
+      dockerfile: apps/telegram/Dockerfile
+    environment:
+      TOR_PROXY_URL: socks5h://tor1:9050
+    depends_on:
+      - tor1
+    volumes:
+      - telegram_registry:/data
+    command: ["-mode", "all", "-interval", "5m", "-max-channels", "5", "-max-pages", "10", "-request-timeout", "90s"]
+    restart: unless-stopped
+
+volumes:
+  telegram_registry:
