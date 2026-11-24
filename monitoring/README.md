@@ -1,6 +1,6 @@
 # Monitoring local BlueWhiteThreat
 
-Cette extension Compose ajoute un tableau unique pour les conteneurs, leurs performances et leurs logs :
+Cette extension Compose ajoute un tableau pour les conteneurs, leurs performances et leurs logs, ainsi que des métriques agrégées du pipeline :
 
 - Grafana : interface et dashboard ;
 - Prometheus : séries temporelles ;
@@ -8,7 +8,7 @@ Cette extension Compose ajoute un tableau unique pour les conteneurs, leurs perf
 - Loki : stockage des logs pendant 7 jours ;
 - Grafana Alloy : découverte des conteneurs du projet et envoi de leurs logs à Loki.
 
-Le tableau contient un inventaire permanent des services applicatifs et techniques attendus : `crawler`, `scraper`, `api`, `classifier`, `tor1`, `tor2`, `tor3`, `front`, `mongodb`, `redis`, `neo4j`, `mongo-express`, ainsi que les cinq composants de monitoring. Un service arrêté reste visible avec l'état **HORS LIGNE** ; son état, ses métriques et ses logs sont alimentés automatiquement dès que son conteneur rejoint le projet Compose `bluewhitethreat`.
+Le tableau contient un inventaire permanent des services applicatifs et techniques attendus : `crawler`, `scraper`, `api`, `classifier`, `tor1`, `tor2`, `tor3`, `front`, `mongodb`, `redis`, `neo4j`, ainsi que les cinq composants de monitoring. Un service arrêté reste visible avec l'état **HORS LIGNE** ; son état, ses métriques et ses logs sont alimentés automatiquement dès que son conteneur rejoint le projet Compose `bluewhitethreat`.
 
 ## Architecture des logs et des métriques
 
@@ -30,6 +30,9 @@ export GRAFANA_ADMIN_USER=admin
 export GRAFANA_ADMIN_PASSWORD='choisir-un-mot-de-passe-local'
 docker compose -p bluewhitethreat -f docker-compose.monitoring.yaml up -d
 ```
+
+Le mot de passe Grafana est requis par Compose ; sur un volume existant,
+ce réglage ne fait pas tourner le compte déjà initialisé.
 
 Le nom de projet `bluewhitethreat` est important : Alloy filtre les logs sur ce label Compose afin de ne pas collecter les logs des autres projets Docker de la machine.
 
@@ -83,6 +86,26 @@ Dans Grafana :
 6. le compteur d'erreurs doit évoluer si une ligne contient `error`, `fatal`, `panic`, `failed`, `erreur` ou `échec`.
 
 Le dashboard n'allume pas les services arrêtés. Le crawler et le scraper doivent être lancés volontairement après les contrôles de sécurité et de configuration décrits dans `docs/runbook-services.md`.
+
+## Métriques pipeline
+
+Avec le monitoring et le [profil API](../docs/runbook-services.md#88-api--api)
+dans le même projet Compose, Prometheus interroge `api:8083/metrics`
+toutes les 60 secondes (cible `bwt-pipeline`). En mode monitoring seul,
+cette cible est normalement `DOWN`.
+
+| Série Prometheus | Lecture |
+| --- | --- |
+| `bwt_articles`, `bwt_classified_articles`, `bwt_relevant_articles` | Volumes stocké, classé et jugé pertinent ; le rapport classés/stockés est une mesure de couverture, pas de précision. |
+| `bwt_review_pending_articles` | Verdicts marqués pour revue par le classifieur. |
+| `bwt_extraction_pending_articles`, `bwt_projection_pending_articles` | Travaux restants sur les articles pertinents non marqués pour revue. |
+| `bwt_latest_scrape_timestamp_seconds` | Date du dernier scrape stocké ; `time() - bwt_latest_scrape_timestamp_seconds` donne son âge en secondes. Série absente s’il n’y a pas de date connue. |
+
+Les séries ne contiennent ni texte, URL, identifiant, IOC ou étiquette par
+source. La collecte fait une agrégation Mongo bornée ; si elle dépasse
+le délai, l’API renvoie 503 plutôt que des zéros trompeurs. Sur un volume
+important, profiler cette requête avant d’augmenter la fréquence ou
+préférer des compteurs matérialisés.
 
 ## Exploitation
 

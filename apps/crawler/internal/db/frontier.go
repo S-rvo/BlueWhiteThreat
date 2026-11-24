@@ -142,10 +142,8 @@ func RetryDelay(ctx context.Context, u string) time.Duration {
 	if err != nil {
 		return time.Minute
 	}
-	if n > 10 {
-		n = 10
-	}
-	return time.Duration(1<<uint(n)) * 30 * time.Second
+	n = max(0, min(n, 10))
+	return time.Duration(1<<n) * 30 * time.Second
 }
 func FetchMetadata(ctx context.Context, u string) (map[string]string, error) {
 	return RedisClient.HGetAll(ctx, "crawler:page:"+u).Result()

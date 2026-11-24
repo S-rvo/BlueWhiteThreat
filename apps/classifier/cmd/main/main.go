@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"flag"
 	"fmt"
 	"log"
 	"math"
@@ -23,6 +24,8 @@ var defaultIntervalMinutes = 10
 const legacyPipelineSourceType = "darkweb_page"
 
 func main() {
+	once := flag.Bool("once", false, "run one classification cycle and exit")
+	flag.Parse()
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env found or unreadable, continuing with existing environment.")
 	}
@@ -39,7 +42,12 @@ func main() {
 	}
 
 	log.Printf("Classifier service started (model version %s, interval %d min)", classifier.Version(), defaultIntervalMinutes)
-	runOnce(classifier)
+	if err := runOnce(classifier); err != nil && *once {
+		log.Fatal(err)
+	}
+	if *once {
+		return
+	}
 
 	ticker := time.NewTicker(time.Duration(defaultIntervalMinutes) * time.Minute)
 	defer ticker.Stop()
@@ -95,24 +103,25 @@ func applyThresholdOverride(m *model.Model, raw string) bool {
 	return true
 }
 
-func runOnce(classifier *classify.Classifier) {
+func runOnce(classifier *classify.Classifier) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	client, err := db.Connect(ctx)
 	if err != nil {
 		log.Printf("failed to connect to MongoDB, will retry next tick: %v", err)
-		return
+		return err
 	}
 	defer client.Disconnect(ctx)
 
 	articles, err := db.FetchNeedingClassification(ctx, client, classifier.Version())
 	if err != nil {
 		log.Printf("failed to fetch articles needing classification, will retry next tick: %v", err)
-		return
+		return err
 	}
 	log.Printf("Found %d articles needing classification by model %s", len(articles), classifier.Version())
 
+	var writeErr error
 	for _, article := range articles {
 		relevance, skip := classifyArticleSource(classifier, article.Content, article.SourceType)
 		if skip {
@@ -122,9 +131,10 @@ func runOnce(classifier *classify.Classifier) {
 
 		if err := db.UpdateRelevance(ctx, client, article, relevance); err != nil {
 			log.Printf("failed to update relevance for article %v: %v", article.ID, err)
-			continue
+			writeErr = err
 		}
 	}
+	return writeErr
 }
 
 // classifyArticle decides the relevance record for one article's content.

@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"html"
@@ -73,7 +74,7 @@ func run() error {
 			return err
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 16*1024*1024+1))
-		resp.Body.Close()
+		readErr = errors.Join(readErr, resp.Body.Close())
 		if resp.StatusCode != 200 {
 			return fmt.Errorf("%s: HTTP %d", repo, resp.StatusCode)
 		}

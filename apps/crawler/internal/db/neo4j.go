@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -21,8 +22,7 @@ func InitNeo4jDriver(uri, username, password string) error {
 		return err
 	}
 	if err := EnsureGraphSchema(); err != nil {
-		driver.Close(context.Background())
-		return err
+		return errors.Join(err, driver.Close(context.Background()))
 	}
 	return nil
 }

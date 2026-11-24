@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -45,7 +46,13 @@ func run(path string, dryRun bool) error {
 	if path == "" {
 		return fmt.Errorf("-file est obligatoire")
 	}
-	f, err := os.Open(path)
+	// -file is selected by the operator. Reject symlinks escaping its parent.
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	f, err := root.Open(filepath.Base(path))
 	if err != nil {
 		return err
 	}

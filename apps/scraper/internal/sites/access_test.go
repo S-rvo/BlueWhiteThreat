@@ -92,3 +92,26 @@ func TestSolver(t *testing.T) {
 		t.Fatal("insecure remote accepted")
 	}
 }
+
+func TestReadStateRejectsSymlinksAndOversizedFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.json")
+	outside := filepath.Join(t.TempDir(), "other.json")
+	if err := os.WriteFile(outside, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readState(path); err == nil {
+		t.Fatal("state reader followed a symlink")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, make([]byte, 1<<20+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readState(path); err == nil {
+		t.Fatal("state reader accepted an oversized file")
+	}
+}

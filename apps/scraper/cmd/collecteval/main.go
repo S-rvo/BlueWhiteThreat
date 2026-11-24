@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"html"
@@ -108,7 +109,7 @@ func run() error {
 				return fmt.Errorf("%s request: %w", source.site, err)
 			}
 			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 16*1024*1024+1))
-			resp.Body.Close()
+			readErr = errors.Join(readErr, resp.Body.Close())
 			if readErr != nil {
 				return readErr
 			}
@@ -176,8 +177,7 @@ func run() error {
 		return err
 	}
 	if _, err = report.Write(append(b, '\n')); err != nil {
-		report.Close()
-		return err
+		return errors.Join(err, report.Close())
 	}
 	if err = report.Close(); err != nil {
 		return err

@@ -8,6 +8,7 @@ COPY apps/scraper/go.mod apps/scraper/go.sum ./
 RUN go mod download
 
 COPY apps/scraper/. .
+RUN mkdir -p data && printf '{}\n' > data/sites.json
 
 # Run unit/integration tests. Faille si test KO !
 RUN go test ./...

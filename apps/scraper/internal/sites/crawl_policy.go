@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -90,9 +91,14 @@ func preparePublicRender(ctx context.Context, target string) (func(), error) {
 	}
 	origin, _ := url.Parse(target)
 	client := db.ConnectRedis()
+	closeRenderRedis := func() {
+		if err := client.Close(); err != nil {
+			log.Printf("close render Redis connection: %v", err)
+		}
+	}
 	tokenBytes := make([]byte, 16)
 	if _, err = rand.Read(tokenBytes); err != nil {
-		client.Close()
+		closeRenderRedis()
 		return nil, err
 	}
 	token := hex.EncodeToString(tokenBytes)
@@ -103,7 +109,7 @@ func preparePublicRender(ctx context.Context, target string) (func(), error) {
 		n, e := client.Eval(ctx, `local ready=tonumber(redis.call('HGET','crawler:host_ready',ARGV[1]) or '0');if ready>tonumber(ARGV[2]) then return 0 end
 redis.call('HSET','crawler:host_ready',ARGV[1],tonumber(ARGV[2])+180);redis.call('HSET','crawler:render_host_owner',ARGV[1],ARGV[3]);return 1`, nil, host, now, token).Int()
 		if e != nil {
-			client.Close()
+			closeRenderRedis()
 			return nil, e
 		}
 		if n == 1 {
@@ -111,7 +117,7 @@ redis.call('HSET','crawler:host_ready',ARGV[1],tonumber(ARGV[2])+180);redis.call
 		}
 		select {
 		case <-ctx.Done():
-			client.Close()
+			closeRenderRedis()
 			return nil, ctx.Err()
 		case <-time.After(time.Second):
 		}
@@ -121,9 +127,11 @@ redis.call('HSET','crawler:host_ready',ARGV[1],tonumber(ARGV[2])+180);redis.call
 		c, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		// If the lease expired, a subsequent crawler claim owns the host now.
-		client.Eval(c, `if redis.call('HGET','crawler:render_host_owner',ARGV[1])==ARGV[2] then
-redis.call('HDEL','crawler:render_host_owner',ARGV[1]);if tonumber(redis.call('HGET','crawler:host_ready',ARGV[1]) or '0')==tonumber(ARGV[3]) then redis.call('HSET','crawler:host_ready',ARGV[1],tonumber(ARGV[4])+tonumber(ARGV[5])) end end return 1`, nil, host, token, leaseUntil, time.Now().Unix(), cooldown)
-		client.Close()
+		if err := client.Eval(c, `if redis.call('HGET','crawler:render_host_owner',ARGV[1])==ARGV[2] then
+redis.call('HDEL','crawler:render_host_owner',ARGV[1]);if tonumber(redis.call('HGET','crawler:host_ready',ARGV[1]) or '0')==tonumber(ARGV[3]) then redis.call('HSET','crawler:host_ready',ARGV[1],tonumber(ARGV[4])+tonumber(ARGV[5])) end end return 1`, nil, host, token, leaseUntil, time.Now().Unix(), cooldown).Err(); err != nil {
+			log.Printf("release render host lease: %v", err)
+		}
+		closeRenderRedis()
 	}
 	proxy, _ := ctx.Value(crawlProxyKey{}).(string)
 	robots, err := readRenderRobots(ctx, target, proxy)
@@ -156,7 +164,9 @@ redis.call('HDEL','crawler:render_host_owner',ARGV[1]);if tonumber(redis.call('H
 			execCtx := cdp.WithExecutor(listenCtx, chromedp.FromContext(ctx).Target)
 			u, e := url.Parse(paused.Request.URL)
 			if e != nil || u.Scheme != origin.Scheme || !strings.EqualFold(u.Host, origin.Host) || !robots.TestAgent(u.RequestURI(), crawlAgent) {
-				fetch.FailRequest(paused.RequestID, network.ErrorReasonBlockedByClient).Do(execCtx)
+				if err := fetch.FailRequest(paused.RequestID, network.ErrorReasonBlockedByClient).Do(execCtx); err != nil && listenCtx.Err() == nil {
+					log.Print("could not block paused browser request")
+				}
 				return
 			}
 			mu.Lock()
@@ -171,7 +181,9 @@ redis.call('HDEL','crawler:render_host_owner',ARGV[1]);if tonumber(redis.call('H
 				}
 			}
 			next = time.Now().Add(delay)
-			fetch.ContinueRequest(paused.RequestID).Do(execCtx)
+			if err := fetch.ContinueRequest(paused.RequestID).Do(execCtx); err != nil && listenCtx.Err() == nil {
+				log.Print("could not continue paused browser request")
+			}
 		}()
 	})
 	err = chromedp.Run(ctx, emulation.SetUserAgentOverride(crawlAgent), network.SetBypassServiceWorker(true), network.SetCacheDisabled(true), network.SetBlockedURLs([]string{"ws://*", "wss://*"}), fetch.Enable())
@@ -180,5 +192,11 @@ redis.call('HDEL','crawler:render_host_owner',ARGV[1]);if tonumber(redis.call('H
 		release()
 		return nil, err
 	}
-	return func() { chromedp.Run(ctx, fetch.Disable()); cancelListen(); release() }, nil
+	return func() {
+		if err := chromedp.Run(ctx, fetch.Disable()); err != nil && ctx.Err() == nil {
+			log.Print("could not disable browser interception")
+		}
+		cancelListen()
+		release()
+	}, nil
 }

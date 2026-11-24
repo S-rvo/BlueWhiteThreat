@@ -1,0 +1,16 @@
+# Root build context is used by crawler/scraper and shared Go modules.
+# Do not send the working tree, databases, credentials or datasets to Docker.
+**
+!apps/crawler/go.mod
+!apps/crawler/go.sum
+!apps/crawler/cmd/**/*.go
+!apps/crawler/internal/**/*.go
+!apps/crawler/internal/seeddata/seed_urls.txt
+!apps/crawler/tests/**/*.go
+!apps/scraper/go.mod
+!apps/scraper/go.sum
+!apps/scraper/cmd/**/*.go
+!apps/scraper/internal/**/*.go
+!apps/scraper/tests/**/*.go
+!pkg/csamfilter/go.mod
+!pkg/csamfilter/*.go

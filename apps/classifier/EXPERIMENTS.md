@@ -27,6 +27,8 @@ limites avant de comparer deux chiffres.
 | [29 oct. : lot rétrospectif](../../docs/validation/nlp-actual-pipeline-holdout-2026-10-29.md) | 1 512 consensus LLM. Production : précision 32,68 %, rappel 92,77 % ; candidat ransomware.live : 22,09 % / 97,87 %. | Test consommé ; les deux échouent en précision, candidat non promu. |
 | [30 oct. : tranche prospective 02](../../docs/validation/nlp-prospective-pipeline-2026-10-30.md) | 705 consensus LLM. Production : 22,66 % / 85,14 % ; candidat : 16,12 % / 93,24 %. Le candidat ajoute 6 vrais positifs et 144 faux positifs. | Test consommé ; aucun modèle ne passe les deux critères gelés. |
 | [5 nov. : campagne darkweb ciblée](experiments/results/2026-11-05-darkweb-live.json) | 140 consensus sur 200, un seul positif. Production : 1 TP et 24 FP ; candidat : 0 TP et 4 FP. | Sous-puissant, non qualifié, aucune promotion. |
+| [24 nov. : ingestion → extraction → graphe](../../docs/validation/2026-11-24-pipeline-smoke.md) | Passé sur deux documents, poids de fixture fixes, Ollama simulé ; provenance et rejeu sans doublon. | Régression logicielle uniquement ; aucune réserve consommée, aucun réentraînement. |
+| [Prochaine qualification humaine](../../docs/qualification-nlp-parser.md) | Aucun score : lot prospectif annoté indépendamment et arbitré à constituer ; extraction mesurée séparément. | En attente, aucune promotion. |
 
 ## Ce qui a été essayé hors qualification finale
 

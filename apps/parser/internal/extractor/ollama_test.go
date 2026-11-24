@@ -3,8 +3,10 @@ package extractor
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -49,5 +51,28 @@ func TestOllamaExtractor_ErrorsOnInvalidJSON(t *testing.T) {
 	_, err := ext.Extract(context.Background(), "text")
 	if err == nil {
 		t.Fatal("expected error on malformed model output")
+	}
+}
+
+func TestOllamaRejectsInvalidResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"error status despite valid body", 500, `{"message":{"content":"{}"}}`},
+		{"not an object", 200, `{"message":{"content":"null"}}`},
+		{"oversized", 200, `{"message":{"content":"{}"}}` + strings.Repeat(" ", (1<<20)+1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			if _, err := NewOllamaExtractor(server.URL, "fixture").Extract(context.Background(), "synthetic"); err == nil {
+				t.Fatal("accepted invalid response")
+			}
+		})
 	}
 }

@@ -54,12 +54,38 @@ func readState(path string) (accessState, error) {
 	if path == "" {
 		return state, nil
 	}
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	// The directory is operator-configured. Confine reads to it, even if
+	// the state file was replaced by a symlink.
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if errors.Is(err, os.ErrNotExist) {
 		return state, nil
 	}
 	if err != nil {
 		return state, err
+	}
+	defer root.Close()
+	info, err := root.Lstat(filepath.Base(path))
+	if errors.Is(err, os.ErrNotExist) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	const maxStateBytes = 1 << 20
+	if !info.Mode().IsRegular() || info.Size() > maxStateBytes {
+		return state, errors.New("state file must be a bounded regular file")
+	}
+	f, err := root.Open(filepath.Base(path))
+	if err != nil {
+		return state, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxStateBytes+1))
+	if err != nil {
+		return state, err
+	}
+	if len(data) > maxStateBytes {
+		return state, errors.New("state file exceeds size limit")
 	}
 	err = json.Unmarshal(data, &state)
 	return state, err
@@ -82,8 +108,7 @@ func writeState(path string, state accessState) error {
 	}
 	defer os.Remove(f.Name())
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err := f.Close(); err != nil {
 		return err

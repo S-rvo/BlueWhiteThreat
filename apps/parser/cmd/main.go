@@ -37,7 +37,17 @@ func main() {
 	ollamaHost := getEnvOrDefault("OLLAMA_HOST", "http://localhost:11434")
 	ollamaModel := getEnvOrDefault("OLLAMA_MODEL", "qwen2.5:14b-instruct")
 	primary := extractor.NewOllamaExtractor(ollamaHost, ollamaModel)
-	fallback := extractor.NewClaudeExtractor()
+	var fallback extractor.Extractor
+	switch os.Getenv("PARSER_ENABLE_REMOTE_FALLBACK") {
+	case "", "false":
+	case "true":
+		if os.Getenv("ANTHROPIC_API_KEY") == "" {
+			log.Fatal("PARSER_ENABLE_REMOTE_FALLBACK=true requires ANTHROPIC_API_KEY")
+		}
+		fallback = extractor.NewClaudeExtractor()
+	default:
+		log.Fatal("PARSER_ENABLE_REMOTE_FALLBACK must be true or false")
+	}
 
 	log.Printf("Lancement du parser (interval: %d min)", defaultIntervalMin)
 	runOnce(primary, fallback)
@@ -70,7 +80,9 @@ func runOnce(primary, fallback extractor.Extractor) {
 }
 
 func extractPending(ctx context.Context, client *mongo.Client, primary, fallback extractor.Extractor) {
-	articles, err := db.FetchUnparsedArticles(ctx, client, batchSize)
+	readCtx, cancelRead := context.WithTimeout(ctx, 10*time.Second)
+	articles, err := db.FetchUnparsedArticles(readCtx, client, batchSize)
+	cancelRead()
 	if err != nil {
 		log.Printf("Erreur lecture articles: %v", err)
 		return
@@ -83,7 +95,10 @@ func extractPending(ctx context.Context, client *mongo.Client, primary, fallback
 			log.Printf("Erreur extraction article %v: %v", a.ID, err)
 			continue
 		}
-		if err := db.SaveEntities(ctx, client, a.ID, ents); err != nil {
+		saveCtx, cancelSave := context.WithTimeout(ctx, 10*time.Second)
+		err = db.SaveEntities(saveCtx, client, a, ents)
+		cancelSave()
+		if err != nil {
 			log.Printf("Erreur écriture Mongo article %v: %v", a.ID, err)
 		}
 	}

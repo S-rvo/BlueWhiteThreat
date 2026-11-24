@@ -2,58 +2,64 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func main() {
-	gin.SetMode(gin.ReleaseMode)
-	r := gin.Default()
-	r.SetTrustedProxies([]string{"127.0.0.1"})
-	r.Use(cors.Default())
+	uri := os.Getenv("MONGODB_URI")
+	if uri == "" {
+		log.Fatal("MONGODB_URI is required; use a dedicated read-only MongoDB account")
+	}
+	db := os.Getenv("MONGO_DB")
+	if db == "" {
+		db = "BlueWhiteThreat"
+	}
 
-	r.GET("/data", func(c *gin.Context) {
-		client, err := mongo.NewClient(options.Client().ApplyURI("mongodb://root:root@mongodb:27017"))
-		if err != nil {
-			log.Printf("Erreur création client MongoDB: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Erreur connexion MongoDB"})
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri).
+		SetConnectTimeout(3*time.Second).SetServerSelectionTimeout(3*time.Second))
+	if err != nil {
+		log.Fatal("invalid MongoDB configuration")
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := client.Connect(ctx); err != nil {
-			log.Printf("Erreur connexion MongoDB: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Erreur connexion MongoDB"})
-			return
+		if err := client.Disconnect(closeCtx); err != nil {
+			log.Print("could not close MongoDB client cleanly")
 		}
-		defer client.Disconnect(ctx)
+	}()
 
-		collection := client.Database("BlueWhiteThreat").Collection("article")
-		cur, err := collection.Find(ctx, map[string]interface{}{})
-		if err != nil {
-			log.Printf("Erreur Find: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Erreur lecture données", "details": err.Error()})
-			return
+	server := &http.Server{
+		Addr:              ":8083",
+		Handler:           newHandler(mongoStore{client.Database(db).Collection("article")}),
+		ReadHeaderTimeout: 3 * time.Second,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      8 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
+	done := make(chan error, 1)
+	go func() { done <- server.ListenAndServe() }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
 		}
-		defer cur.Close(ctx)
-
-		var results []map[string]interface{}
-		for cur.Next(ctx) {
-			var result map[string]interface{}
-			if err := cur.Decode(&result); err != nil {
-				log.Printf("Erreur decode: %v", err)
-				continue
-			}
-			results = append(results, result)
+	case <-ctx.Done():
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(closeCtx); err != nil {
+			log.Printf("API shutdown: %v", err)
 		}
-		c.JSON(http.StatusOK, results)
-	})
-
-	r.Run(":8083")
+	}
 }

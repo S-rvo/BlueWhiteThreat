@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter"
@@ -98,7 +99,7 @@ func run() error {
 		}
 		requests++
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, 16*1024*1024+1))
-		response.Body.Close()
+		readErr = errors.Join(readErr, response.Body.Close())
 		if response.StatusCode != 200 {
 			return fmt.Errorf("HTTP %d; collection stopped without retry", response.StatusCode)
 		}

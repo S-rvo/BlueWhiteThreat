@@ -5,6 +5,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"html"
@@ -138,7 +139,7 @@ func run() error {
 			return requestErr
 		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
-		resp.Body.Close()
+		readErr = errors.Join(readErr, resp.Body.Close())
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("GET %s: HTTP %d", endpoint, resp.StatusCode)
 		}
