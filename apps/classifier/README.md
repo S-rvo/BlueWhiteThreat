@@ -35,6 +35,12 @@ modèle versionné, pas à une nouvelle exécution de `cmd/train`.
 Les corpus et les files de revue contiennent du texte collecté : le CSV local
 `training_data.csv` produit par `cmd/bootstrap` et le fichier
 `review_queue.jsonl` produit par `cmd/export` ne font pas partie du dépôt courant.
+
+Pour enrichir cet export local avec CISA KEV et des références CERT-FR :
+`go run ./cmd/export -cti-context`. Le fichier séparé
+`review_queue.cti.jsonl` reste privé et ignoré par Git.
+Voir [le guide de revue CTI](../../docs/validation/2026-11-24-review-cti.md).
+
 Les labels d’un corpus peuvent mélanger corrections humaines et
 heuristiques de bootstrap : les métriques mesurent l'accord avec ces labels.
 Pour démontrer une qualité réelle de 95 %, il faut aussi un corpus indépendant,

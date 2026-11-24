@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"log"
 	"math/rand"
 	"os"
@@ -36,12 +37,13 @@ import (
 
 // ReviewCandidate is one line of the exported JSONL review queue.
 type ReviewCandidate struct {
-	ID             string  `json:"id"`
-	URL            string  `json:"url,omitempty"`
-	HeuristicLabel int     `json:"heuristic_label"`
-	ModelScore     float64 `json:"model_score,omitempty"`
-	NeedsReview    bool    `json:"needs_review,omitempty"`
-	Content        string  `json:"content"`
+	ID             string         `json:"id"`
+	URL            string         `json:"url,omitempty"`
+	HeuristicLabel int            `json:"heuristic_label"`
+	ModelScore     float64        `json:"model_score,omitempty"`
+	NeedsReview    bool           `json:"needs_review,omitempty"`
+	Content        string         `json:"content"`
+	CTIContext     *reviewContext `json:"cti_context,omitempty"`
 }
 
 // prioritizeNeedsReview stable-sorts candidates so every one already
@@ -59,11 +61,21 @@ func prioritizeNeedsReview(candidates []ReviewCandidate) {
 }
 
 func main() {
+	withCTI := flag.Bool("cti-context", false, "add CISA KEV and CERT-FR references to candidates flagged for review")
+	kevFile := flag.String("kev-file", "", "read a local CISA KEV JSON snapshot instead of downloading it (requires -cti-context)")
+	flag.Parse()
+	if *kevFile != "" && !*withCTI {
+		log.Fatal("-kev-file requires -cti-context")
+	}
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env found or unreadable, continuing with existing environment.")
 	}
 
-	outputPath := getEnvOrDefault("EXPORT_OUTPUT", "review_queue.jsonl")
+	defaultOutput := "review_queue.jsonl"
+	if *withCTI {
+		defaultOutput = "review_queue.cti.jsonl"
+	}
+	outputPath := getEnvOrDefault("EXPORT_OUTPUT", defaultOutput)
 	keywordsPath := getEnvOrDefault("SEED_KEYWORDS_PATH", "data/seed_keywords.json")
 	reviewedPath := getEnvOrDefault("REVIEWED_LABELS_PATH", "data/reviewed_labels.csv")
 	excludedPath := getEnvOrDefault("EXCLUDED_IDS_PATH", "data/excluded_ids.csv")
@@ -101,6 +113,14 @@ func main() {
 	log.Printf("%d documents excluded (CSAM/CSAM-adjacent) — excluding them from the export", len(excluded))
 
 	ctx := context.Background()
+	var kev *kevSnapshot
+	if *withCTI {
+		var err error
+		kev, err = readKEV(ctx, *kevFile)
+		if err != nil {
+			log.Fatalf("failed to load CISA KEV: %v", err)
+		}
+	}
 	client, err := db.Connect(ctx)
 	if err != nil {
 		log.Fatalf("failed to connect to MongoDB: %v", err)
@@ -168,7 +188,13 @@ func main() {
 	prioritizeNeedsReview(positives)
 	prioritizeNeedsReview(negatives)
 
-	file, err := os.Create(outputPath)
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	if *withCTI {
+		// Un export enrichi contient toujours le texte privé : créer un
+		// nouveau fichier plutôt que réutiliser un fichier aux droits inconnus.
+		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	}
+	file, err := os.OpenFile(outputPath, flags, 0o600)
 	if err != nil {
 		log.Fatalf("failed to create output file: %v", err)
 	}
@@ -177,6 +203,7 @@ func main() {
 	encoder := json.NewEncoder(file)
 	written := 0
 	for _, c := range append(positives, negatives...) {
+		c.CTIContext = contextForReview(c, kev)
 		if err := encoder.Encode(c); err != nil {
 			log.Printf("skipping candidate %s due to encode error: %v", c.ID, err)
 			continue

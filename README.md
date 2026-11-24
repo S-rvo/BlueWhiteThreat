@@ -24,6 +24,7 @@ Ce projet vise à fournir un outil de veille automatisée sur les menaces issues
 - [`docs/developpement.md`](docs/developpement.md) : plan du dépôt et vérifications locales, sans lancer de collecte ni d'entraînement.
 - [Test synthétique de bout en bout](docs/validation/2026-11-24-pipeline-smoke.md) : `python3 tests/pipeline/smoke.py` ; bases jetables, pas de collecte ni d’entraînement.
 - [Qualification du classifieur et du parser](docs/qualification-nlp-parser.md) : nouveau lot humain, suivi des campagnes et mesure distincte des entités.
+- [Revue CTI du classifieur](docs/validation/2026-11-24-review-cti.md) : rapprocher localement les CVE du catalogue CISA KEV et retrouver les avis CERT-FR, sans modifier les verdicts.
 - [`apps/classifier/EXPERIMENTS.md`](apps/classifier/EXPERIMENTS.md) : essais du classifier, conclusions, résultats négatifs et réserves à ne pas réutiliser.
 
 ## Documentation opérationnelle

@@ -28,6 +28,7 @@ limites avant de comparer deux chiffres.
 | [30 oct. : tranche prospective 02](../../docs/validation/nlp-prospective-pipeline-2026-10-30.md) | 705 consensus LLM. Production : 22,66 % / 85,14 % ; candidat : 16,12 % / 93,24 %. Le candidat ajoute 6 vrais positifs et 144 faux positifs. | Test consommé ; aucun modèle ne passe les deux critères gelés. |
 | [5 nov. : campagne darkweb ciblée](experiments/results/2026-11-05-darkweb-live.json) | 140 consensus sur 200, un seul positif. Production : 1 TP et 24 FP ; candidat : 0 TP et 4 FP. | Sous-puissant, non qualifié, aucune promotion. |
 | [24 nov. : ingestion → extraction → graphe](../../docs/validation/2026-11-24-pipeline-smoke.md) | Passé sur deux documents, poids de fixture fixes, Ollama simulé ; provenance et rejeu sans doublon. | Régression logicielle uniquement ; aucune réserve consommée, aucun réentraînement. |
+| [24 nov. : ajout du contexte CTI à l’export](../../docs/validation/2026-11-24-review-cti.md#vérifier) | Tests unitaires, catalogue KEV public et export comparé sur MongoDB jetable avec un compte en lecture seule. Seul le contexte attendu est ajouté ; le fichier enrichi reste privé et non écrasable. | Régression logicielle passée, aucun corpus de qualification consommé. |
 | [Prochaine qualification humaine](../../docs/qualification-nlp-parser.md) | Aucun score : lot prospectif annoté indépendamment et arbitré à constituer ; extraction mesurée séparément. | En attente, aucune promotion. |
 
 ## Ce qui a été essayé hors qualification finale

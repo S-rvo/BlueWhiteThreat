@@ -16,6 +16,7 @@
 /dumptfidf
 /*.csv
 /review_queue.jsonl
+/review_queue.cti.jsonl
 /model_*.json
 /model_*.json.*
 /.codex_loop_logs/

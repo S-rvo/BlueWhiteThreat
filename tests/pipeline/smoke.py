@@ -99,6 +99,7 @@ def main():
             # Run only the scoring entrypoint. Never load the checkout's model or .env.
             run(str(binary), "-once", cwd=workdir, env=env)
             go_test("parser", "./cmd", "^TestSmokeExtractAndReplay$")
+            go_test("classifier", "./cmd/export", "^TestSmokeCTIReviewExport$")
             run("docker", "exec", "-e", "BWT_SMOKE_API_PASSWORD", mongo, "sh", "-ec",
                 'mongosh --quiet --username "$MONGO_INITDB_ROOT_USERNAME" '
                 '--password "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin '
