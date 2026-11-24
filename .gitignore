@@ -1,18 +1,43 @@
+# Configurations locales (les exemples versionnés restent visibles).
+.env
+.env.*
 *.env
-*.env.local
-*.env.prod
-/db
+*.env.*
+!.env.example
+!.env.*.example
+!*.env.example
+!*.env.*.example
 
-# Données runtime de bases de données (jamais dans le dépôt).
-# /db couvre les bind-mounts actuels (redis, redis-backups). infra/db/ est un
-# ancien chemin de bind-mount MongoDB dont des blobs 100Mo polluent encore
-# l'historique de main — l'ignorer empêche toute récidive si un vieux compose
-# est restauré. Le compose actuel utilise un volume Docker nommé (mongodb_data).
-infra/db/
-# Binaires crawler compilés (ne doivent jamais être committés ; 14Mo en historique).
-apps/crawler/crawler
-apps/crawler/collectseeds
+# Données Docker : bind-mounts Redis actuels et ancien bind-mount MongoDB.
+/db/
+/infra/db/
 
-.worktrees/
+# Dépendances, caches et rapports de test locaux.
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage/
+coverage.out
+*.test
+*.prof
+*.log
+
+# Binaires produits par « go build » dans le module crawler.
+/apps/crawler/crawler
+/apps/crawler/collectseeds
+
+# Outils locaux (ne pas ignorer les configurations partagées).
 .DS_Store
-apps/classifier/retrain_loop.log
+.idea/
+.fleet/
+/.worktrees/
+/.claude/settings.local.json
+/.claude/scheduled_tasks.lock
+graphify-out/
