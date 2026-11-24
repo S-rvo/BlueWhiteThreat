@@ -139,8 +139,8 @@ func fetchContext(ctx context.Context, raw string, metadata map[string]string, p
 	// Onion-Location mirror headers are admitted as separate durable tasks,
 	// just like hyperlinks: their own robots policy and host budget apply.
 	c.OnResponse(func(r *colly.Response) {
-		for _, host := range onionInBody.FindAllString(r.Headers.Get("Onion-Location"), -1) {
-			addLink("http://" + strings.ToLower(host))
+		if mirror := strings.TrimSpace(r.Headers.Get("Onion-Location")); mirror != "" {
+			addLink(mirror)
 		}
 		ct := strings.ToLower(r.Headers.Get("Content-Type"))
 		if ct != "" && !strings.HasPrefix(ct, "text/") && !strings.Contains(ct, "xml") && !strings.Contains(ct, "json") {

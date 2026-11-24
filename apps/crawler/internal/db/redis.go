@@ -375,6 +375,10 @@ func FetchCrawlerStats() (map[string]string, error) {
 			stats[name] = fmt.Sprint(n)
 		}
 	}
+	if n, err := RedisClient.HLen(ctx, "crawler:url_host").Result(); err == nil {
+		stats["known_url_count"] = fmt.Sprint(n)
+	}
+	stats["known_url_limit"] = "1000000"
 	return stats, nil
 }
 
