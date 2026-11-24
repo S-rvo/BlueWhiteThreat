@@ -53,6 +53,49 @@ func TestStructuralTokens_IgnoresOrdinaryText(t *testing.T) {
 	}
 }
 
+func TestStructuralTokens_DetectsDarkwebErrorIndicators(t *testing.T) {
+	tokens := structuralTokens("Add to cart. Privacy policy. Dedicated server. Stolen data from a network breached last week.")
+	for _, want := range []string{"s_marketplace_boilerplate", "s_corporate_boilerplate", "s_hosting_boilerplate", "s_compromise_evidence"} {
+		if countToken(tokens, want) < 1 {
+			t.Fatalf("expected %s token, got %v", want, tokens)
+		}
+	}
+	if countToken(tokens, "s_marketplace_boilerplate_with_evidence") != 1 || countToken(tokens, "s_corporate_boilerplate_with_evidence") != 1 || countToken(tokens, "s_hosting_boilerplate_with_evidence") != 1 {
+		t.Fatalf("expected page-type/evidence interactions, got %v", tokens)
+	}
+}
+
+func TestStructuralTokens_DistinguishesTemplateWithoutEvidence(t *testing.T) {
+	tokens := structuralTokens("Add to cart from this vendor. Contact us and read our privacy policy.")
+	if countToken(tokens, "s_marketplace_boilerplate_without_evidence") != 1 || countToken(tokens, "s_corporate_boilerplate_without_evidence") != 1 {
+		t.Fatalf("expected without-evidence interactions, got %v", tokens)
+	}
+}
+
+func TestStructuralTokens_DetectsGenericDarkwebMarketsWithoutEvidence(t *testing.T) {
+	tokens := structuralTokens("Buy cloned debit cards. Casino betting and slots. Onion directory and deep web links.")
+	for _, want := range []string{"s_financial_fraud_market_without_evidence", "s_gambling_market_without_evidence", "s_darkweb_directory_without_evidence"} {
+		if countToken(tokens, want) != 1 {
+			t.Fatalf("expected %s, got %v", want, tokens)
+		}
+	}
+}
+
+func TestStructuralTokens_ContextualizesPrices(t *testing.T) {
+	ordinary := structuralTokens("Buy a service for 0.5 BTC. Prices are listed in the store.")
+	if countToken(ordinary, "s_price_mention") == 0 || countToken(ordinary, "s_price_mention_without_evidence") != 1 {
+		t.Fatalf("expected a price-without-evidence interaction, got %v", ordinary)
+	}
+	incident := structuralTokens("Stolen data identified; ransom demand is 2 BTC.")
+	if countToken(incident, "s_price_mention") == 0 || countToken(incident, "s_price_mention_with_evidence") != 1 {
+		t.Fatalf("expected a price-with-evidence interaction, got %v", incident)
+	}
+	noPrice := structuralTokens("Stolen customer records were leaked after a network breach.")
+	if countToken(noPrice, "s_price_mention_with_evidence") != 0 || countToken(noPrice, "s_price_mention_without_evidence") != 0 {
+		t.Fatalf("price interactions should require a price marker, got %v", noPrice)
+	}
+}
+
 func TestFitIncludesStructuralIndicators(t *testing.T) {
 	// A document mentioning a CVE is a strong, label-correlated structural
 	// signal distinct from any single word token - Fit must pick it up as

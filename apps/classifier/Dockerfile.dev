@@ -6,12 +6,14 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY . .
+COPY cmd ./cmd
+COPY internal ./internal
+COPY data/seed_keywords.json ./data/seed_keywords.json
 
-# Run unit tests. Fails the build if any test is red.
-RUN go test ./...
+# Test code packages (local experiment output is not part of the build context).
+RUN go test ./cmd/... ./internal/...
 
 # Build the binary for a basic sanity check.
 RUN go build -o classifier ./cmd/main
 
-CMD ["go", "run", "cmd/main/main.go"]
+CMD ["go", "run", "./cmd/main"]

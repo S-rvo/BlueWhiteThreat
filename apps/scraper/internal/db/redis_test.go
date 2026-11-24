@@ -58,7 +58,7 @@ func TestPrioritizeURLsFreshestFirstWithinSameRelevanceTier(t *testing.T) {
 // les tiers.
 func TestPrioritizeURLsRelevanceDominatesFreshness(t *testing.T) {
 	staleStrong := "http://example.onion/initial-access" // priorité 2, ancien
-	freshWeak := "http://hash-only.onion"                 // priorité 0, frais
+	freshWeak := "http://hash-only.onion"                // priorité 0, frais
 	freshness := map[string]float64{staleStrong: 1, freshWeak: 1_700_009_999}
 	got := prioritizeURLs([]string{freshWeak, staleStrong}, freshness, 2)
 	if got[0] != staleStrong {

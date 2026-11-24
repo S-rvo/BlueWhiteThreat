@@ -44,22 +44,35 @@ type Result struct {
 // into a single Classify(text) call, so callers never need to know about
 // TF-IDF or model internals.
 type Classifier struct {
-	vectorizer  *tfidf.Vectorizer
-	logreg      *model.LogisticRegression
-	threshold   float64
-	calibration model.Calibrator
-	version     string
+	vectorizer        *tfidf.Vectorizer
+	logreg            *model.LogisticRegression
+	threshold         float64
+	sourceThresholds  map[string]float64
+	sourceHeads       map[string]*model.LogisticRegression
+	sourceCalibration map[string]model.Calibrator
+	calibration       model.Calibrator
+	version           string
 }
 
 // New builds a ready-to-use Classifier from a loaded model.Model.
 func New(m *model.Model) *Classifier {
-	return &Classifier{
-		vectorizer:  &tfidf.Vectorizer{Vocabulary: m.Vocabulary, IDF: m.IDF},
-		logreg:      &model.LogisticRegression{Weights: m.Weights, Bias: m.Bias},
-		threshold:   m.Threshold,
-		calibration: m.Calibration,
-		version:     m.Version,
+	c := &Classifier{
+		vectorizer:       &tfidf.Vectorizer{Vocabulary: m.Vocabulary, IDF: m.IDF, LegacyCharNgrams: m.CharNgrams, LegacySublinearTF: m.SublinearTF},
+		logreg:           &model.LogisticRegression{Weights: m.Weights, Bias: m.Bias},
+		threshold:        m.Threshold,
+		sourceThresholds: m.SourceThresholds,
+		calibration:      m.Calibration,
+		version:          m.Version,
 	}
+	if len(m.SourceHeads) > 0 {
+		c.sourceHeads = make(map[string]*model.LogisticRegression, len(m.SourceHeads))
+		c.sourceCalibration = make(map[string]model.Calibrator, len(m.SourceHeads))
+		for source, head := range m.SourceHeads {
+			c.sourceHeads[source] = &model.LogisticRegression{Weights: head.Weights, Bias: head.Bias}
+			c.sourceCalibration[source] = head.Calibration
+		}
+	}
+	return c
 }
 
 // Version reports the model version this Classifier was built from, so
@@ -76,6 +89,13 @@ func (c *Classifier) Version() string {
 // its score falls back to sigmoid(Bias) and it is flagged for review because
 // the verdict then contains no document-specific feature evidence.
 func (c *Classifier) Classify(text string) Result {
+	return c.ClassifySource(text, "")
+}
+
+// ClassifySource uses a preselected source-specific threshold when present.
+// The raw score and calibration are identical to Classify; only the frozen
+// decision boundary changes. Unknown sources retain the global fallback.
+func (c *Classifier) ClassifySource(text, source string) Result {
 	vector := c.vectorizer.Transform(text)
 	hasFeatures := false
 	for _, value := range vector {
@@ -84,17 +104,30 @@ func (c *Classifier) Classify(text string) Result {
 			break
 		}
 	}
-	score := c.logreg.Predict(vector)
+	head := c.logreg
+	calibration := c.calibration
+	validSourceHead := false
+	if sourceHead, ok := c.sourceHeads[source]; ok && len(sourceHead.Weights) == len(vector) {
+		head = sourceHead
+		calibration = c.sourceCalibration[source]
+		validSourceHead = true
+	}
+	score := head.Predict(vector)
+	threshold := c.threshold
+	_, sourceHasHead := c.sourceHeads[source]
+	if sourceThreshold, ok := c.sourceThresholds[source]; ok && (!sourceHasHead || validSourceHead) {
+		threshold = sourceThreshold
+	}
 	reviewReason := ""
 	if !hasFeatures {
 		reviewReason = ReviewNoFeatures
-	} else if math.Abs(score-c.threshold) <= ReviewMargin {
+	} else if math.Abs(score-threshold) <= ReviewMargin {
 		reviewReason = ReviewNearThreshold
 	}
 	return Result{
-		Relevant:        score >= c.threshold,
+		Relevant:        score >= threshold,
 		Score:           score,
-		CalibratedScore: c.calibration.Apply(score),
+		CalibratedScore: calibration.Apply(score),
 		ModelVersion:    c.version,
 		NeedsReview:     reviewReason != "",
 		ReviewReason:    reviewReason,

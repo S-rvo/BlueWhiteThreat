@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Aggregate-only signal audit on the weak-positive unseen-actor corpus."""
+import json,pathlib,re
+import joblib,numpy as np
+base=pathlib.Path('apps/classifier/data/iteration-2026-10-25-source-label-audit');d=base/'unseen-actor-recall-challenge';rows=[json.loads(x) for x in (d/'documents.jsonl').read_text().splitlines()];m=joblib.load(base/'ransomware-specialist-candidate/candidate.joblib');scores=m.predict_proba([r['text'] for r in rows])[:,1];patterns={'explicit_ransomware_or_extortion':r'\bransomware\b|\bransom\b|\bextortion\b|\bdecrypt(?:ion)?\b|\bencrypt(?:ed|ion)?\b','data_exposure_or_theft':r'\bexfiltrat\w*|\bexpos(?:ed|ure)\b|\bleak(?:ed|s|ing)?\b|\bstolen\b|\bdata breach\b|\bdump\b','attack_or_compromise':r'\battack(?:ed|er|s)?\b|\bcompromis(?:ed|e)\b|\bintrusion\b|\bincident\b|\bvictim\b'};out={}
+for name,pat in patterns.items():
+ ix=np.array([bool(re.search(pat,r['text'],re.I)) for r in rows]);out[name]={'documents':int(ix.sum()),'share_of_pool':float(ix.mean()),'predicted_positive_at_0_5':int(np.sum(scores[ix]>=.5)),'recall_proxy_at_0_5':float(np.mean(scores[ix]>=.5)) if ix.any() else None,'mean_score':float(np.mean(scores[ix])) if ix.any() else None}
+no_signal=np.array([not any(re.search(p,r['text'],re.I) for p in patterns.values()) for r in rows]);out['none_of_these_explicit_terms']={'documents':int(no_signal.sum()),'share_of_pool':float(no_signal.mean()),'predicted_positive_at_0_5':int(np.sum(scores[no_signal]>=.5)),'recall_proxy_at_0_5':float(np.mean(scores[no_signal]>=.5)) if no_signal.any() else None,'mean_score':float(np.mean(scores[no_signal])) if no_signal.any() else None}
+r={'signal_definitions':patterns,'results':out,'warning':'regex only, not labels or content truth; source endpoint is a weak-positive proxy; threshold unchanged'};(d/'text-signal-audit.json').write_text(json.dumps(r,indent=2)+'\n');print(json.dumps(out,indent=2))

@@ -83,10 +83,10 @@ func TestFetchOnionAddressesBodyAndHeader(t *testing.T) {
 	if n != 2 {
 		t.Errorf("n = %d, want 2", n)
 	}
-	if !found[bodyOnion] {
+	if !found["http://"+bodyOnion+"/"] {
 		t.Errorf("adresse du corps non extraite: %v", found)
 	}
-	if !found[headerOnion] {
+	if !found["http://"+headerOnion+"/"] {
 		t.Errorf("adresse Onion-Location non extraite: %v", found)
 	}
 }

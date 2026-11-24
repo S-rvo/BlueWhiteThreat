@@ -1,0 +1,32 @@
+{
+  "mode": "automatic_pilot",
+  "selected": 310,
+  "target": 400,
+  "sample_size_satisfied": false,
+  "counts": {
+    "consensus": 2,
+    "pending": 300,
+    "disagreement": 2,
+    "abstention": 6
+  },
+  "annotation_coverage": 0.0064516129032258064,
+  "nlp_model_scored": false,
+  "qualification": "inconclusive",
+  "human_ground_truth": false,
+  "production_promotion": false,
+  "completed_documents": 10,
+  "votes_completed": 20,
+  "completed_batch_consensus_coverage": 0.2,
+  "vote_statuses": {
+    "invalid_response": 6,
+    "decided": 14
+  },
+  "invalid_response_reasons": {
+    "unverified_full_read_or_evidence": 6
+  },
+  "model_sha256": "0c00b06c8f48df847d3ef813ac45d8f1689d49736912746c4862b9c29dbdbb89",
+  "annotation_models": {
+    "llama3.2:3b": "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72",
+    "gemma4:e2b": "7fbdbf8f5e45a75bb122155ed546e765b4d9c53a1285f62fd9f506baa1c5a47e"
+  }
+}

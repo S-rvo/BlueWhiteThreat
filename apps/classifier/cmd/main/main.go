@@ -20,6 +20,8 @@ import (
 
 var defaultIntervalMinutes = 10
 
+const legacyPipelineSourceType = "darkweb_page"
+
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env found or unreadable, continuing with existing environment.")
@@ -112,13 +114,13 @@ func runOnce(classifier *classify.Classifier) {
 	log.Printf("Found %d articles needing classification by model %s", len(articles), classifier.Version())
 
 	for _, article := range articles {
-		relevance, skip := classifyArticle(classifier, article.Content)
+		relevance, skip := classifyArticleSource(classifier, article.Content, article.SourceType)
 		if skip {
 			log.Printf("skipping article %v: empty content", article.ID)
 			continue
 		}
 
-		if err := db.UpdateRelevance(ctx, client, article.ID, relevance); err != nil {
+		if err := db.UpdateRelevance(ctx, client, article, relevance); err != nil {
 			log.Printf("failed to update relevance for article %v: %v", article.ID, err)
 			continue
 		}
@@ -127,21 +129,32 @@ func runOnce(classifier *classify.Classifier) {
 
 // classifyArticle decides the relevance record for one article's content.
 // Empty content can't be scored and is skipped entirely (left for a later
-// pass). Link-directory pages (bootstrap.IsLinkDirectory) are excluded from
-// training data by cmd/bootstrap and cmd/export, so the live classifier
-// never saw one as a labeled example — scoring it here would apply a model
-// to data it was never evaluated against, so it's instead recorded directly
-// as not relevant, keeping training and inference consistent.
+// pass). Link-directory pages (bootstrap.IsLinkDirectory) and gated
+// login-wall pages (bootstrap.IsGatedLoginPage) are excluded from training
+// data by cmd/bootstrap and cmd/export, so the live classifier never saw one
+// as a labeled example — scoring it here would apply a model to data it was
+// never evaluated against, so it's instead recorded directly as not
+// relevant, keeping training and inference consistent.
 func classifyArticle(classifier *classify.Classifier, content string) (relevance db.Relevance, skip bool) {
+	return classifyArticleSource(classifier, content, "")
+}
+
+func classifyArticleSource(classifier *classify.Classifier, content, source string) (relevance db.Relevance, skip bool) {
 	if content == "" {
 		return db.Relevance{}, true
 	}
 
-	if bootstrap.IsLinkDirectory(content) {
+	if bootstrap.IsLinkDirectory(content) || bootstrap.IsGatedLoginPage(content) {
 		return db.Relevance{Relevant: false, Score: 0, ModelVersion: classifier.Version(), PolicyVersion: db.ClassificationPolicyVersion}, false
 	}
 
-	result := classifier.Classify(content)
+	// Documents scraped before source_type was introduced all came from the
+	// dark-web page pipeline. Keep their inference policy aligned with newly
+	// scraped documents without rewriting historical MongoDB records.
+	if source == "" {
+		source = legacyPipelineSourceType
+	}
+	result := classifier.ClassifySource(content, source)
 	return db.Relevance{
 		Relevant:        result.Relevant,
 		Score:           result.Score,

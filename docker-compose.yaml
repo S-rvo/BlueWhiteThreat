@@ -99,7 +99,7 @@ services:
   # Scheduling réel pour l'approvisionnement en seeds (point 3 du plan de
   # fraîcheur) : désactivé par défaut (profile dédié), à lancer explicitement
   # avec `docker compose --profile seeds up collectseeds`. Tourne en boucle
-  # bornée (une collecte hebdomadaire, voir loopInterval dans cmd/collectseeds)
+  # bornée (une collecte quotidienne, intervalle explicite ci-dessous)
   # plutôt qu'un service toujours actif par défaut.
   collectseeds:
     build:
@@ -108,7 +108,7 @@ services:
     container_name: collectseeds_service
     profiles:
       - seeds
-    command: ["go", "run", "./cmd/collectseeds", "-loop", "-interval=24h", "-files=forum.md,markets.md,ransomware_gang.md,phishing.md,maas.md,commercial_services.md"]
+    command: ["go", "run", "./cmd/collectseeds", "-loop", "-interval=24h"]
     volumes:
       - .:/app
     depends_on:
@@ -116,6 +116,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - ONION_SEARCH_API_KEY=${ONION_SEARCH_API_KEY:-}
     restart: unless-stopped
 
   # Alerting léger (sans Prometheus/Grafana) : vérifie périodiquement

@@ -9,13 +9,17 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"go.mongodb.org/mongo-driver/mongo"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/parser/internal/db"
+	"github.com/S-rvo/BlueWhiteThreat/apps/parser/internal/entities"
 	"github.com/S-rvo/BlueWhiteThreat/apps/parser/internal/extractor"
 	"github.com/S-rvo/BlueWhiteThreat/apps/parser/internal/pipeline"
 )
 
 var defaultIntervalMin = 10
+
+const batchSize = 50
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -61,7 +65,12 @@ func runOnce(primary, fallback extractor.Extractor) {
 	}
 	defer client.Disconnect(ctx)
 
-	articles, err := db.FetchUnparsedArticles(ctx, client, 50)
+	extractPending(ctx, client, primary, fallback)
+	projectPending(ctx, client, db.SaveEntityGraph)
+}
+
+func extractPending(ctx context.Context, client *mongo.Client, primary, fallback extractor.Extractor) {
+	articles, err := db.FetchUnparsedArticles(ctx, client, batchSize)
 	if err != nil {
 		log.Printf("Erreur lecture articles: %v", err)
 		return
@@ -76,14 +85,37 @@ func runOnce(primary, fallback extractor.Extractor) {
 		}
 		if err := db.SaveEntities(ctx, client, a.ID, ents); err != nil {
 			log.Printf("Erreur écriture Mongo article %v: %v", a.ID, err)
-			continue
-		}
-		if err := db.SaveEntityGraph(ctx, idToString(a.ID), ents); err != nil {
-			log.Printf("Erreur écriture Neo4j article %v: %v", a.ID, err)
 		}
 	}
 }
 
-func idToString(id any) string {
-	return fmt.Sprintf("%v", id)
+func projectPending(ctx context.Context, client *mongo.Client, write func(context.Context, string, entities.Entities) error) {
+	cycleCtx, cancelCycle := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelCycle()
+	articles, err := db.FetchPendingGraphArticles(cycleCtx, client, batchSize)
+	if err != nil {
+		log.Printf("Erreur lecture des projections en attente: %v", err)
+		return
+	}
+	for _, article := range articles {
+		if cycleCtx.Err() != nil {
+			return
+		}
+		var err error
+		if !article.Entities.IsEmpty() {
+			graphCtx, cancel := context.WithTimeout(cycleCtx, 30*time.Second)
+			err = write(graphCtx, fmt.Sprint(article.ID), article.Entities)
+			cancel()
+		}
+		statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if err != nil {
+			log.Printf("Erreur écriture Neo4j article %v: %v", article.ID, err)
+			if err := db.RequeueGraphProjection(statusCtx, client, article.ID); err != nil {
+				log.Printf("Erreur remise en file de la projection Neo4j article %v: %v", article.ID, err)
+			}
+		} else if err := db.MarkGraphProjected(statusCtx, client, article.ID); err != nil {
+			log.Printf("Erreur validation projection article %v: %v", article.ID, err)
+		}
+		cancel()
+	}
 }

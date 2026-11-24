@@ -17,20 +17,21 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"golang.org/x/net/html"
 	"io"
 	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"os"
-	"regexp"
+	"os/signal"
+	"sort"
 	"strings"
-	"sync"
+	"syscall"
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/db"
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/seeddata"
-	"golang.org/x/net/proxy"
 )
 
 // knownFiles liste les fichiers markdown du dépôt fastfire/deepdarkCTI
@@ -100,16 +101,14 @@ var ctiSearchKeywords = []string{
 // valeur randomisés à chaque chargement, lié à un cookie de session) : sans
 // lui, tout GET /search/?q= est redirigé 302 vers l'accueil. On récupère donc
 // d'abord l'accueil (cookie posé dans le jar partagé du client), on en parse
-// le jeton, puis on l'injecte dans chaque requête. ahmiaTokenPattern capture
-// (nom, valeur) de ce champ ; sur échec de parsing on ignore Ahmia (best
+// les champs via un parseur HTML, puis on les injecte dans chaque requête.
+// Sur échec de parsing on ignore Ahmia (best
 // effort). Ces URLs restent en dur (ahmiaHomeURL/ahmiaSearchBase) -- comme
 // knownFiles, aucune URL arbitraire opérateur n'est fetchée.
 const (
 	ahmiaHomeURL    = "https://ahmia.fi/"
 	ahmiaSearchBase = "https://ahmia.fi/search/?q="
 )
-
-var ahmiaTokenPattern = regexp.MustCompile(`(?i)<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*value="([^"]+)"`)
 
 const (
 	rawBaseURL      = "https://raw.githubusercontent.com/fastfire/deepdarkCTI/main/"
@@ -125,27 +124,9 @@ const (
 	loopInterval = 7 * 24 * time.Hour
 
 	// minLoopInterval protège les sources CTI (ahmia.fi, deepdarkCTI) d'un
-	// re-fetch abusif : un sweep de vivacité Tor dure déjà ~30 min, donc en
-	// dessous d'une heure les collectes se chevaucheraient inutilement.
+	// re-fetch abusif : au minimum une heure entre deux collectes.
 	minLoopInterval = time.Hour
-
-	// livenessWorkers borne le nombre de vérifications Tor concurrentes :
-	// le dépôt CTI référence des adresses historiques (marketplaces/gangs
-	// saisis ou fermés) sans garantie de fraîcheur -- sans ce filtre, un
-	// lot de seeds peut être presque entièrement mort (constaté le
-	// 2026-11-08). Réparti sur les 3 proxies tor1-3 déjà utilisés par le
-	// crawler (voir internal/crawler/crawler.go) pour ne pas saturer un seul
-	// proxy.
-	livenessWorkers = 12
-
-	// livenessTimeout couvre la construction du circuit Tor, observée
-	// jusqu'à ~13s pour un service vivant lors du diagnostic manuel.
-	livenessTimeout = 20 * time.Second
 )
-
-var onionPattern = regexp.MustCompile(`(?i)[a-z2-7]{16,56}\.onion`)
-
-var torProxies = []string{"tor1:9050", "tor2:9050", "tor3:9050"}
 
 func main() {
 	if err := run(); err != nil {
@@ -155,11 +136,21 @@ func main() {
 }
 
 func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	filesFlag := flag.String("files", defaultFiles, "fichiers markdown deepdarkCTI à parcourir (bornés, séparés par des virgules)")
 	dryRun := flag.Bool("dry-run", false, "n'écrit rien dans Redis, affiche seulement les adresses .onion trouvées")
 	loop := flag.Bool("loop", false, fmt.Sprintf("relance périodiquement (voir -interval) au lieu de s'exécuter une seule fois"))
 	interval := flag.Duration("interval", loopInterval, fmt.Sprintf("en mode -loop, délai entre deux collectes (borné à >= %s)", minLoopInterval))
+	revive := flag.Int("revive-dead", 0, "réactiver au plus 100 échecs de plus de 7 jours par collecte (0 désactive)")
+	searchBudget := flag.Int("search-budget", 24, "maximum de requêtes Onion Search Engine par collecte (1..100)")
 	flag.Parse()
+	if *searchBudget < 1 || *searchBudget > 100 {
+		return fmt.Errorf("search-budget must be 1..100")
+	}
+	if *revive < 0 || *revive > 100 {
+		return fmt.Errorf("revive-dead must be 0..100")
+	}
 
 	if *loop && *interval < minLoopInterval {
 		return fmt.Errorf("interval trop court (%s < %s): protège les sources CTI d'un re-fetch abusif", *interval, minLoopInterval)
@@ -177,14 +168,20 @@ func run() error {
 	}
 
 	if !*loop {
-		return runOnce(files, *dryRun)
+		return runOnce(ctx, files, *dryRun, *revive, *searchBudget)
 	}
 	for {
-		if err := runOnce(files, *dryRun); err != nil {
+		if err := runOnce(ctx, files, *dryRun, *revive, *searchBudget); err != nil {
 			log.Printf("Erreur collectseeds: %v", err)
 		}
 		log.Printf("Prochaine collecte dans %s", *interval)
-		time.Sleep(*interval)
+		timer := time.NewTimer(*interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-timer.C:
+		}
 	}
 }
 
@@ -215,17 +212,20 @@ func ahmiaSearchURLs(client *http.Client) []string {
 		return nil
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
 		log.Printf("Ahmia: lecture accueil échouée, recherche ignorée: %v", err)
 		return nil
 	}
-	m := ahmiaTokenPattern.FindStringSubmatch(string(body))
-	if m == nil {
-		log.Printf("Ahmia: jeton anti-bot introuvable (formulaire modifié ?), recherche ignorée")
+	if resp.StatusCode != http.StatusOK || len(body) > maxBodyBytes {
 		return nil
 	}
-	token := url.QueryEscape(m[1]) + "=" + url.QueryEscape(m[2])
+	token := hiddenSearchFields(body)
+	if token == "" {
+		log.Printf("Ahmia: missing search fields")
+		return nil
+	}
+
 	urls := make([]string, 0, len(ctiSearchKeywords))
 	for _, kw := range ctiSearchKeywords {
 		urls = append(urls, ahmiaSearchBase+url.QueryEscape(kw)+"&"+token)
@@ -238,22 +238,52 @@ func ahmiaSearchURLs(client *http.Client) []string {
 // suit automatiquement (levier ④). Sans ce transport, un miroir Tor annoncé sur
 // un 302 serait perdu car fetchOnionAddresses ne voit que la réponse finale.
 type onionLocationHarvester struct {
+	ctx   context.Context
 	base  http.RoundTripper
 	found map[string]bool
 }
 
 func (h *onionLocationHarvester) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := h.base.RoundTrip(req)
-	if resp != nil {
-		for _, m := range onionPattern.FindAllString(resp.Header.Get("Onion-Location"), -1) {
-			h.found[strings.ToLower(m)] = true
+	cleanup := func() {}
+	if h.ctx != nil {
+		ctx, cancel := context.WithCancel(req.Context())
+		stop := context.AfterFunc(h.ctx, cancel)
+		if h.ctx.Err() != nil {
+			cancel()
 		}
+		cleanup = func() { stop(); cancel() }
+		req = req.Clone(ctx)
 	}
+	resp, err := h.base.RoundTrip(req)
+	if err != nil {
+		cleanup()
+		return resp, err
+	}
+	if resp != nil {
+		extractSeeds(resp.Header.Get("Onion-Location"), h.found)
+		resp.Body = &cleanupBody{ReadCloser: resp.Body, cleanup: cleanup}
+	} else {
+		cleanup()
+	}
+
 	return resp, err
 }
 
-func runOnce(files []string, dryRun bool) error {
+func runOnce(ctx context.Context, files []string, dryRun bool, revive, searchBudget int) error {
 	found := map[string]bool{}
+	provenance := map[string]string{}
+	sourceCounts := map[string]int{}
+	attribute := func(source string) {
+		if _, ok := sourceCounts[source]; !ok {
+			sourceCounts[source] = 0
+		}
+		for u := range found {
+			if provenance[u] == "" {
+				provenance[u] = source
+				sourceCounts[source]++
+			}
+		}
+	}
 	// Jar partagé : Ahmia lie son jeton anti-bot à un cookie de session posé
 	// par l'accueil (voir ahmiaSearchURLs). Transport harvester : capte les
 	// Onion-Location sur toute la chaîne de redirection (levier ④).
@@ -264,21 +294,35 @@ func runOnce(files []string, dryRun bool) error {
 	client := &http.Client{
 		Timeout:   fetchTimeout,
 		Jar:       jar,
-		Transport: &onionLocationHarvester{base: http.DefaultTransport, found: found},
+		Transport: &onionLocationHarvester{ctx: ctx, base: http.DefaultTransport, found: found},
 	}
 	sources := sourceURLs(files)
 	sources = append(sources, ahmiaSearchURLs(client)...)
+	attribute(ahmiaHomeURL)
 	fetchFailures := 0
 	for _, source := range sources {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		n, err := fetchOnionAddresses(client, source, found)
+		label := sourceLabel(source)
+		attribute(label)
 		if err != nil {
-			log.Printf("Erreur fetch %s: %v", source, err)
+			log.Printf("Erreur fetch %s", label)
 			fetchFailures++
 			continue
 		}
-		log.Printf("%s: %d adresses .onion trouvées", source, n)
+		log.Printf("%s: %d adresses .onion trouvées", label, n)
 	}
 
+	if key := os.Getenv("ONION_SEARCH_API_KEY"); key != "" {
+		apiClient := &http.Client{Timeout: fetchTimeout}
+		if err := collectSearch(ctx, apiClient, key, ctiSearchKeywords, searchBudget, 2*time.Second, found); err != nil {
+			log.Printf("Onion Search Engine: %v", err)
+		}
+	}
+
+	attribute("onionsearchengine-api")
 	fallbackUsed := false
 	if len(found) == 0 && fetchFailures == len(sources) {
 		// La source réseau est totalement indisponible (dépôt déplacé, panne
@@ -291,21 +335,24 @@ func runOnce(files []string, dryRun bool) error {
 			if line == "" {
 				continue
 			}
-			line = strings.TrimPrefix(line, "http://")
-			line = strings.TrimPrefix(line, "https://")
-			found[strings.ToLower(line)] = true
+			extractSeeds(line, found)
 		}
 		fallbackUsed = true
 	}
 
+	attribute("embedded-seeds")
 	log.Printf("Total adresses .onion uniques: %d", len(found))
 
-	found = filterLiveAddresses(found)
-	log.Printf("Adresses vivantes après vérification Tor: %d", len(found))
+	// Admit before probing: transient Tor outages must not discard discoveries.
+	urls := make([]string, 0, len(found))
+	for u := range found {
+		urls = append(urls, u)
+	}
+	sort.Strings(urls)
 
 	if dryRun {
-		for addr := range found {
-			fmt.Println("http://" + addr)
+		for _, addr := range urls {
+			fmt.Println(addr)
 		}
 		return nil
 	}
@@ -314,15 +361,29 @@ func runOnce(files []string, dryRun bool) error {
 		return fmt.Errorf("connexion Redis: %w", err)
 	}
 	defer db.CloseRedis()
+	if revive > 0 {
+		n, err := db.ReviveDeadURLs(ctx, 7*24*time.Hour, revive)
+		if err != nil {
+			return err
+		}
+		log.Printf("Dead-letter réactivées: %d", n)
+	}
 
-	ctx := context.Background()
 	before, _ := db.GetQueueSize()
 	breakdown := map[string]int{}
-	for addr := range found {
-		reason, err := db.AddURLToQueue(ctx, "http://"+addr)
+	admissionErrors := 0
+	for _, addr := range urls {
+		reason, err := db.AddURLToQueue(ctx, addr)
 		if err != nil {
+			admissionErrors++
 			log.Printf("Erreur ajout en queue %s: %v", addr, err)
 			continue
+		}
+		if reason == db.QueueReasonAdded || reason == db.QueueReasonCapacity || reason == "budget" {
+			if err := db.RecordSeedDiscovery(ctx, addr, provenance[addr]); err != nil {
+				admissionErrors++
+				log.Printf("seed provenance: %v", err)
+			}
 		}
 		breakdown[reason]++
 	}
@@ -333,7 +394,15 @@ func runOnce(files []string, dryRun bool) error {
 		breakdown[db.QueueReasonBlocked], breakdown[db.QueueReasonFarm],
 		breakdown[db.QueueReasonCapacity])
 
+	for source, n := range sourceCounts {
+		if err := db.RedisClient.HSet(ctx, "crawler:seed_sources", source, n).Err(); err != nil {
+			log.Printf("source metrics: %v", err)
+		}
+	}
 	recordStats(len(found), fallbackUsed, breakdown)
+	if admissionErrors > 0 {
+		return fmt.Errorf("%d admissions failed", admissionErrors)
+	}
 	return nil
 }
 
@@ -342,6 +411,9 @@ func runOnce(files []string, dryRun bool) error {
 // quand) sans avoir à éplucher les logs.
 func recordStats(totalFound int, fallbackUsed bool, breakdown map[string]int) {
 	ctx := context.Background()
+	for _, reason := range []string{"storage", "trap", "budget", "capacity"} {
+		db.RedisClient.HSet(ctx, "crawler:stats", "collectseeds_last_"+reason, breakdown[reason])
+	}
 	db.RedisClient.HIncrBy(ctx, "crawler:stats", "collectseeds_runs", 1)
 	db.RedisClient.HSet(ctx, "crawler:stats", "collectseeds_last_run_unix", time.Now().Unix())
 	db.RedisClient.HSet(ctx, "crawler:stats", "collectseeds_last_found", totalFound)
@@ -369,100 +441,60 @@ func fetchOnionAddresses(client *http.Client, source string, found map[string]bo
 	}
 
 	before := len(found)
-	for _, m := range onionPattern.FindAllString(resp.Header.Get("Onion-Location"), -1) {
-		found[strings.ToLower(m)] = true
-	}
+	extractSeeds(resp.Header.Get("Onion-Location"), found)
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
 		return 0, err
 	}
-	for _, m := range onionPattern.FindAllString(string(body), -1) {
-		found[strings.ToLower(m)] = true
+	if len(body) > maxBodyBytes {
+		return 0, fmt.Errorf("source exceeds body limit")
 	}
+	extractSeeds(string(body), found)
 	return len(found) - before, nil
 }
 
-// filterLiveAddresses sonde chaque adresse via Tor et élimine celles qui ne
-// répondent pas (service saisi/fermé). N'importe quelle réponse HTTP compte
-// comme "vivante", y compris une erreur applicative (4xx/5xx) : seul l'échec
-// de connexion/résolution au niveau Tor (HSDir introuvable, timeout...)
-// disqualifie une adresse -- même logique que le diagnostic manuel qui a
-// identifié ce problème (un 500 de Facebook onion valait comme succès).
-func filterLiveAddresses(addrs map[string]bool) map[string]bool {
-	type probeResult struct {
-		addr  string
-		alive bool
-	}
-
-	jobs := make(chan string)
-	results := make(chan probeResult)
-	var wg sync.WaitGroup
-
-	for i := 0; i < livenessWorkers; i++ {
-		client, err := newTorHTTPClient(torProxies[i%len(torProxies)])
-		if err != nil {
-			log.Printf("Erreur création client Tor: %v", err)
-			continue
-		}
-		wg.Add(1)
-		go func(client *http.Client) {
-			defer wg.Done()
-			for addr := range jobs {
-				results <- probeResult{addr: addr, alive: isReachable(client, addr)}
+// HTML parsing tolerates attribute order, single quotes and escaped values.
+func hiddenSearchFields(body []byte) string {
+	z := html.NewTokenizer(strings.NewReader(string(body)))
+	fields := url.Values{}
+	for {
+		switch z.Next() {
+		case html.ErrorToken:
+			return fields.Encode()
+		case html.StartTagToken, html.SelfClosingTagToken:
+			tok := z.Token()
+			if tok.Data != "input" {
+				continue
 			}
-		}(client)
-	}
-
-	go func() {
-		for addr := range addrs {
-			jobs <- addr
-		}
-		close(jobs)
-	}()
-
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	live := map[string]bool{}
-	deadCount := 0
-	for r := range results {
-		if r.alive {
-			live[r.addr] = true
-		} else {
-			deadCount++
+			attrs := map[string]string{}
+			for _, a := range tok.Attr {
+				attrs[a.Key] = a.Val
+			}
+			if strings.EqualFold(attrs["type"], "hidden") && attrs["name"] != "" && attrs["name"] != "q" {
+				fields.Add(attrs["name"], attrs["value"])
+			}
 		}
 	}
-	log.Printf("Vérification de vivacité Tor: %d vivantes, %d injoignables (sur %d)", len(live), deadCount, len(addrs))
-	return live
 }
 
-func newTorHTTPClient(proxyAddr string) (*http.Client, error) {
-	dialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
-	if err != nil {
-		return nil, err
-	}
-	contextDialer, ok := dialer.(proxy.ContextDialer)
-	if !ok {
-		return nil, fmt.Errorf("le dialer SOCKS5 pour %s ne supporte pas le contexte", proxyAddr)
-	}
-	return &http.Client{
-		Transport: &http.Transport{DialContext: contextDialer.DialContext},
-		Timeout:   livenessTimeout,
-	}, nil
+type cleanupBody struct {
+	io.ReadCloser
+	cleanup func()
 }
 
-func isReachable(client *http.Client, addr string) bool {
-	req, err := http.NewRequest(http.MethodGet, "http://"+addr, nil)
+func (b *cleanupBody) Close() error { defer b.cleanup(); return b.ReadCloser.Close() }
+
+func sourceLabel(raw string) string {
+	u, err := url.Parse(raw)
 	if err != nil {
-		return false
+		return "invalid-source"
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false
+	q := u.Query().Get("q")
+	u.RawQuery = ""
+	u.Fragment = ""
+	if q != "" {
+		u.RawQuery = url.Values{"q": {q}}.Encode()
 	}
-	defer resp.Body.Close()
-	return true
+	return u.String()
 }

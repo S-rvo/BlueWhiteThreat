@@ -8,7 +8,7 @@ Cette extension Compose ajoute un tableau unique pour les conteneurs, leurs perf
 - Loki : stockage des logs pendant 7 jours ;
 - Grafana Alloy : découverte des conteneurs du projet et envoi de leurs logs à Loki.
 
-Le tableau contient un inventaire permanent des services applicatifs et techniques attendus : `crawler`, `scraper`, `api`, `classifier`, `tor1`, `tor2`, `tor3`, `front`, `target`, `mongodb`, `redis`, `neo4j`, `mongo-express`, ainsi que les cinq composants de monitoring. Un service arrêté reste visible avec l'état **HORS LIGNE** ; son état, ses métriques et ses logs sont alimentés automatiquement dès que son conteneur rejoint le projet Compose `bluewhitethreat`.
+Le tableau contient un inventaire permanent des services applicatifs et techniques attendus : `crawler`, `scraper`, `api`, `classifier`, `tor1`, `tor2`, `tor3`, `front`, `mongodb`, `redis`, `neo4j`, `mongo-express`, ainsi que les cinq composants de monitoring. Un service arrêté reste visible avec l'état **HORS LIGNE** ; son état, ses métriques et ses logs sont alimentés automatiquement dès que son conteneur rejoint le projet Compose `bluewhitethreat`.
 
 ## Architecture des logs et des métriques
 

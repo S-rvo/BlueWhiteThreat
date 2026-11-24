@@ -206,3 +206,55 @@ apps/scraper/scripts/render-integration.sh
 Le script Chromium utilise l'image locale `bluewhitethreat-scraper` (ou
 `SCRAPER_TEST_IMAGE`), monte le code en lecture seule et supprime ses propres
 conteneurs/réseau. Aucun service de production n'est redémarré.
+
+## Découverte multi-source (2026-11-24)
+
+- `collectseeds` admet les seeds sans sonde Tor préalable : un timeout ne
+  supprime plus une découverte avant les retries durables du crawler.
+- Extraction des URLs onion v3 (forme 56 caractères, sans validation du
+  checksum), HTTPS, chemins et paramètres préservés ; mentions nues converties
+  en racines HTTP. La sortie `-dry-run` est triée, sans connexion Tor ni Redis
+  (elle consulte toujours les sources clearnet).
+- `Onion-Location` conserve son URL complète dans le collecteur et le crawler.
+- Les champs de formulaire Ahmia sont lus avec un parseur HTML. Les paramètres
+  de session sont retirés des libellés source journalisés.
+- Corps de source >8 Mio : erreur explicite, pas de succès sur corps tronqué.
+- SIGINT/SIGTERM annulent la collecte et l'attente entre cycles.
+- Compose conserve le profil `seeds` opt-in, toutes les catégories par défaut
+  et une cadence quotidienne. Aucune activation automatique en production.
+
+### Onion Search Engine (optionnel)
+
+Le connecteur utilise `/api.php`, `X-API-Key`, `q` et `page` selon la
+[documentation officielle](https://onionsearchengine.com/api_documentation.php).
+Configurer `ONION_SEARCH_API_KEY` dans l'environnement transmis à Compose
+(ne pas committer la clé). Sans clé, aucun appel à ce fournisseur.
+
+24 requêtes maximum par défaut (`-search-budget=1..100`), espacées de 2 secondes ; une page de chaque
+mot-clé avant les pages suivantes, afin de diversifier les résultats. Avec
+24 mots-clés, le budget par défaut couvre donc leur première page. Arrêt du
+fournisseur sur erreur HTTP, JSON invalide ou refus applicatif ; résultats
+précédents conservés. Les redirections API sont bloquées pour protéger la clé.
+Ce quota est par collecte, pas une garantie de quota mensuel multi-instance.
+Aucun appel réel à l'API n'est effectué par les tests.
+
+### Réactivation et supervision
+
+`collectseeds -revive-dead=20` réactive atomiquement au plus 20 URLs mortes
+depuis au moins 7 jours ; plafond 100, défaut 0 (désactivé). Elles passent par
+`crawler:scheduled`, avec les filtres et budgets habituels. Aucune visite
+réussie n'est inventée et aucune base n'est purgée.
+
+- `/stats` : `known_url_count`, `known_url_limit`, `dead_revived_total`,
+  `collectseeds_last_storage`, `collectseeds_last_trap`,
+  `collectseeds_last_budget`, `collectseeds_last_capacity`.
+- `crawler:seed_sources` : nombre de nouvelles URLs dans le lot attribuées à
+  chaque source lors de sa dernière collecte (première source gagnante, pas
+  un indicateur de disponibilité Tor ni le nombre d'admissions Redis).
+- Métadonnées des nouvelles admissions : `seed_source`, `seed_discovered_at`
+  dans `crawler:page:URL` (rétention 90 jours). Les doublons déjà connus ne
+  réécrivent pas cette provenance ; ce n'est pas un historique multi-source.
+
+Les limites globales de stockage, robots et filtres restent inchangés.
+Restent à mesurer sur un déploiement réel : gain de nouveaux hôtes accessibles,
+coût réseau, équilibre revisites/découvertes et politique d'archivage.

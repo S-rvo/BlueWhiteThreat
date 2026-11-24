@@ -44,3 +44,26 @@ Format imposé techniquement par `.githooks/commit-msg` :
 ```
 git config core.hooksPath .githooks
 ```
+
+## Graphify à la demande — Codex et Claude Code
+
+- Utiliser Graphify pour explorer une architecture, suivre un flux entre
+  modules ou repérer les dépendances avant un refactoring. Pour une petite
+  modification déjà localisée, lire le code directement.
+- Choisir le graphe le plus ciblé : `apps/classifier/graphify-out/graph.json`
+  pour le classifier, `graphify-out/graph.json` pour une question transverse.
+  Lancer `graphify query "<symbole ou question>" --graph <chemin> --budget 1000`.
+- Si le graphe utile manque ou que le code concerné a changé depuis sa
+  génération, lancer `graphify update <périmètre>` depuis la racine du dépôt
+  (`apps/classifier`, un autre service, ou `.`), puis relancer la requête.
+  Pas de génération systématique au démarrage ni après chaque modification.
+- Le graphe oriente la recherche ; vérifier les relations importantes dans
+  les fichiers sources. Si Graphify est absent ou ne donne rien d'utile,
+  continuer avec `rg`, la lecture du code et les tests.
+
+## Reprise des essais du classifier
+
+Avant de proposer ou lancer un nouvel essai, consulter
+[`apps/classifier/EXPERIMENTS.md`](apps/classifier/EXPERIMENTS.md). Après une
+campagne, y référencer le verdict et le rapport, même si l’essai échoue ou
+est invalidé. Ne jamais remettre une réserve consommée dans le développement.

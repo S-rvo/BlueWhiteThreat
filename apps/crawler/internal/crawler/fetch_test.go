@@ -67,7 +67,7 @@ func TestPlainTextAndHeaderOnionDiscovery(t *testing.T) {
 		if r.URL.Path == "/robots.txt" {
 			return
 		}
-		w.Header().Set("Onion-Location", "http://"+headerOnion+"/")
+		w.Header().Set("Onion-Location", "https://"+headerOnion+"/Forum?page=2#reply")
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprintf(w, "no hyperlink, just text: join %s today", bodyOnion)
 	}))
@@ -79,7 +79,7 @@ func TestPlainTextAndHeaderOnionDiscovery(t *testing.T) {
 	if !containsLink(result.Links, "http://"+bodyOnion) {
 		t.Errorf("plain-text onion not discovered: %v", result.Links)
 	}
-	if !containsLink(result.Links, "http://"+headerOnion) {
+	if !containsLink(result.Links, "https://"+headerOnion+"/Forum?page=2") {
 		t.Errorf("Onion-Location mirror not discovered: %v", result.Links)
 	}
 }

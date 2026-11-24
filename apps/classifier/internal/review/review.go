@@ -73,6 +73,46 @@ func LoadReviewed(path string) (map[string]Label, error) {
 	return reviewed, nil
 }
 
+// LoadThemeNegatives reads a persisted theme-policy store (id,theme CSV) into
+// an id->theme map. Unlike a reviewed label (an explicit per-document human
+// decision) or an exclusion (a document that must never be used at all), a
+// theme negative is a *policy default*: "this document belongs to <theme>,
+// which is currently out of CTI scope, so treat it as a negative". The point
+// of tagging the theme is reversibility — a theme can later be declared
+// in-scope (see bootstrap's in-scope-themes set), at which point the forced
+// negative is dropped and the document reverts to its natural label, without
+// anyone having to hunt down individual ids. Missing file is not an error.
+func LoadThemeNegatives(path string) (map[string]string, error) {
+	themed := map[string]string{}
+
+	file, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return themed, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("review: open %s: %w", path, err)
+	}
+	defer file.Close()
+
+	rows, err := csv.NewReader(file).ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("review: parse %s: %w", path, err)
+	}
+	if len(rows) == 0 {
+		return themed, nil
+	}
+	if len(rows[0]) != 2 || rows[0][0] != "id" || rows[0][1] != "theme" {
+		return nil, fmt.Errorf("review: %s must have header id,theme", path)
+	}
+	for i, row := range rows[1:] {
+		if len(row) != 2 || row[0] == "" || row[1] == "" {
+			return nil, fmt.Errorf("review: invalid theme-negative row in %s row %d", path, i+2)
+		}
+		themed[row[0]] = row[1]
+	}
+	return themed, nil
+}
+
 // LoadExcluded reads a persisted exclusion store (id,reason CSV) into a set.
 // Excluded documents (e.g. CSAM found during human review) must never be
 // written into training_data.csv or review_queue.jsonl again, regardless of

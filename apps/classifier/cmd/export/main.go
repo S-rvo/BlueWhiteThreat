@@ -115,7 +115,7 @@ func main() {
 
 	var positives, negatives []ReviewCandidate
 	for _, article := range articles {
-		if article.Content == "" || bootstrap.IsLinkDirectory(article.Content) {
+		if article.Content == "" || bootstrap.IsLinkDirectory(article.Content) || bootstrap.IsGatedLoginPage(article.Content) {
 			continue
 		}
 		id := review.IDString(article.ID)

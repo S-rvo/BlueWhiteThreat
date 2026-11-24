@@ -15,6 +15,7 @@
 /classifier
 /dumptfidf
 /*.csv
+/review_queue.jsonl
 /model_*.json
 /model_*.json.*
 /.codex_loop_logs/
