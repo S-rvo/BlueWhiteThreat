@@ -19,6 +19,6 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Build du binaire pour le contrôle
-RUN go build -o scraper ./cmd/main.go
+RUN go build -o scraper ./cmd
 
-CMD ["go", "run", "cmd/main.go"]
+CMD ["./scraper"]

@@ -1,7 +1,7 @@
 # Datasheet opérationnelle — services BlueWhiteThreat
 
 > Public : technicien, analyste CTI et développeur  
-> État de référence : 24 novembre 2026
+> État de référence : 25 novembre 2026
 > Portée : environnement local de développement et de démonstration, pas production
 
 ## 1. Objectif du document
@@ -42,8 +42,10 @@ rotation de leur clé de chiffrement.
 | `redis` | image officielle | Existant | `6379` | aucune | Files et ensembles de déduplication |
 | `mongodb` | image officielle | Existant | `27017` | aucune | Contenu brut, classification et entités |
 | `neo4j` | image officielle | Existant | `7474`, `7687` | aucune | Graphe des URL, entités et relations |
-| `crawler` | `apps/crawler` | Existant, seed codée en dur | aucun port hôte | Redis, Neo4j, Tor | Découverte des URL `.onion` |
-| `scraper` | `apps/scraper` | Existant | aucun | Redis, MongoDB, Tor | Récupération des pages découvertes |
+| `crawler`, `crawler2`, `crawler3` | `apps/crawler` | Existant | aucun | Redis, Neo4j, Tor | Découverte et revisites ; file et baux partagés |
+| `collectseeds` | `apps/crawler/cmd/collectseeds` | Profil facultatif `seeds` | aucun | Redis, catalogues publics | Import quotidien de points de départ |
+| `scraper` | `apps/scraper` | Continu, Chromium cloisonné | aucun (8080 interne) | Redis, MongoDB, Tor | Rendu et sauvegarde des pages |
+| `redis-backup` | `apps/crawler/scripts/redis-backup.sh` | Existant | aucun | Redis, emplacement de sauvegarde | Export RDB et rotation locale |
 | `classifier` | `apps/classifier` | Existant, modèle requis | aucun | MongoDB, `model.json` | Pertinence CTI et boucle de revue humaine |
 | `api` | `apps/api` | Profil facultatif `api` | `8083` | MongoDB | Métadonnées pertinentes paginées et métriques agrégées |
 | `front` | `apps/front` | Existant, partiel | `8080` | API, futur graphe | Interface Nuxt analyste |
@@ -87,13 +89,18 @@ MONGO_DB=BlueWhiteThreat
 Ajouter côté scraper :
 
 ```dotenv
-SCRAPER_INTERVAL_MIN=30
+SCRAPER_WORKERS_PER_PROXY=2
 REDIS_HOST=redis
 REDIS_PORT=6379
-SITES_CONFIG_PATH=./data/sites.json
 ```
 
 Le scraper charge aussi `apps/scraper/.credentials.env`, réservé à sa clé `BWT_CREDENTIALS_KEY`. Ce fichier privé est transmis uniquement au service scraper par Compose ; ne pas placer la clé dans le `.env` partagé avec MongoDB et le parser. Sur une nouvelle installation, suivre la [préparation de la clé](scraper-access.md#préparer-une-nouvelle-installation). Ne jamais remplacer une clé existante pour un simple redémarrage.
+
+Le scraper n’a plus d’intervalle de traitement à configurer. N’ajouter
+`SITES_CONFIG_PATH` que pour une configuration explicite montée en lecture seule.
+Si le poste a besoin de réglages spécifiques, garder
+`docker-compose.override.yaml` local et ignoré par Git. Pour un disque de
+sauvegarde séparé, voir [isolation et sauvegarde](scraper-isolation-backup.md).
 
 Ajouter côté classifieur :
 
@@ -119,10 +126,10 @@ Résultat attendu : la configuration Compose est valide et les fichiers `.env` n
 
 ### 5.1 Démarrage prudent de l'infrastructure
 
-Ne pas commencer par `docker compose up` sur toute la stack : le classifieur s'arrête si `model.json` n'existe pas et le crawler utilise actuellement une seed `.onion` codée en dur.
+Démarrer l’infrastructure séparément afin de contrôler les bases avant les workers et de ne pas lancer de collecte involontaire. Le classifieur demande un `model.json` présent.
 
 ```bash
-docker compose up -d redis mongodb neo4j tor1 tor2 tor3
+docker compose up -d redis redis-backup mongodb neo4j tor1 tor2 tor3
 docker compose ps
 ```
 
@@ -131,7 +138,7 @@ docker compose ps
 ```bash
 docker compose exec redis redis-cli ping
 docker compose exec redis redis-cli HGETALL crawler:stats
-docker compose exec neo4j cypher-shell -u neo4j -p password "RETURN 1 AS ok;"
+docker compose exec neo4j cypher-shell -u neo4j "RETURN 1 AS ok;"
 docker compose logs --tail=50 mongodb neo4j tor1 tor2 tor3
 ```
 
@@ -149,8 +156,13 @@ Uniquement après validation du périmètre des sources :
 ```bash
 docker compose up -d crawler
 docker compose up -d scraper
-docker compose up -d api front
+docker compose --profile api up -d api front
 ```
+
+Le conteneur scraper contient déjà six workers Chromium par défaut. Vérifier
+d’abord son débit, les échecs et la RAM avant d’augmenter la concurrence.
+`collectseeds` est un service distinct, facultatif ; son absence n’arrête pas
+le traitement des files existantes. Voir [les états des files](redis-crawler-scraper.md).
 
 Le classifieur charge `apps/classifier/model.json` en lecture seule en production.
 Le modèle versionné suffit pour le démarrage ; aucun entraînement n’est nécessaire.
@@ -169,8 +181,11 @@ Contrôles utiles :
 docker compose exec redis redis-cli SCARD urls_to_crawl
 docker compose exec redis redis-cli SCARD urls_crawled
 docker compose exec redis redis-cli SCARD urls_scraped
-docker compose exec crawler curl -fsS http://localhost:8080/health
-docker compose exec crawler curl -fsS http://localhost:8080/stats
+docker compose exec redis wget -qO- http://crawler:8080/health
+docker compose exec redis wget -qO- http://crawler:8080/stats
+docker compose exec scraper /usr/local/bin/scraper --check-health
+docker compose exec redis redis-cli ZCARD scraper:pending
+docker compose exec redis redis-cli HGETALL scraper:stats
 curl -fsS http://localhost:8083/data
 ```
 
@@ -368,7 +383,7 @@ docker compose exec mongodb sh -lc 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p 
 
 ```bash
 docker compose up -d neo4j
-docker compose exec neo4j cypher-shell -u neo4j -p password "RETURN 1 AS ok;"
+docker compose exec neo4j cypher-shell -u neo4j "RETURN 1 AS ok;"
 ```
 
 **Inspection.** Ouvrir `http://localhost:7474` puis utiliser des requêtes bornées, par exemple `MATCH (n) RETURN n LIMIT 25`.
@@ -377,7 +392,7 @@ docker compose exec neo4j cypher-shell -u neo4j -p password "RETURN 1 AS ok;"
 
 ### 8.5 Crawler — `crawler`
 
-**Responsabilité.** Lire une seed, découvrir des liens, dédupliquer via Redis et écrire les relations URL dans Neo4j.
+**Responsabilité.** Visiter les pages planifiées, découvrir des liens, dédupliquer et réserver via Redis, puis écrire les relations URL dans Neo4j.
 
 **Fichiers principaux.** `apps/crawler/cmd/main.go`, `internal/crawler`, `internal/db`, `internal/api`.
 
@@ -391,8 +406,8 @@ docker compose logs -f crawler
 **Smoke test.**
 
 ```bash
-docker compose exec crawler curl -fsS http://localhost:8080/health
-docker compose exec crawler curl -fsS http://localhost:8080/stats
+docker compose exec redis wget -qO- http://crawler:8080/health
+docker compose exec redis wget -qO- http://crawler:8080/stats
 ```
 
 **Tests développeur.**
@@ -402,13 +417,20 @@ cd apps/crawler
 go test ./...
 ```
 
-**Critère prêt.** Connexions Redis/Neo4j établies, endpoint `/health` à `ok`, progression ou fin contrôlée de la file.
+**Critère prêt.** `/ready` vérifie aussi Redis et Neo4j, contrairement à
+`/health` qui indique seulement que l’API répond. Quand la file est vide,
+le crawler attend : la progression doit être lue avec les échéances.
 
-**Limite bloquante.** La seed est codée en dur dans `cmd/main.go` et le crawler s'arrête quand la file est vide. Ne pas le considérer comme une collecte continue ni comme compatible avec le futur registre avant correction.
+**Collectseeds.** Le profil facultatif `seeds` consulte toutes les 24 heures des
+catalogues publics (dont DeepDarkCTI et Ahmia) pour soumettre des points de
+départ à Redis. Il dénombre les résultats, mais c’est le crawler qui vérifie
+si les adresses répondent. Distinguer `collectseeds_last_found`,
+`collectseeds_last_added` et les admissions différées dans Redis. Ni ces
+chiffres ni la découverte n’engagent le futur registre de sources.
 
 ### 8.6 Scraper — `scraper`
 
-**Responsabilité.** Calculer `urls_crawled - urls_scraped`, charger les pages via les trois proxies Tor et persister le contenu dans MongoDB.
+**Responsabilité.** Réserver une tâche Redis, rendre la page puis sauvegarder le contenu dans MongoDB avant de confirmer le succès.
 
 **Fichiers principaux.** `apps/scraper/cmd/main.go`, `internal/sites`, `internal/db`, `data/sites.json`.
 
@@ -419,7 +441,11 @@ docker compose up -d scraper
 docker compose logs -f scraper
 ```
 
-Le scraper exécute un passage au démarrage puis un nouveau passage toutes les `SCRAPER_INTERVAL_MIN` minutes.
+Le scraper travaille en continu, abandonne Chromium quand il reste inactif
+et réessaie après une panne d’infrastructure. À l’arrêt propre, un worker
+libère sa réservation ; après un arrêt brutal, la file la récupère à
+expiration. Sur un Mac en vraie veille, tout traitement est suspendu.
+Voir le [guide Mac et les contrôles de bascule](redis-crawler-scraper.md).
 
 **Tests développeur.**
 
@@ -428,9 +454,11 @@ cd apps/scraper
 go test ./...
 ```
 
-**Critère prêt.** Les URL non traitées sont consommées, les documents sont upsertés dans `BlueWhiteThreat.article` et les URL terminées rejoignent `urls_scraped`.
+**Critère prêt.** `--check-health` vérifie Redis et MongoDB ; un succès métier
+se mesure dans `scraper:stats` après écriture MongoDB. Un conteneur sain
+n’indique pas à lui seul que des pages sont sauvegardées.
 
-**Configuration de connexion optionnelle.** `apps/scraper/data/sites.json` contient les URL, sélecteurs, chemins d’état et noms des variables d’environnement, jamais les identifiants eux-mêmes. Partir de `examples/sites.json` et suivre le [guide d’accès du scraper](scraper-access.md).
+**Configuration de connexion optionnelle.** Partir de `apps/scraper/examples/sites.json` et monter un fichier local dédié en lecture seule, jamais le dépôt. Le fichier contient des sélecteurs, chemins d’état et noms de variables, pas les identifiants eux-mêmes. Voir le [guide d’accès du scraper](scraper-access.md).
 
 - Avec `state_file`, `credentials_key_env` vaut par défaut `BWT_CREDENTIALS_KEY`.
 - Le fichier d’état lie les identifiants chiffrés à une origine ; ne pas le partager entre sites.
@@ -616,12 +644,12 @@ Pour chacun, la Definition of Done documentaire minimale sera :
 | Symptôme | Vérification | Action sûre |
 |---|---|---|
 | Le classifieur redémarre en boucle | logs : modèle absent | générer `model.json` après bootstrap, contrôle sécurité et entraînement |
-| Le scraper ne traite rien | `SCARD urls_crawled`, `SCARD urls_scraped` | vérifier les ensembles Redis et les logs, ne pas vider les données à l'aveugle |
-| Une URL échoue une fois puis disparaît | logs scraper et ensemble `urls_scraped` | documenter l'échec ; le statut persistant est une dette connue |
+| Le scraper ne traite rien | sonde `--check-health`, files `scraper:pending` et `scraper:inflight` | contrôler MongoDB, Redis, Chromium et la progression, sans purge |
+| Une URL est en retard ou échoue | échéance, `scraper:retry_due`, `scraper:dead` et `scraper:blocked` | distinguer retard, échec temporaire, quarantaine et refus |
 | Le frontend affiche zéro article | API `/data`, logs API, MongoDB | vérifier l'API avant le frontend |
 | La vue graphe échoue | requête `/graph` dans le navigateur | endpoint non disponible actuellement ; utiliser Neo4j Browser pour le diagnostic |
 | Mongo Express est inaccessible | logs et mapping de port | corriger le port interne du service avant usage |
-| Le crawler s'arrête | taille `urls_to_crawl` | comportement actuel normal quand la file est vide |
+| Le crawler ne prend plus de tâche | `/ready`, file prête et échéances | une file vide ou future est normale ; diagnostiquer un processus arrêté |
 | Un test Go échoue sur le cache dans un sandbox | permissions du cache Go | définir temporairement un `GOCACHE` dans un répertoire autorisé, sans changer le projet |
 
 ## 11. Checklist avant une démonstration
@@ -671,4 +699,4 @@ Cette visibilité ne constitue pas une autorisation de collecte : ne pas démarr
 
 **Persistance.** Un arrêt avec `docker compose down` conserve les volumes. L'option `down -v` les supprime : l'historique Prometheus/Loki, les réglages locaux Grafana et les données MongoDB/Neo4j sont alors perdus. Au prochain `up -d`, Docker recrée des volumes vides et Grafana reprovisionne automatiquement le dashboard et ses sources depuis le dépôt. Utiliser `-v` uniquement pour une remise à zéro volontaire.
 
-Les métriques métier restent une étape suivante : crawler, scraper, classifier et API devront exposer `/metrics` sans inclure de contenu ou d'identifiant sensible.
+Le tableau **Crawler et scraper — files Redis** utilise les métriques agrégées du scraper. La cible Prometheus `bwt-crawl-queues` est disponible lorsque le scraper et le monitoring partagent le réseau d’observation ; aucun port scraper n’est publié sur le poste.

@@ -13,8 +13,8 @@ import (
 )
 
 func TestSaveScrapedPage_UpsertsIntoMongo(t *testing.T) {
-	if os.Getenv("MONGO_HOST") == "" {
-		t.Skip("MONGO_HOST non défini — lancer `docker compose up -d mongodb` et exporter les vars MONGO_*")
+	if os.Getenv("BWT_DISPOSABLE_SCRAPER_MONGO") != "1" {
+		t.Skip("requires a disposable MongoDB fixture (BWT_DISPOSABLE_SCRAPER_MONGO=1)")
 	}
 
 	page := sites.ScrapedPage{

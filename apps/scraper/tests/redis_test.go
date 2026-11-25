@@ -2,36 +2,20 @@ package scraper_tests
 
 import (
 	"context"
-	"os"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/db"
 )
 
 func testRedisClient(t *testing.T) *redis.Client {
-	addr := os.Getenv("SCRAPER_TEST_REDIS")
-	if addr == "" {
-		t.Skip("requires explicit disposable SCRAPER_TEST_REDIS")
-	}
-	client := redis.NewClient(&redis.Options{Addr: addr})
-	t.Cleanup(func() { client.Close() })
-	if err := client.Ping(context.Background()).Err(); err != nil {
-		t.Fatal(err)
-	}
-	// A dedicated instance must contain no unrelated crawler/application keys.
-	keys, err := client.Keys(context.Background(), "*").Result()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range keys {
-		switch key {
-		case "urls_crawled", "urls_scraped", "urls_scraped_at", "urls_scrape_failed_at":
-		default:
-			t.Fatalf("test Redis contains unrelated key %q", key)
-		}
-	}
+	// Create a private fixture, never infer a Redis address from the environment.
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
 	return client
 }
 

@@ -42,6 +42,9 @@ et les [vérifications des archives](../apps/classifier/experiments/README.md).
   `experiments/`, avec son protocole et son verdict dans le registre.
 - Conserver les tests de non-régression près du code. Séparer les expériences
   qui prennent des données privées, le réseau ou un modèle local des tests CI.
+- Versionner les Dockerfiles, réglages partagés, exemples sans secrets et
+  procédures ; garder les `.env`, `docker-compose.override.yaml`, données
+  Redis et fichiers d’exploitation propres à un poste hors de Git.
 - Préférer une fixture synthétique et un résultat agrégé aux dumps et corpus.
   Un nettoyage ne doit ni réentraîner ni remplacer `model.json`.
 - Avant de supprimer un outil, vérifier ses appels dans le code, Compose, la

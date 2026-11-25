@@ -1,0 +1,9 @@
+**
+!apps/scraper/go.mod
+!apps/scraper/go.sum
+!apps/scraper/cmd/**/*.go
+!apps/scraper/internal/**/*.go
+!apps/scraper/tests/**/*.go
+!apps/scraper/scripts/chromium-sanitized.sh
+!pkg/csamfilter/go.mod
+!pkg/csamfilter/*.go

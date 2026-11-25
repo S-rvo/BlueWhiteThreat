@@ -6,6 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/PuerkitoBio/goquery v1.10.3
+	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter v0.0.0
 	github.com/chromedp/cdproto v0.0.0-20250621212827-3f1355e655b9
 	github.com/chromedp/chromedp v0.13.7
@@ -25,6 +26,7 @@ require (
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/gobwas/ws v1.4.0 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 )
 

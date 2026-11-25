@@ -37,8 +37,11 @@ seront redécouverts depuis les liens accessibles, pas restaurés rétroactiveme
 Prévoir une croissance du graphe et des métadonnées : conserver les découvertes
 au-delà du plafond actif consomme du stockage, à superviser et provisionner.
 
-Le débit multi-instance reste à valider avant déploiement à grande échelle. Le verrou par hôte est partagé entre instances,
-mais le débit multi-instance n'a pas fait l'objet d'un test de charge.
+Le verrou par hôte est partagé entre instances et avec le rendu. Avant de
+multiplier les conteneurs, comparer à concurrence totale constante. Un
+conteneur crawler utilise quatre workers par défaut ; trois réplicas au
+défaut en utilisent douze. Le scraper est un autre service et possède son
+propre réglage. Voir [les files et métriques de capacité](../../docs/redis-crawler-scraper.md).
 
 ## Supervision
 
@@ -220,8 +223,12 @@ conteneurs/réseau. Aucun service de production n'est redémarré.
   de session sont retirés des libellés source journalisés.
 - Corps de source >8 Mio : erreur explicite, pas de succès sur corps tronqué.
 - SIGINT/SIGTERM annulent la collecte et l'attente entre cycles.
-- Compose conserve le profil `seeds` opt-in, toutes les catégories par défaut
-  et une cadence quotidienne. Aucune activation automatique en production.
+- Le profil Compose `seeds` est facultatif et fixe une collecte toutes les
+  24 heures. Le collecteur lit les catalogues publics configurés : fichiers
+  et README de DeepDarkCTI, Dark.fail, Ransomwatch, Ransomware.live et
+  résultats Ahmia. Les adresses extraites ne sont pas testées sur Tor par
+  le collecteur ; une adresse repérée, une admission Redis et une visite
+  réussie sont trois événements différents. Aucune activation automatique.
 
 ### Onion Search Engine (optionnel)
 
