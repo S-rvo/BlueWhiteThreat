@@ -12,13 +12,8 @@ WORKDIR /app/apps/crawler
 
 # On copie d'abord le module partagé et les fichiers de dépendances
 COPY pkg/csamfilter /app/pkg/csamfilter
-COPY apps/crawler/go.mod ./
-
-# On supprime go.sum s'il existe pour le reconstruire proprement
-RUN rm -f go.sum
-
-# On met à jour go.mod et on génère go.sum
-RUN go mod tidy
+COPY apps/crawler/go.mod apps/crawler/go.sum ./
+RUN go mod download
 
 # On copie le reste du code source
 COPY apps/crawler/. .

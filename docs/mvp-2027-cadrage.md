@@ -10,6 +10,19 @@ Le cadrage ci-dessous conserve le contrat MVP historique, notamment sa matrice d
 
 En particulier, les cookies actuels sont stockés dans un fichier 0600, sans chiffrement applicatif ; le coffre référencé depuis MongoDB, la rotation automatisée, les états opérationnels complets et la reprise planifiée restent des objectifs, pas des fonctions livrées. L’admission CTI demeure indépendante de la possession d’un compte.
 
+## État d’implémentation — 24 novembre 2026
+
+- La chaîne ingestion → classifieur → extraction → relation Neo4j est
+  [rejouable sur fixtures](validation/2026-11-24-pipeline-smoke.md). Les
+  compteurs de couverture, de files d’attente et de fraîcheur sont exposés
+  dans [Prometheus](../monitoring/README.md#métriques-pipeline).
+- Ce test ne qualifie ni le classifieur ni le modèle d’extraction. Voir le
+  [nouveau protocole humain et la mesure du parser](qualification-nlp-parser.md).
+- Le registre de suivi, le versionnement et la purge des anciennes relations
+  du graphe, les workers de revisite dédiés, le connecteur Telegram public,
+  STIX/TAXII et les alertes CTI restent à livrer. L’extraction de mentions ne
+  constitue pas, à elle seule, un verdict CTI indépendant pour l’admission.
+
 ## 1. Finalité du MVP
 
 BlueWhiteThreat doit démontrer une chaîne DARKINT/CTI complète et reproductible qui collecte des contenus autorisés provenant de services Tor, de forums web et de canaux Telegram publics, les trie, en extrait des entités CTI, les corrèle dans un graphe et restitue les résultats à un analyste.

@@ -3,8 +3,9 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,75 +42,69 @@ func TestEvaluateThresholds(t *testing.T) {
 	}
 }
 
-func TestMaybeAlertSkipsWhenInCooldown(t *testing.T) {
+func TestMaybeAlertCooldownAndErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		send bool
+		err  error
+		want int
+	}{
+		{"clear", true, nil, 1},
+		{"cooldown", false, nil, 0},
+		{"storage error", false, errors.New("redis down"), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			notify := func(message string) error {
+				calls++
+				if message != "test" {
+					t.Errorf("message = %q", message)
+				}
+				return nil
+			}
+			trySend := func(condition) (bool, error) { return tc.send, tc.err }
+			maybeAlert(notify, trySend, alert{condition: conditionQueueCapacity, message: "test"})
+			if calls != tc.want {
+				t.Fatalf("got %d calls, want %d", calls, tc.want)
+			}
+		})
+	}
+}
+
+type testTransport func(*http.Request) (*http.Response, error)
+
+func (t testTransport) RoundTrip(r *http.Request) (*http.Response, error) { return t(r) }
+
+func TestWebhookDestinationAndRedirectPolicy(t *testing.T) {
+	const path = "/services/fixtureA/fixtureB/fixtureC"
+	valid := "https://hooks.slack.com" + path
+	if got, err := slackPath(valid); err != nil || got != path {
+		t.Fatalf("valid fixture rejected: %v", err)
+	}
+	for _, raw := range []string{
+		"http://hooks.slack.com" + path,
+		"https://unrelated.invalid" + path,
+		"https://hooks.slack.com:443" + path,
+		valid + "?other=value", valid + "#fragment",
+		"https://hooks.slack.com/not-services",
+	} {
+		if _, err := slackPath(raw); err == nil {
+			t.Error("unexpected webhook accepted")
+		}
+	}
+	client := webhookClient()
 	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client.Transport = testTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	trySend := func(condition) (bool, error) { return false, nil }
-	maybeAlert(server.URL, trySend, alert{condition: conditionQueueCapacity, message: "test"})
-
-	if calls != 0 {
-		t.Fatalf("expected no webhook call while in cooldown, got %d", calls)
-	}
-}
-
-func TestMaybeAlertSendsWhenCooldownCleared(t *testing.T) {
-	var received map[string]string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&received)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	trySend := func(condition) (bool, error) { return true, nil }
-	maybeAlert(server.URL, trySend, alert{condition: conditionFreshness, message: "la file est en retard"})
-
-	if received == nil || received["text"] != "la file est en retard" {
-		t.Fatalf("expected webhook body with the alert message, got %+v", received)
-	}
-}
-
-func TestMaybeAlertSkipsWebhookWhenURLEmpty(t *testing.T) {
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-	}))
-	defer server.Close()
-
-	trySend := func(condition) (bool, error) { return true, nil }
-	maybeAlert("", trySend, alert{condition: conditionQueueCapacity, message: "test"})
-
-	if calls != 0 {
-		t.Fatalf("expected no HTTP call when webhookURL is empty, got %d", calls)
-	}
-}
-
-func TestMaybeAlertHandlesTrySendError(t *testing.T) {
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-	}))
-	defer server.Close()
-
-	trySend := func(condition) (bool, error) { return false, errors.New("redis down") }
-	maybeAlert(server.URL, trySend, alert{condition: conditionQueueCapacity, message: "test"})
-
-	if calls != 0 {
-		t.Fatalf("expected no webhook call when trySend errors, got %d", calls)
-	}
-}
-
-func TestSendWebhookNonOKStatus(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	if err := sendWebhook(server.URL, "test"); err == nil {
-		t.Fatal("expected an error for a non-2xx response")
+		var received map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil ||
+			received["text"] != "test" || r.URL.String() != valid || r.Method != http.MethodPost {
+			t.Error("incorrect outbound Slack request")
+		}
+		return &http.Response{StatusCode: http.StatusFound, Body: io.NopCloser(strings.NewReader("")),
+			Header: http.Header{"Location": {"https://unrelated.invalid"}}}, nil
+	})
+	if err := sendWebhook(client, path, "test"); err == nil || calls != 1 {
+		t.Fatalf("redirect should be rejected: calls=%d err=%v", calls, err)
 	}
 }

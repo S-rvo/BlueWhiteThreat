@@ -50,7 +50,7 @@ func Prepare(dir, poolPath, root string, n int, seed int64) (*Selection, error) 
 	selection := Selection{PoolSHA256: digest(data), Seed: seed, Requested: n}
 	var b strings.Builder
 	w := csv.NewWriter(&b)
-	_ = w.Write([]string{"id", "text", "label"})
+	_ = w.Write([]string{"id", "text", "source", "label"})
 	for _, d := range pool {
 		p := printOf(d)
 		if collision(p, prior) != "" {
@@ -59,7 +59,7 @@ func Prepare(dir, poolPath, root string, n int, seed int64) (*Selection, error) 
 		}
 		selection.Documents = append(selection.Documents, p)
 		prior = append(prior, p)
-		_ = w.Write([]string{d.ID, d.Text, ""})
+		_ = w.Write([]string{d.ID, d.Text, d.Source, ""})
 		if len(selection.Documents) == n {
 			break
 		}
@@ -145,16 +145,25 @@ func Confirm(dir, labelsPath, root string) (*Result, error) {
 	if err = json.Unmarshal(data, &selection); err != nil {
 		return nil, err
 	}
-	selected := map[string]string{}
+	selected := map[string]fingerprint{}
 	for _, p := range selection.Documents {
-		selected[p.ID] = p.Exact
+		selected[p.ID] = p
 	}
 	if len(docs) != len(selected) {
 		return nil, fmt.Errorf("annotation batch must contain all and only the selected documents")
 	}
 	for _, d := range docs {
-		if selected[d.ID] != printOf(d).Exact {
-			return nil, fmt.Errorf("document %s was not selected or its text changed", d.ID)
+		got, ok := selected[d.ID]
+		actual := printOf(d)
+		if !ok || got.Exact != actual.Exact || got.Source != actual.Source {
+			return nil, fmt.Errorf("document %s was not selected or its text/source changed", d.ID)
+		}
+	}
+	if len(c.Model.SourceHeads) > 0 || len(c.Model.SourceThresholds) > 0 {
+		for _, d := range docs {
+			if d.Source == "" {
+				return nil, fmt.Errorf("document %s: source is required by the candidate policy", d.ID)
+			}
 		}
 	}
 	result := Result{Timestamp: time.Now().UTC().Format(time.RFC3339), ModelSHA256: c.Manifest.ModelSHA256, CorpusSHA256: c.Manifest.CorpusSHA256, RuntimeSHA256: c.Manifest.RuntimeSHA256, BatchSHA256: batchDigest(docs), Threshold: c.Model.Threshold, N: len(docs), TargetPrecision: c.Manifest.TargetPrecision}
@@ -163,15 +172,22 @@ func Confirm(dir, labelsPath, root string) (*Result, error) {
 	if err = reserve(dir, docs, result); err != nil {
 		return nil, fmt.Errorf("cannot reserve confirmation (campaign may already be consumed): %w", err)
 	}
-	scores := make([]float64, len(docs))
-	labels := make([]float64, len(docs))
 	classifier := classify.New(c.Model)
-	for i, d := range docs {
-		scores[i] = classifier.Classify(d.Text).Score
-		labels[i] = d.Label
+	for _, d := range docs {
+		prediction := classifier.ClassifySource(d.Text, d.Source).Relevant
+		positive := d.Label == 1
+		switch {
+		case prediction && positive:
+			result.TP++
+		case prediction && !positive:
+			result.FP++
+		case !prediction && positive:
+			result.FN++
+		default:
+			result.TN++
+		}
 	}
-	result.TP, result.FP, result.TN, result.FN = evalmetrics.ConfusionCounts(scores, labels, c.Model.Threshold)
-	result.Accuracy, result.Precision, result.Recall, result.F1 = evalmetrics.ConfusionAt(scores, labels, c.Model.Threshold)
+	result.Accuracy, result.Precision, result.Recall, result.F1 = evalmetrics.FromCounts(result.TP, result.FP, result.TN, result.FN)
 	result.Precision95 = Wilson95(result.TP, result.TP+result.FP)
 	result.Recall95 = Wilson95(result.TP, result.TP+result.FN)
 	result.TargetSupported = result.Precision95 != nil && result.Precision95.Low >= result.TargetPrecision

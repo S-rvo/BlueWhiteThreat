@@ -1,0 +1,79 @@
+{
+  "source_local": "data/point1-tfidf-vs-minilm-20261106/results.json",
+  "source_sha256": "3617200f17e8df4dfa82a5e4287b6b1fc0cdcf912c9ba702e1baf7dd2495e22d",
+  "scope": "comparaison appariée hors production ; vocabulaire TF-IDF potentiellement exposé à des documents proches",
+  "runs": [
+    {
+      "seed": 20261106,
+      "representation": "tfidf-frozen-production-vocab",
+      "average_precision": 0.9036726090341852,
+      "min_fp_at_recall_0.65": 37,
+      "min_fp_at_recall_0.75": 59,
+      "min_fp_at_recall_0.85": 108,
+      "min_fp_at_recall_0.9": 157,
+      "precision_at_0.5": 0.8140200286123033,
+      "recall_at_0.5": 0.8726993865030674,
+      "f1_at_0.5": 0.8423390081421169
+    },
+    {
+      "seed": 20261106,
+      "representation": "minilm-frozen-encoder",
+      "average_precision": 0.8664773666503252,
+      "min_fp_at_recall_0.65": 78,
+      "min_fp_at_recall_0.75": 116,
+      "min_fp_at_recall_0.85": 194,
+      "min_fp_at_recall_0.9": 255,
+      "precision_at_0.5": 0.7381578947368421,
+      "recall_at_0.5": 0.8604294478527608,
+      "f1_at_0.5": 0.7946175637393768
+    },
+    {
+      "seed": 20261107,
+      "representation": "tfidf-frozen-production-vocab",
+      "average_precision": 0.9072512850350172,
+      "min_fp_at_recall_0.65": 40,
+      "min_fp_at_recall_0.75": 55,
+      "min_fp_at_recall_0.85": 105,
+      "min_fp_at_recall_0.9": 148,
+      "precision_at_0.5": 0.8125,
+      "recall_at_0.5": 0.8773006134969326,
+      "f1_at_0.5": 0.8436578171091446
+    },
+    {
+      "seed": 20261107,
+      "representation": "minilm-frozen-encoder",
+      "average_precision": 0.8657525168855793,
+      "min_fp_at_recall_0.65": 70,
+      "min_fp_at_recall_0.75": 127,
+      "min_fp_at_recall_0.85": 188,
+      "min_fp_at_recall_0.9": 269,
+      "precision_at_0.5": 0.7356770833333334,
+      "recall_at_0.5": 0.8665644171779141,
+      "f1_at_0.5": 0.795774647887324
+    },
+    {
+      "seed": 20261108,
+      "representation": "tfidf-frozen-production-vocab",
+      "average_precision": 0.9065978486065128,
+      "min_fp_at_recall_0.65": 37,
+      "min_fp_at_recall_0.75": 59,
+      "min_fp_at_recall_0.85": 111,
+      "min_fp_at_recall_0.9": 154,
+      "precision_at_0.5": 0.8170028818443804,
+      "recall_at_0.5": 0.8696319018404908,
+      "f1_at_0.5": 0.8424962852897474
+    },
+    {
+      "seed": 20261108,
+      "representation": "minilm-frozen-encoder",
+      "average_precision": 0.8669250251037157,
+      "min_fp_at_recall_0.65": 73,
+      "min_fp_at_recall_0.75": 114,
+      "min_fp_at_recall_0.85": 210,
+      "min_fp_at_recall_0.9": 264,
+      "precision_at_0.5": 0.7249022164276402,
+      "recall_at_0.5": 0.852760736196319,
+      "f1_at_0.5": 0.7836504580690627
+    }
+  ]
+}

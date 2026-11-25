@@ -1,3 +1,5 @@
-.env
-.env.local
-.env.prod
+# Collectes et états de session locaux ; seule la configuration commune est suivie.
+/data/*
+!/data/sites.json
+/.sessions/
+/.session-*

@@ -90,7 +90,7 @@ func startAPI(ctx context.Context) {
 	log.Println("API listening at http://localhost:8080")
 	go func() {
 		<-ctx.Done()
-		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(c)
 	}()

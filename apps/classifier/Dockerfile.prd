@@ -16,8 +16,6 @@ WORKDIR /home/classifieruser
 
 COPY --from=builder /app/classifier .
 
-# model.json is never baked into the image: it is supplied at runtime via
-# MODEL_PATH, from a volume kept in sync by the classifier-model-sync
-# service (see docker-compose.yaml) so a new model version can be deployed
-# without rebuilding or restarting this container.
+# The model directory is mounted read-only at runtime (see docker-compose.yaml).
+# The classifier reloads MODEL_PATH each cycle without rebuilding the image.
 ENTRYPOINT ["./classifier"]

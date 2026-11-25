@@ -139,6 +139,39 @@ func TestIsLinkDirectory(t *testing.T) {
 	}
 }
 
+func TestIsGatedLoginPage(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "short login wall",
+			text: "Black Hat Chat\n\nUsername\nPassword\nRemember me\nLog in\nForgot your password?",
+			want: true,
+		},
+		{
+			name: "short page mentioning login without password is not a wall",
+			text: "This forum requires login for some sections, but most content is public.",
+			want: false,
+		},
+		{
+			name: "long article that happens to mention password and login",
+			text: strings.Repeat("A detailed breach report describes stolen credentials, including username and password pairs, sold on a login portal. ", 20),
+			want: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := IsGatedLoginPage(c.text)
+			if got != c.want {
+				t.Fatalf("IsGatedLoginPage(%q) = %v, want %v", c.text, got, c.want)
+			}
+		})
+	}
+}
+
 func TestLoadKeywords(t *testing.T) {
 	keywords, err := LoadKeywords("../../data/seed_keywords.json")
 	if err != nil {

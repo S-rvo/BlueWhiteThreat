@@ -40,10 +40,13 @@ func Connect(ctx context.Context) (*mongo.Client, error) {
 // ArticleContent is the minimal projection needed for scoring: the article's
 // Mongo _id and its scraped text.
 type ArticleContent struct {
-	ID        interface{} `bson:"_id"`
-	URL       string      `bson:"url"`
-	Content   string      `bson:"content"`
-	Relevance *Relevance  `bson:"relevance"`
+	ID         interface{} `bson:"_id"`
+	URL        string      `bson:"url"`
+	Source     string      `bson:"source"`
+	SourceType string      `bson:"source_type"`
+	ScrapedAt  time.Time   `bson:"scraped_at"`
+	Content    string      `bson:"content"`
+	Relevance  *Relevance  `bson:"relevance"`
 }
 
 func articleCollection(client *mongo.Client) *mongo.Collection {
@@ -292,7 +295,7 @@ func FetchAllContent(ctx context.Context, client *mongo.Client) ([]ArticleConten
 // ForEachArticleContent visits article ids and content through a Mongo cursor,
 // keeping memory use bounded for corpus-wide processing.
 func ForEachArticleContent(ctx context.Context, client *mongo.Client, visit func(ArticleContent) error) error {
-	cursor, err := articleCollection(client).Find(ctx, bson.M{}, options.Find().SetProjection(bson.M{"_id": 1, "url": 1, "content": 1, "relevance": 1}))
+	cursor, err := articleCollection(client).Find(ctx, bson.M{}, options.Find().SetProjection(bson.M{"_id": 1, "url": 1, "source": 1, "source_type": 1, "scraped_at": 1, "content": 1, "relevance": 1}))
 	if err != nil {
 		return fmt.Errorf("db: fetch all content: %w", err)
 	}
@@ -314,7 +317,7 @@ func ForEachArticleContent(ctx context.Context, client *mongo.Client, visit func
 
 // ClassificationPolicyVersion identifies inference and review rules outside
 // the model artifact. Bump it when these rules change so stored results refresh.
-const ClassificationPolicyVersion = "review-reasons-v2"
+const ClassificationPolicyVersion = "source-type-v4"
 
 // classificationFilter selects articles with no relevance result or a result
 // produced by another model or policy version. MongoDB's $ne also matches documents
@@ -359,15 +362,24 @@ type Relevance struct {
 	ReviewReason    string  `bson:"review_reason,omitempty"`
 }
 
-// UpdateRelevance sets the "relevance" field on the article identified by id.
-func UpdateRelevance(ctx context.Context, client *mongo.Client, id interface{}, r Relevance) error {
-	_, err := articleCollection(client).UpdateOne(
+// relevanceUpdateFilter prevents a delayed inference from attaching a verdict
+// to a different version of the text than the one actually scored.
+func relevanceUpdateFilter(article ArticleContent) bson.M {
+	return bson.M{"_id": article.ID, "content": article.Content}
+}
+
+// UpdateRelevance writes only if the scored content is still current.
+func UpdateRelevance(ctx context.Context, client *mongo.Client, article ArticleContent, r Relevance) error {
+	result, err := articleCollection(client).UpdateOne(
 		ctx,
-		bson.M{"_id": id},
+		relevanceUpdateFilter(article),
 		bson.M{"$set": bson.M{"relevance": r}},
 	)
 	if err != nil {
-		return fmt.Errorf("db: update relevance for %v: %w", id, err)
+		return fmt.Errorf("db: update relevance for %v: %w", article.ID, err)
+	}
+	if result.MatchedCount == 0 {
+		return fmt.Errorf("db: article %v changed or was deleted during classification; result discarded", article.ID)
 	}
 	return nil
 }

@@ -1,10 +1,16 @@
 # Pistes à creuser (2026-11-05)
 
-Issues ouvertes pendant l'audit de poids (`cmd/auditweights`) et la relecture de
+Issues ouvertes pendant l'audit de poids (`experiments/cmd/auditweights`) et la relecture de
 l'historique CV (`docs/cv-*.md`, `model.json.evaluation.json`). La piste du
 seuil par source (écart de précision `github-advisories` 0,70 vs
 `ransomware.live` 0,92) est traitée séparément — voir message de session, pas
 ce fichier. Ce qui suit est resté sans décision.
+
+**Statut (2026-11-06) :** points 1, 3 et 5 investigués et documentés
+(sections "Investigué"/"Résolu"/"Fait" inline ci-dessous) — mesures et
+implémentations faites, mais aucune décision de réentraînement, promotion ou
+changement d'architecture prise : ça reste à la charge de l'utilisateur.
+Points 2, 4, 6-11 inchangés depuis leur dernière mise à jour.
 
 ## 1. Comparaison directe encodeur multilingue vs meilleur candidat TF-IDF
 
@@ -19,6 +25,102 @@ cache, dépendance supplémentaire) par rapport à rester en TF-IDF pur.
 À faire : relancer le protocole `cv-embeddinggemma` avec le candidat TF-IDF
 de référence actuel comme troisième colonne de comparaison, même graines,
 même familles de plis figées (`data/reviewed-template-fold-families-20261014.json`).
+
+**Investigué (2026-11-06), bloqué — pas une impasse de recherche mais un
+manque d'infra à trancher par l'utilisateur :**
+- `data/reviewed-template-fold-families-20261014.json` n'existe plus sur le
+  disque, et son historique git est vide (`git log --all -- <ce fichier>` ne
+  retourne rien) : ce fichier n'a jamais été committé, c'était un artefact
+  éphémère d'une session précédente. Même chose pour
+  `docs/cv-embeddinggemma-20261015.md` (cité par le doc 18 comme la première
+  comparaison EmbeddingGemma-vs-Nomic) et pour les répertoires de run bruts
+  `data/cv-embeddinggemma-20261018/` et `data/cv-nomic-repeat-20261018/` :
+  tous disparus, jamais tracés par git.
+- Plus largement, **aucun script ou commande dans ce dépôt n'appelle
+  EmbeddingGemma ou Nomic** (`grep -rl "embeddinggemma\|nomic-embed"` sur tout
+  le code est vide) : la génération des embeddings pour ces runs a été faite
+  par un script ad hoc d'une session antérieure, jamais committé, et ce
+  script lui-même n'existe plus. Le code qui *consomme* un cache d'embeddings
+  figé existe bien (`experiments/cmd/cvclassweights/embeddings.go`, flags `-embeddings`/
+  `-hybrid` dans `experiments/cmd/cvclassweights/main.go`), mais il n'y a plus rien en
+  amont pour produire ce cache.
+- Le seul chemin de génération d'embeddings qui survit dans le dépôt est
+  `experiments/python/embedding_head_experiment.py`, et il encode avec
+  `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` — **un
+  troisième modèle, différent à la fois d'EmbeddingGemma et de Nomic**, donc
+  pas substituable sans changer ce que "encodeur multilingue" désigne dans ce
+  point.
+- Le paquet `sentence-transformers` n'est pas installé dans l'environnement
+  Python courant (`ModuleNotFoundError`), et aucun poids EmbeddingGemma/Nomic
+  n'est présent dans le cache HuggingFace local (2,0 Go de cache, mais rien
+  qui corresponde à ces deux noms) : les régénérer suppose un téléchargement
+  de plusieurs Go et potentiellement un accès à une API d'embedding —
+  décision d'infra/coût qui n'est pas la mienne à prendre unilatéralement.
+
+**Conclusion (avant mesure) :** ce point ne peut pas être complété dans la
+session actuelle sans l'une de ces décisions utilisateur : (a) autoriser
+l'installation de `sentence-transformers` + le téléchargement des poids
+EmbeddingGemma et Nomic en local pour régénérer un cache d'embeddings et
+refiger une nouvelle `fold-families`, ou (b) accepter de comparer le TF-IDF
+de référence contre le modèle `paraphrase-multilingual-MiniLM-L12-v2` déjà
+utilisable localement (signal différent de ce que le point demandait à
+l'origine), ou (c) retrouver/reconstituer le script de génération
+EmbeddingGemma/Nomic d'origine si une copie existe hors de ce dépôt (poste
+de travail, autre machine).
+
+**Fait (2026-11-06), option (b) retenue :** `sentence-transformers` installé
+dans un venv local dédié (`.venv-embedding-experiment/`, non committé, dans
+`.gitignore`). Comparaison appariée sur le même CSV réel que le point 5
+(`data/reviewed-with-text-20261106.csv`, 2325 lignes) :
+- TF-IDF de production figé (vocabulaire/IDF de `model.json`, extrait par
+  l'outil jetable `experiments/cmd/dumptfidf`) vs `paraphrase-multilingual-MiniLM-L12-v2`
+  (encodeur figé, aucun fine-tuning).
+- Même protocole pour les deux représentations : seule la tête de régression
+  logistique est réentraînée par pli (`class_weight="balanced"`), 5 plis
+  stratifiés par label, 3 graines indépendantes (20261106/07/08).
+  Implémentation : `experiments/python/point1_tfidf_vs_minilm.py`, résultats bruts dans
+  `data/point1-tfidf-vs-minilm-20261106/results.json` (non committés).
+
+**Résultat net, stable sur les 3 graines : le TF-IDF de production bat
+MiniLM sur toute la ligne**, pas un résultat mitigé —
+
+| Métrique | TF-IDF (prod, figé) | MiniLM multilingue |
+|---|---|---|
+| Average Precision | 0,904–0,907 | 0,866–0,867 |
+| FP min à rappel 0,65 | 37–40 | 70–78 |
+| FP min à rappel 0,75 | 55–59 | 114–127 |
+| FP min à rappel 0,85 | 105–111 | 188–210 |
+| FP min à rappel 0,90 | 148–157 | 255–269 |
+| F1 @ seuil 0,5 | 0,842–0,844 | 0,784–0,795 |
+
+Le TF-IDF produit environ deux fois moins de faux positifs que MiniLM à
+chaque rappel cible, de façon stable sur les 3 graines.
+
+**Réserves, à lire avant d'agir sur ce résultat :**
+1. Ce n'est pas EmbeddingGemma. Le gain net précédent d'EmbeddingGemma sur
+   Nomic (`docs/cv-embeddinggemma-20261018.md`) était faible et seulement à
+   rappel élevé (0,65-0,75) — rien ne garantit qu'EmbeddingGemma se
+   comporterait comme MiniLM ici. Ce résultat montre qu'un encodeur
+   multilingue générique ne bat pas automatiquement le TF-IDF de ce domaine,
+   pas qu'aucun encodeur ne le pourrait.
+2. Asymétrie de fuite potentielle en faveur du TF-IDF : son vocabulaire et
+   ses poids IDF ont été choisis sur des données d'entraînement de
+   production qui recoupent probablement ce CSV d'évaluation (même souci
+   déjà documenté aux points 5 et 9) — c'est un avantage que MiniLM n'a pas
+   (encodeur générique, jamais exposé à ce corpus, poids entièrement figés
+   avant même de savoir que ce corpus existe). Donc l'écart réel pourrait
+   être plus petit qu'il n'apparaît ici.
+3. Le TF-IDF inclut des n-grammes de caractères (l33tspeak, variantes de
+   frappe) auxquels un encodeur de phrases généraliste n'est pas
+   spécifiquement entraîné — plausible explication structurelle de l'écart,
+   pas juste un artefact de fuite.
+
+**Conclusion :** même en tenant compte de la réserve 2, l'écart est trop
+large (quasi du simple au double en FP à chaque rappel cible, 3/3 graines)
+pour être entièrement expliqué par la fuite — le TF-IDF de production reste
+la meilleure option connue actuellement pour ce corpus. Aucune décision de
+réentraînement ou de changement d'architecture n'a été prise : ceci reste un
+résultat à documenter, pas une action à exécuter seul.
 
 ## 2. Cluster forums non-anglais : gain ciblé mais pas net au niveau modèle
 
@@ -38,7 +140,7 @@ rejet est vraiment la compétition chi-deux ou le plancher `min-df` lui-même.
 plancher `min-df`. Ajout de `tfidf.FitWithNonLatinMinDF` (minimum abaissé
 pour les tokens non-Latins seuls, **sans** budget réservé — ils rivalisent
 normalement pour les 5000 places sur le même classement chi-deux que tout le
-reste) et d'un flag `-nonlatin-min-df` dans `cmd/cvclassweights` pour le
+reste) et d'un flag `-nonlatin-min-df` dans `experiments/cmd/cvclassweights` pour le
 tester via le même harnais que `-script-reserve`. Diagnostic sur
 `training_data.csv` (2325 documents, proxy — le snapshot gelé
 `data/confirmation-campaign/` du protocole CV de référence est absent de ce
@@ -68,6 +170,27 @@ authentifié à ces pages, soit les exclure explicitement du calcul de rappel
 (comme `bootstrap.IsLinkDirectory` exclut déjà les pages d'annuaire de liens,
 cf. `cmd/main/main.go`).
 
+**Résolu (2026-11-06) :** implémenté la deuxième option — pas d'accès
+authentifié disponible pour l'instant (hors de portée immédiate), mais
+`bootstrap.IsGatedLoginPage` (`internal/bootstrap/label.go`) détecte
+désormais ces pages de connexion quasi vides par le même principe que
+`IsLinkDirectory` : un plafond de longueur (2000 caractères) combiné à des
+marqueurs de mur d'authentification (« password » + « username »/« login »/
+« sign in », ou des locutions comme « forgot your password », « remember
+me »). Câblé dans les quatre mêmes points d'appel qu'`IsLinkDirectory`
+(`cmd/bootstrap`, `cmd/export`, `cmd/exportpipeline`, `cmd/main`) pour que
+ces pages soient exclues de l'entraînement/export ET classées directement
+`Relevant: false` à l'inférence, en gardant train/inference cohérents (même
+raisonnement déjà en commentaire pour `IsLinkDirectory` dans
+`cmd/main/main.go`). Testé unitairement (`TestIsGatedLoginPage`) avec un cas
+positif (mur de connexion court), un cas négatif (mention de login sans mot
+de passe) et un cas négatif de non-régression (article long mentionnant
+« password »/« login » dans un contexte de fuite de données, qui ne doit pas
+être exclu). `go build`/`go vet`/`go test` verts sur les packages concernés.
+Changement non committé (standing rule : jamais commit sans demande
+explicite) ; aucune donnée d'entraînement/modèle régénérée — la décision de
+relancer bootstrap/export/retrain avec ce filtre reste à l'utilisateur.
+
 ## 4. `min-df` par défaut en production : écart jamais audité
 
 L'audit initial (session précédente) a noté que `cmd/train/main.go` appelle
@@ -94,7 +217,7 @@ performance mesurable. Le vrai problème découvert est ailleurs — voir point 
 
 ## 5. Relier l'audit de poids à un vrai jeu de validation stratifié par source
 
-`cmd/auditweights -eval`/`-ablate` n'a été testé qu'avec un CSV synthétique
+`experiments/cmd/auditweights -eval`/`-ablate` n'a été testé qu'avec un CSV synthétique
 (smoke test). Pour relier les termes à risque élevé repérés dans le top 200
 (`c_xxxx`, et les stopwords à poids fort `is`/`in`/`english`/`sign`/`please`)
 à un résultat mesuré, il faut un vrai CSV `id,text,label` stratifié par
@@ -104,6 +227,58 @@ par l'absence de texte joint dans `data/reviewed_labels.csv` (qui n'a que
 `id,label,source`) : il faut retrouver/reconstituer le texte source de ces
 IDs, probablement via `data/iteration-2026-10-27-source-refresh/` qui semble
 contenir des exports `github-advisories` plus récents.
+
+**Résolu (2026-11-06) :** le texte a été retrouvé, pas dans
+`iteration-2026-10-27-source-refresh` (ses jsonl `github-advisories`/CTI
+n'utilisent pas le même schéma d'id — `cert-eu-cti:...`, pas d'ObjectID hex —
+et ne contiennent aucun des IDs de `reviewed_labels.csv`) mais dans
+`data/automatic-eval-2026-10-19/campaign/reference.csv`, qui partage le même
+schéma d'ID et couvre 2325/2339 lignes de `reviewed_labels.csv` (14 IDs
+introuvables dans tout le dépôt, abandonnés — a priori des documents
+supprimés depuis). Les labels des deux fichiers concordent à 100 % sur les
+2325 lignes communes, donc aucun arbitrage de confiance n'a été nécessaire.
+CSV réel écrit : `data/reviewed-with-text-20261106.csv` (id,text,label,
+2325 lignes) — non committé.
+
+**Stratification par source — abandonnée, et c'est cohérent avec les points
+6/7 ci-dessous** : vérifié que `_id` d'aucune de ces 2325 lignes n'existe
+dans la collection Mongo live `article` (`ObjectId` cherché directement,
+`NOT FOUND`), et qu'aucun fichier source local (jsonl/CSV, y compris
+`training_data.csv` à la racine) ne porte de métadonnée `source`/`source_type`
+pour ces IDs au-delà de `id,text,label`. Ce jeu de 2325 documents est donc
+very probablement une capture figée du corpus `darkweb_page` humainement
+revu (cohérent avec les clusters FN/FP du point 2 — noms de forums, pas de
+CVE/GHSA : aucune occurrence de `GHSA-` dans tout le fichier) ; il ne contient
+structurellement aucun document `github-advisories`, ce qui recoupe la
+conclusion déjà actée au point 7 (cette source n'a jamais eu de chemin
+d'ingestion live) — chercher un sous-ensemble `github-advisories` pur dans ce
+jeu n'aurait donc rien pu trouver, et ce n'est pas une lacune de cette
+reconstruction mais la confirmation d'un fait déjà établi.
+
+**Mesure réelle obtenue** (`go run ./experiments/cmd/auditweights -model model.json -eval
+data/reviewed-with-text-20261106.csv -top 170 -ablate N`), qui remplace le
+smoke test synthétique :
+- Baseline sur ce vrai CSV (n=2325) : précision 0,778, rappel 0,917, F1 0,842
+  — à comparer aux 0,830/? documentés côté OOF (point 9) : cet écart de
+  précision confirme, sur données réelles cette fois, le risque de fuite déjà
+  suspecté (ce CSV recoupe probablement en partie les données d'entraînement
+  elles-mêmes, donc ce chiffre n'est pas un vrai holdout — à ne pas citer
+  comme performance de production).
+- `-ablate 20` (les 20 plus hauts risques, tous des termes CTI légitimes —
+  `data`, `c_hack`, `c_leak`, `stolen`, `cards`, `exfiltrated`...) : précision
+  +0,054, rappel **-0,083**. Donc même les termes les plus "à risque" par le
+  score `|weight|*idf` portent un vrai signal — les zéroer coûte du rappel
+  net plus qu'il n'achète de précision.
+- `-ablate 170` (jusqu'aux stopwords suspects `is`/`in`/`english`/`sign`/
+  `please` identifiés dans ce point) : précision +0,126, rappel **-0,428**,
+  F1 -0,207. Perte nette sévère : les stopwords à poids fort sont entremêlés
+  avec des centaines de termes CTI légitimes dans ce classement par risque,
+  et les zéroer tous ensemble détruit largement plus de signal réel qu'il
+  n'élimine de bruit. Conclusion : le score de risque seul ne sépare pas
+  proprement "terme mémorisé" de "terme généralisable" — isoler juste les 5
+  stopwords suspects (sans toucher aux ~165 termes CTI légitimes autour)
+  nécessiterait une modification du flag `-ablate` pour cibler des termes par
+  nom plutôt que par rang, non faite ici (changement de code non demandé).
 
 ## 6. Chantier `iteration-2026-10-27-source-refresh` : pas encore conclu
 

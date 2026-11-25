@@ -1,0 +1,8 @@
+{
+  "version": "pipeline-smoke-fixture-v1",
+  "vocabulary": {"ransomware": 0},
+  "idf": [1],
+  "weights": [8],
+  "bias": -4,
+  "threshold": 0.5
+}

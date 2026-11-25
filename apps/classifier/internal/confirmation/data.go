@@ -16,9 +16,10 @@ import (
 )
 
 type Document struct {
-	ID    string  `json:"id"`
-	Text  string  `json:"text"`
-	Label float64 `json:"label"`
+	ID     string  `json:"id"`
+	Text   string  `json:"text"`
+	Source string  `json:"source,omitempty"`
+	Label  float64 `json:"label"`
 }
 
 // ReadDocuments rejects incomplete annotations instead of silently dropping
@@ -44,9 +45,15 @@ func readDocuments(path string, labeled, allowBlankReference bool) ([]Document, 
 	if labeled {
 		expected += ",label"
 	}
-	if strings.Join(header, ",") != expected {
-		return nil, fmt.Errorf("expected header %s", expected)
+	sourceHeader := "id,text,source"
+	if labeled {
+		sourceHeader += ",label"
 	}
+	actual := strings.Join(header, ",")
+	if actual != expected && actual != sourceHeader {
+		return nil, fmt.Errorf("expected header %s or %s", expected, sourceHeader)
+	}
+	hasSource := actual == sourceHeader
 	seen := map[string]bool{}
 	var docs []Document
 	for line := 2; ; line++ {
@@ -62,8 +69,12 @@ func readDocuments(path string, labeled, allowBlankReference bool) ([]Document, 
 			return nil, fmt.Errorf("row %d: empty id/text or repeated id", line)
 		}
 		d := Document{ID: id, Text: row[1]}
+		if hasSource {
+			d.Source = strings.TrimSpace(row[2])
+		}
 		if labeled {
-			switch row[2] {
+			labelIndex := len(row) - 1
+			switch row[labelIndex] {
 			case "0":
 				d.Label = 0
 			case "1":
@@ -86,11 +97,12 @@ func digest(b []byte) string    { sum := sha256.Sum256(b); return hex.EncodeToSt
 
 type fingerprint struct {
 	ID, Exact string
+	Source    string
 	Near      uint64
 }
 
 func printOf(d Document) fingerprint {
-	return fingerprint{d.ID, digest([]byte(normalize(d.Text))), dedup.Fingerprint(d.Text)}
+	return fingerprint{ID: d.ID, Exact: digest([]byte(normalize(d.Text))), Source: d.Source, Near: dedup.Fingerprint(d.Text)}
 }
 func prints(docs []Document) []fingerprint {
 	out := make([]fingerprint, len(docs))
@@ -135,7 +147,7 @@ func batchDigest(docs []Document) string {
 	var b strings.Builder
 	w := csv.NewWriter(&b)
 	for _, d := range rows {
-		_ = w.Write([]string{d.ID, d.Text, fmt.Sprint(d.Label)})
+		_ = w.Write([]string{d.ID, d.Text, d.Source, fmt.Sprint(d.Label)})
 	}
 	w.Flush()
 	return digest([]byte(b.String()))

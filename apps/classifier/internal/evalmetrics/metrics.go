@@ -67,8 +67,11 @@ func ConfusionCounts(scores, labels []float64, threshold float64) (tp, fp, tn, f
 
 func ConfusionAt(scores, labels []float64, threshold float64) (accuracy, precision, recall, f1 float64) {
 	tp, fp, tn, fn := ConfusionCounts(scores, labels, threshold)
-	total := len(scores)
-	accuracy = SafeDiv(float64(tp+tn), float64(total))
+	return FromCounts(tp, fp, tn, fn)
+}
+
+func FromCounts(tp, fp, tn, fn int) (accuracy, precision, recall, f1 float64) {
+	accuracy = SafeDiv(float64(tp+tn), float64(tp+fp+tn+fn))
 	precision = SafeDiv(float64(tp), float64(tp+fp))
 	recall = SafeDiv(float64(tp), float64(tp+fn))
 	f1 = SafeDiv(2*precision*recall, precision+recall)

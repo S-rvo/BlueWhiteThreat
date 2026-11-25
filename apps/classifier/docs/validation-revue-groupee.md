@@ -1,5 +1,9 @@
 # Préparer des corrections humaines cohérentes
 
+> Protocole historique du 15 octobre : le validateur Python ci-dessous n’est
+> pas présent dans le dépôt. Cette page garde la trace des contrôles prévus et
+> du résultat de la revue, pas une procédure à relancer telle quelle.
+
 `scripts/validate_grouped_review.py` valide une copie remplie du formulaire groupé avant de préparer des corrections. Il ne modifie ni le modèle, ni `reviewed_labels.csv`.
 
 Copier `data/persistent-annotations-assistant-20261015-v2/grouped-review.csv`, puis renseigner uniquement `human_label`, `human_reason` et `human_reviewer` pour les documents réellement revus. Laisser les trois champs vides pour les documents en attente. Un label doit être 0 ou 1 ; un motif et un nom de relecteur sont obligatoires. Une abstention reste en attente, sans inventer un label négatif.

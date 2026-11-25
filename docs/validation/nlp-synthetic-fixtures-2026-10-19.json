@@ -1,0 +1,122 @@
+[
+  {
+    "id": "cti-original",
+    "label": 1,
+    "text": "Ransomware threat intelligence report. The threat actor deployed malware using phishing emails and exploited CVE-2024-12345. The ransomware campaign exfiltrated stolen credentials and sensitive data. Indicators of compromise include command and control domain malicious.example and IP address 192.0.2.42. Security researchers detected the malware payload and recommend patching vulnerable servers."
+  },
+  {
+    "id": "ransomware-incident",
+    "label": 1,
+    "text": "A ransomware attack encrypted the company file servers last night. Attackers stole customer records before deploying the malware. The incident response team isolated the compromised hosts and identified the initial phishing email."
+  },
+  {
+    "id": "stolen-database-sale",
+    "label": 1,
+    "text": "For sale: stolen customer database from a compromised retail company. The database dump contains email addresses, password hashes and payment records. I extracted the data after exploiting the application and will sell the leak for bitcoin."
+  },
+  {
+    "id": "initial-access-offer",
+    "label": 1,
+    "text": "Selling unauthorized VPN access to a compromised corporate network. Administrator credentials and remote desktop access are included. The victim has not detected the intrusion. Contact the seller for the stolen access."
+  },
+  {
+    "id": "phishing-campaign",
+    "label": 1,
+    "text": "A phishing campaign impersonates the company login portal to steal employee passwords. The malicious emails link to credential-collection.example. Captured credentials were used to compromise mailboxes and exfiltrate messages."
+  },
+  {
+    "id": "credential-theft",
+    "label": 1,
+    "text": "The malware stole browser passwords and session cookies from infected computers. Stolen credentials were uploaded to the attacker command and control server at 192.0.2.42. The incident is being investigated."
+  },
+  {
+    "id": "vulnerability-exploitation",
+    "label": 1,
+    "text": "Attackers are actively exploiting CVE-2021-44228 in exposed Log4j applications to execute code remotely. Incident responders found malicious payloads and outbound command and control traffic on compromised servers."
+  },
+  {
+    "id": "malware-infrastructure",
+    "label": 1,
+    "text": "Malware analysis identified a command and control server at 198.51.100.12. Infected hosts download a second-stage payload from payload.example. These indicators were extracted from a confirmed intrusion and should be blocked."
+  },
+  {
+    "id": "data-leak-claim",
+    "label": 1,
+    "text": "We breached a company and exfiltrated its customer database. The stolen data includes personal information and internal documents. We are publishing the database leak after the victim refused the ransom."
+  },
+  {
+    "id": "fr-ransomware",
+    "label": 1,
+    "text": "Une attaque par ransomware a compromis les serveurs de l’entreprise. Les attaquants ont volé la base de données clients et chiffré les sauvegardes. L’analyse du logiciel malveillant a identifié un serveur de commande et contrôle."
+  },
+  {
+    "id": "fr-access-sale",
+    "label": 1,
+    "text": "Je vends des identifiants VPN volés donnant accès au réseau compromis d’une entreprise. Les mots de passe et les sessions administrateur proviennent d’une intrusion récente. La victime ne connaît pas encore la compromission."
+  },
+  {
+    "id": "defensive-response",
+    "label": 1,
+    "text": "Following a confirmed credential-stealing malware incident, defenders revoked the stolen sessions and blocked the attacker infrastructure. Detection rules now identify the malicious process and its command and control connections."
+  },
+  {
+    "id": "cooking-original",
+    "label": 0,
+    "text": "Today we prepare a delicious homemade apple pie. Mix flour butter sugar and cinnamon. Bake in the oven and serve with vanilla ice cream. Gardening tips for planting tomatoes and watering flowers in spring."
+  },
+  {
+    "id": "weather",
+    "label": 0,
+    "text": "The weather forecast predicts sunshine and mild temperatures tomorrow. Light rain is expected over the weekend. Visitors should bring an umbrella when walking through the park."
+  },
+  {
+    "id": "gardening",
+    "label": 0,
+    "text": "Plant tomato seeds in well-drained soil and water regularly. Add compost to improve the garden soil. Flowers need sunlight and careful pruning during spring."
+  },
+  {
+    "id": "sports",
+    "label": 0,
+    "text": "The local football team won the final match after extra time. Supporters celebrated the victory and the coach thanked every player for the excellent season."
+  },
+  {
+    "id": "normal-admin",
+    "label": 0,
+    "text": "To install the office printer, open system settings and select the network printer. Configure the paper format and print a test page. Contact the help desk for routine setup assistance."
+  },
+  {
+    "id": "password-howto",
+    "label": 0,
+    "text": "Create a password for your new account and save it in a password manager. You can change your own password in the account settings menu. This page describes ordinary account setup."
+  },
+  {
+    "id": "bitcoin-payment",
+    "label": 0,
+    "text": "Our bakery accepts bitcoin payments for bread and pastries. Orders are prepared each morning and customers can collect their purchases at the counter. Prices are displayed in euros."
+  },
+  {
+    "id": "database-tutorial",
+    "label": 0,
+    "text": "This tutorial explains how to create a local database table for a personal book collection. Add the title and author columns, insert a few books and display them in alphabetical order."
+  },
+  {
+    "id": "product-review",
+    "label": 0,
+    "text": "This laptop has a comfortable keyboard and a bright display. Battery life is sufficient for watching movies and writing documents. The review compares weight, price and screen quality."
+  },
+  {
+    "id": "fr-cooking",
+    "label": 0,
+    "text": "Pour préparer une tarte aux pommes, mélangez la farine, le beurre et le sucre. Ajoutez les pommes et faites cuire au four. Servez avec une boule de glace à la vanille."
+  },
+  {
+    "id": "fr-admin",
+    "label": 0,
+    "text": "Ce guide explique comment installer une imprimante au bureau et choisir le format du papier. Une page de test permet de vérifier la configuration. Aucun incident de sécurité n’est décrit."
+  },
+  {
+    "id": "travel",
+    "label": 0,
+    "text": "The train leaves the station at nine in the morning. The hotel is a short walk from the beach. Guests can reserve breakfast and borrow bicycles to explore the town."
+  }
+]

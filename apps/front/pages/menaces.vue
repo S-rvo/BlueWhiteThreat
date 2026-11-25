@@ -3,10 +3,12 @@
     <div v-for="article in articles" :key="article.id" class="card group">
       <div class="card-content">
         <h2 class="card-title">
-          <span>{{ article.title }}</span>
+          <span>Document pertinent</span>
         </h2>
-        <p class="card-description">{{ article.description }}</p>
-        <a :href="article.link" class="card-link">Lire l'article</a>
+        <p class="card-description">{{ article.source_type || "Source non renseignée" }}</p>
+        <time v-if="article.scraped_at" :datetime="article.scraped_at">
+          {{ new Date(article.scraped_at).toLocaleString("fr-FR") }}
+        </time>
       </div>
     </div>
   </div>
@@ -22,7 +24,6 @@ const fetchArticles = async () => {
     const response = await fetch("http://localhost:8083/data");
     if (!response.ok)
       throw new Error("Erreur lors de la récupération des articles");
-    console.log(response);
     const data = await response.json();
     articles.value = data;
   } catch (error) {
@@ -83,19 +84,5 @@ onMounted(fetchArticles);
   flex: 1;
   color: #47e0ff;
   margin-bottom: 1rem;
-}
-.card-link {
-  background: white;
-  color: #101014;
-  padding: 0.5rem 1.5rem;
-  border-radius: 8px;
-  font-weight: bold;
-  text-decoration: none;
-  align-self: flex-start;
-  transition: background 0.2s, color 0.2s;
-}
-.card-link:hover {
-  background: #2563eb;
-  color: #fff;
 }
 </style>

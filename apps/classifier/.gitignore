@@ -1,26 +1,25 @@
-classifier
-*.csv
-model.json
-.env
+# Corpus et sorties d'essais privés par défaut, quelle que soit la date.
+# Seuls les fichiers d'entrée déjà versionnés sont autorisés ici.
+/data/*
+!/data/focus-profile.example.json
+!/data/llm_review_decisions.jsonl
+!/data/llm_review_log.jsonl
+!/data/reviewed_labels.csv
+!/data/seed_keywords.json
+!/data/policies/
+/data/policies/*
+!/data/policies/cti-relevance-v*.json
 
-# Local frozen experiment artifacts contain corpus text; keep out of source control.
-/data/confirmation-campaign/
-/data/.confirmation-history/
-
-# Dated outputs of one-off cmd/ experiment tools (cv*, human-review-*, simhash-*,
-# paired-ranking-*, train-*, docs reports, ...); never read by the production
-# pipeline (cmd/main, cmd/train) and not meant to be committed.
-/data/*2026*
-/docs/*2026*
-
-# cmd/comparecandidates writes one provisional model per candidate strategy
-# for comparison; only the winning candidate is ever promoted to the tracked
-# model.json, so these scratch outputs are never meant to be committed.
-/model_old.json
-/model_new.json
-/model_human.json
-/model_human_capped_hinge.json
-/model_human_squared_hinge.json
-
-# Local automation logs (Codex retrain loop); not part of the source tree.
+# Binaires, exports CSV locaux et candidats non promus.
+# Le modèle de production (model.json) et son évaluation restent visibles.
+/classifier
+/dumptfidf
+/*.csv
+/review_queue.jsonl
+/review_queue.cti.jsonl
+/model_*.json
+/model_*.json.*
 /.codex_loop_logs/
+
+# Les rapports et résultats agrégés relus dans docs/ et experiments/results/
+# restent visibles. Ne pas y déposer de corpus ni de résultats individuels.

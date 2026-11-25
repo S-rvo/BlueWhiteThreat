@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile.dev
     container_name: tor_proxy_1
     ports:
-      - "9051:9050"
+      - "127.0.0.1:9051:9050"
     tty: true
     stdin_open: true
     restart: unless-stopped
@@ -16,7 +16,7 @@ services:
       dockerfile: Dockerfile.dev
     container_name: tor_proxy_2
     ports:
-      - "9052:9050"
+      - "127.0.0.1:9052:9050"
     tty: true
     stdin_open: true
     restart: unless-stopped
@@ -27,7 +27,7 @@ services:
       dockerfile: Dockerfile.dev
     container_name: tor_proxy_3
     ports:
-      - "9053:9050"
+      - "127.0.0.1:9053:9050"
     tty: true
     stdin_open: true
     restart: unless-stopped
@@ -47,7 +47,7 @@ services:
       - REDIS_PORT=6379
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=password
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in the root .env}
     restart: unless-stopped
 
   # Réplicas additionnels pour le scaling horizontal : GetNextURLFromQueue
@@ -75,7 +75,7 @@ services:
       - REDIS_PORT=6379
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=password
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in the root .env}
     restart: unless-stopped
 
   crawler3:
@@ -93,7 +93,7 @@ services:
       - REDIS_PORT=6379
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=password
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in the root .env}
     restart: unless-stopped
 
   # Scheduling réel pour l'approvisionnement en seeds (point 3 du plan de
@@ -158,7 +158,7 @@ services:
     volumes:
       - ./db/redis:/data
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     restart: unless-stopped
 
   # Snapshots RDB rotés hors du volume de travail : seule défense permettant un
@@ -249,7 +249,7 @@ services:
       - ./apps/front:/app
       - /app/node_modules
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
 
   api:
     build:
@@ -261,44 +261,30 @@ services:
     volumes:
       - ./apps/api:/app
     ports:
-      - "8083:8083"
-    environment:
-      - MONGODB_URI=mongodb://mongodb:27017
+      - "127.0.0.1:8083:8083"
+    profiles: ["api"]
+    env_file:
+      - path: ./apps/api/.env
+        required: false
 
   mongodb:
     image: mongo:8.0.9
     container_name: mongodb_service
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     env_file:
       - ./apps/scraper/.env
     volumes:
       - mongodb_data:/data/db
 
-  mongo-express:
-    image: mongo-express:1.0.2-20-alpine3.19
-    container_name: mongo_express
-    ports:
-      - "8082:8082"
-    env_file:
-      - ./apps/scraper/.env
-    environment:
-      - ME_CONFIG_MONGODB_ADMINUSERNAME=root
-      - ME_CONFIG_MONGODB_ADMINPASSWORD=root
-      - ME_CONFIG_MONGODB_SERVER=mongodb
-      - ME_CONFIG_BASICAUTH_USERNAME=user
-      - ME_CONFIG_BASICAUTH_PASSWORD=user
-    depends_on:
-      - mongodb
-
   neo4j:
     image: neo4j:5.19
     container_name: neo4j_service
     ports:
-      - "7474:7474" # Interface web Neo4j Browser
-      - "7687:7687" # Connexion Bolt
+      - "127.0.0.1:7474:7474" # Interface web Neo4j Browser
+      - "127.0.0.1:7687:7687" # Connexion Bolt
     environment:
-      - NEO4J_AUTH=neo4j/password
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in the root .env}
       - NEO4J_dbms_security_auth__enabled=true
     volumes:
       - neo4j_data:/data
@@ -308,7 +294,7 @@ services:
     image: ollama/ollama:latest
     container_name: ollama_service
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
 
@@ -328,10 +314,11 @@ services:
       - MONGO_PORT=27017
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=password
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in the root .env}
       - OLLAMA_HOST=http://ollama:11434
       - OLLAMA_MODEL=qwen2.5:14b-instruct
       - PARSER_INTERVAL_MIN=10
+      - PARSER_ENABLE_REMOTE_FALLBACK=${PARSER_ENABLE_REMOTE_FALLBACK:-false}
     env_file:
       - ./apps/scraper/.env
 

@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Weak-positive recall proxy on unseen actor groups; no fitting or threshold tuning."""
+import json,pathlib,hashlib
+import numpy as np,joblib
+base=pathlib.Path('apps/classifier/data/iteration-2026-10-25-source-label-audit');d=base/'unseen-actor-recall-challenge';rows=[json.loads(x) for x in (d/'documents.jsonl').read_text().splitlines()];texts=[r['text'] for r in rows];actors=np.array([r.get('source_actor','').casefold() for r in rows]);
+from score_ransomware_candidate import digest
+specdir=base/'ransomware-specialist-candidate';specman=json.loads((specdir/'manifest.json').read_text());assert digest(specdir/'candidate.joblib')==specman['model_sha256'];special=joblib.load(specdir/'candidate.joblib').predict_proba(texts)[:,1]
+sharedir=pathlib.Path('apps/classifier/data/iteration-2026-10-23-frozen-lexical');sharedman=json.loads((sharedir/'manifest.json').read_text());shared=joblib.load(sharedir/'candidate.joblib')['pipeline'].predict_proba(texts)[:,1]
+assert np.isfinite(special).all() and np.isfinite(shared).all(); rng=np.random.default_rng(20261025);groups=np.unique(actors);member={g:np.where(actors==g)[0] for g in groups};boot_s=[];boot_b=[]
+for _ in range(5000):
+ sampled=rng.choice(groups,size=len(groups),replace=True);ix=np.concatenate([member[g] for g in sampled]);boot_s.append(float(np.mean(special[ix]>=.5)));boot_b.append(float(np.mean(shared[ix]>=.5)))
+rs=float(np.mean(special>=.5));rb=float(np.mean(shared>=.5));delta=np.array(boot_s)-np.array(boot_b);shared_frozen=float(sharedman['selected']['by_source']['ransomware.live']['threshold']);frozen_recall=float(np.mean(shared>=shared_frozen))
+time_bins={}
+for period in sorted({r.get('source_date','')[:4] for r in rows}):
+ ix=np.array([r.get('source_date','').startswith(period) for r in rows]);time_bins[period]={'documents':int(ix.sum()),'actors':len(set(actors[ix])),'specialist_recall_proxy_at_0_5':float(np.mean(special[ix]>=.5)),'shared_recall_proxy_at_0_5':float(np.mean(shared[ix]>=.5))}
+res={'year_strata':time_bins,'documents':len(rows),'actors':len(groups),'weak_positive_recall_proxy':{'specialist_fixed_0_5':rs,'shared_fixed_0_5':rb,'paired_delta_specialist_minus_shared':rs-rb,'delta_actor_bootstrap_95pct_ci':[float(x) for x in np.quantile(delta,[.025,.975])]},'artifact_native_thresholds_exploratory':{'specialist_threshold':0.5,'shared_frozen_ransomware_threshold':shared_frozen,'specialist_recall_proxy':rs,'shared_recall_proxy':frozen_recall,'note':'unequal but pre-existing thresholds; post-hoc secondary description, no threshold retuning'},'predicted_positive_counts':{'specialist_at_0_5':int(np.sum(special>=.5)),'shared_at_0_5':int(np.sum(shared>=.5)),'shared_at_frozen_source_threshold':int(np.sum(shared>=shared_frozen))},'average_scores':{'specialist':float(np.mean(special)),'shared':float(np.mean(shared))},'models':{'specialist_sha256':specman['model_sha256'],'shared_sha256':hashlib.sha256((sharedir/'candidate.joblib').read_bytes()).hexdigest()},'interpretation':'weak proxy recall only; not independently verified; precision/specificity unavailable; historical actor holdout, not temporal prospective validation','thresholds_changed':False,'training_or_tuning':False,'reserve_read':False,'promotion':False};(d/'result.json').write_text(json.dumps(res,indent=2)+'\n');print(json.dumps(res,indent=2))

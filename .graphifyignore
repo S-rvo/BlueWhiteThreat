@@ -1,0 +1,22 @@
+# Graphify cartographie le code, pas les données collectées ni les modèles.
+/db/
+/infra/db/
+/apps/classifier/data/
+/apps/classifier/model*.json*
+/apps/scraper/data/
+*.csv
+*.jsonl
+*.log
+
+# Sorties locales, secrets et dépendances générées.
+graphify-out/
+.worktrees/
+.env*
+*.env
+*.env.*
+*.key
+*.pem
+node_modules/
+.nuxt/
+.output/
+__pycache__/
