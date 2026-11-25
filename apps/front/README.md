@@ -1,75 +1,19 @@
-# Nuxt Minimal Starter
+# Interface BlueWhiteThreat
 
-Look at the [Nuxt documentation](https://nuxt.com/docs/getting-started/introduction) to learn more.
+Interface Nuxt. Utiliser Node 22 comme dans Docker, et npm avec le fichier
+`package-lock.json` du dépôt :
 
-## Setup
-
-Make sure to install dependencies:
-
-```bash
-# npm
-npm install
-
-# pnpm
-pnpm install
-
-# yarn
-yarn install
-
-# bun
-bun install
-```
-
-## Development Server
-
-Start the development server on `http://localhost:3000`:
-
-```bash
-# npm
+```sh
+cd apps/front
+npm ci
 npm run dev
-
-# pnpm
-pnpm dev
-
-# yarn
-yarn dev
-
-# bun
-bun run dev
 ```
 
-## Production
+Le serveur de développement écoute sur `http://localhost:8080`. Le démarrage
+avec l’API et les autres services est décrit dans le [runbook](../../docs/runbook-services.md).
 
-Build the application for production:
+Pour vérifier le build sans démarrer les services :
 
-```bash
-# npm
+```sh
 npm run build
-
-# pnpm
-pnpm build
-
-# yarn
-yarn build
-
-# bun
-bun run build
 ```
-
-Locally preview production build:
-
-```bash
-# npm
-npm run preview
-
-# pnpm
-pnpm preview
-
-# yarn
-yarn preview
-
-# bun
-bun run preview
-```
-
-Check out the [deployment documentation](https://nuxt.com/docs/getting-started/deployment) for more information.

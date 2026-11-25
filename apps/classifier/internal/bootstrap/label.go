@@ -56,6 +56,56 @@ func IsLinkDirectory(text string) bool {
 	return false
 }
 
+// gatedLoginMaxChars caps document length under which login-page markers are
+// enough to treat a document as gated content rather than substantive text.
+// Real content pages that happen to mention a login form are ordinarily much
+// longer than this, so the length cap keeps the heuristic from misfiring on
+// legitimate short pages.
+const gatedLoginMaxChars = 2000
+
+// loginMarkers are phrases that identify a page as a login/auth wall. None
+// of them alone is distinctive (e.g. a forum's footer links to "login"), so
+// IsGatedLoginPage additionally requires the document to be short.
+var loginMarkers = []string{
+	"forgot password",
+	"forgot your password",
+	"remember me",
+	"log in to continue",
+	"login to continue",
+	"please log in",
+	"please login",
+	"you must be logged in",
+	"sign in to continue",
+	"you must login",
+	"you must log in",
+}
+
+// IsGatedLoginPage reports whether text looks like a near-empty login/auth
+// wall rather than substantive content: the real page is behind a session
+// the crawler doesn't have, so there's nothing here for any lexical or
+// encoder-based model to learn from (see
+// docs/pistes-a-creuser-2026-11-05.md point 3).
+func IsGatedLoginPage(text string) bool {
+	if len(text) > gatedLoginMaxChars {
+		return false
+	}
+	lower := strings.ToLower(text)
+	hasPassword := strings.Contains(lower, "password")
+	hasLoginWord := strings.Contains(lower, "username") ||
+		strings.Contains(lower, "log in") ||
+		strings.Contains(lower, "login") ||
+		strings.Contains(lower, "sign in")
+	if hasPassword && hasLoginWord {
+		return true
+	}
+	for _, marker := range loginMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // Keep Unicode letters and single digits (notably "0-day"). Punctuation
 // separates tokens, so spelling variants such as "cve"/"cve-" share a key.
 var keywordWords = regexp.MustCompile(`[\p{L}\p{N}_]+`)

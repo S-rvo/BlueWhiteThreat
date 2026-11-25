@@ -73,3 +73,15 @@ func TestExtractWithFallback_BothFail(t *testing.T) {
 		t.Fatal("expected error when both extractors fail")
 	}
 }
+
+func TestExtractWithoutRemoteFallback(t *testing.T) {
+	primary := &fakeExtractor{}
+	result, err := ExtractWithFallback(context.Background(), primary, nil, "synthetic")
+	if err != nil || !result.IsEmpty() || primary.calls != 1 {
+		t.Fatalf("empty local extraction should succeed: %v, %v", result, err)
+	}
+	primary.err = errors.New("ollama down")
+	if _, err := ExtractWithFallback(context.Background(), primary, nil, "synthetic"); !errors.Is(err, primary.err) {
+		t.Fatalf("should surface local failure: %v", err)
+	}
+}

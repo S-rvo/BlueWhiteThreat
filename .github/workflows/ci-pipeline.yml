@@ -1,0 +1,49 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop, 'release/**']
+    paths:
+      - "apps/api/**"
+      - "apps/parser/**"
+      - "apps/classifier/**"
+      - "apps/scraper/**"
+      - "pkg/**"
+      - "tests/pipeline/**"
+      - ".github/workflows/ci-pipeline.yml"
+  pull_request:
+    branches: [main, develop, 'release/**']
+    paths:
+      - "apps/api/**"
+      - "apps/parser/**"
+      - "apps/classifier/**"
+      - "apps/scraper/**"
+      - "pkg/**"
+      - "tests/pipeline/**"
+      - ".github/workflows/ci-pipeline.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache-dependency-path: |
+            apps/api/go.sum
+            apps/parser/go.sum
+            apps/classifier/go.sum
+            apps/scraper/go.sum
+      - name: API and parser unit tests
+        run: |
+          (cd apps/api && go test -race ./...)
+          (cd apps/parser && go test -race ./...)
+      - name: Synthetic ingestion, classification, extraction and replay
+        run: python3 tests/pipeline/smoke.py

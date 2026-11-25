@@ -64,7 +64,7 @@ Le planificateur peut utiliser un `time.Ticker` pour alimenter `crawl:refresh` �
 | `parser` (nouveau service Go) | Extraction d'entités (IOC, TTPs, acteurs) via LLM local (Ollama) + repli cloud (Claude) | **Conçu** (`docs/plans/2026-09-14-entity-parser-*.md`), à implémenter |
 | Neo4j | Graphe de corrélation (acteurs, pseudonymes, wallets, fuites) | **Existant** (intégration crawler déjà câblée dans `apps/crawler/internal/db/neo4j.go`), schéma à enrichir |
 | `apps/api` | Exposition des données MongoDB vers le front | **Existant** |
-| `apps/front` / `apps/target` | Interfaces web (consultation, démonstration) | **Existant**, à étendre pour la visualisation de graphe |
+| `apps/front` | Interface web de consultation | **Existant**, à étendre pour la visualisation de graphe |
 | Connecteur STIX 2.1/TAXII | Export vers MISP/SIEM | **À concevoir et implémenter** |
 | Télégram bot | Collecte sur canaux publics | **À concevoir et implémenter** |
 | Alerting | Notification sur nouvel acteur/TTP | **À concevoir et implémenter** |

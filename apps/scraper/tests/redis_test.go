@@ -11,13 +11,26 @@ import (
 )
 
 func testRedisClient(t *testing.T) *redis.Client {
-	host := os.Getenv("REDIS_HOST")
-	if host == "" {
-		host = "localhost"
+	addr := os.Getenv("SCRAPER_TEST_REDIS")
+	if addr == "" {
+		t.Skip("requires explicit disposable SCRAPER_TEST_REDIS")
 	}
-	client := redis.NewClient(&redis.Options{Addr: host + ":6379"})
+	client := redis.NewClient(&redis.Options{Addr: addr})
+	t.Cleanup(func() { client.Close() })
 	if err := client.Ping(context.Background()).Err(); err != nil {
-		t.Skipf("Redis non disponible (%v) — lancer `docker compose up -d redis`", err)
+		t.Fatal(err)
+	}
+	// A dedicated instance must contain no unrelated crawler/application keys.
+	keys, err := client.Keys(context.Background(), "*").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		switch key {
+		case "urls_crawled", "urls_scraped", "urls_scraped_at", "urls_scrape_failed_at":
+		default:
+			t.Fatalf("test Redis contains unrelated key %q", key)
+		}
 	}
 	return client
 }

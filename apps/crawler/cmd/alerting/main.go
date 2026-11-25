@@ -11,11 +11,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -71,12 +74,19 @@ func run() error {
 	flag.Parse()
 
 	interval := *intervalFlag
-	if interval > maxCheckInterval {
-		return fmt.Errorf("intervalle trop long (%s > %s)", interval, maxCheckInterval)
+	if interval <= 0 || interval > maxCheckInterval {
+		return fmt.Errorf("intervalle %s hors des bornes (0, %s]", interval, maxCheckInterval)
 	}
 
-	webhookURL := os.Getenv("ALERT_WEBHOOK_URL")
-	if webhookURL == "" {
+	var notify func(string) error
+	if raw := os.Getenv("ALERT_WEBHOOK_URL"); raw != "" {
+		path, err := slackPath(raw)
+		if err != nil {
+			return err
+		}
+		client := webhookClient()
+		notify = func(message string) error { return sendWebhook(client, path, message) }
+	} else {
 		log.Println("ALERT_WEBHOOK_URL non défini : les alertes seront seulement loguées, pas envoyées")
 	}
 
@@ -90,7 +100,7 @@ func run() error {
 	}
 
 	checkOnce := func() {
-		if err := checkThresholds(webhookURL, trySend); err != nil {
+		if err := checkThresholds(notify, trySend); err != nil {
 			log.Printf("Erreur vérification des seuils: %v", err)
 		}
 	}
@@ -109,7 +119,7 @@ func run() error {
 // checkThresholds lit les métriques courantes depuis Redis, détermine quelles
 // alertes doivent se déclencher (evaluateThresholds, pure), puis les émet
 // (maybeAlert, avec cooldown via trySend).
-func checkThresholds(webhookURL string, trySend func(condition) (bool, error)) error {
+func checkThresholds(notify func(string) error, trySend func(condition) (bool, error)) error {
 	ratio, err := db.QueueCapacityRatio()
 	if err != nil {
 		return fmt.Errorf("lecture ratio de capacité: %w", err)
@@ -123,14 +133,14 @@ func checkThresholds(webhookURL string, trySend func(condition) (bool, error)) e
 	hasAge := false
 	if raw, ok := stats["oldest_crawled_age_seconds"]; ok {
 		ageSeconds, err := strconv.ParseInt(raw, 10, 64)
-		if err == nil {
+		if err == nil && ageSeconds >= 0 && ageSeconds <= int64((1<<63-1)/time.Second) {
 			oldestAge = time.Duration(ageSeconds) * time.Second
 			hasAge = true
 		}
 	}
 
 	for _, a := range evaluateThresholds(ratio, oldestAge, hasAge) {
-		maybeAlert(webhookURL, trySend, a)
+		maybeAlert(notify, trySend, a)
 	}
 	return nil
 }
@@ -160,7 +170,7 @@ func evaluateThresholds(queueRatio float64, oldestAge time.Duration, hasAge bool
 
 // maybeAlert envoie l'alerte sauf si trySend indique qu'elle est encore en
 // cooldown (déjà envoyée récemment pour cette condition).
-func maybeAlert(webhookURL string, trySend func(condition) (bool, error), a alert) {
+func maybeAlert(notify func(string) error, trySend func(condition) (bool, error), a alert) {
 	shouldSend, err := trySend(a.condition)
 	if err != nil {
 		log.Printf("Erreur vérification du cooldown pour %s: %v", a.condition, err)
@@ -171,27 +181,56 @@ func maybeAlert(webhookURL string, trySend func(condition) (bool, error), a aler
 	}
 
 	log.Printf("ALERTE: %s", a.message)
-	if webhookURL == "" {
+	if notify == nil {
 		return
 	}
-	if err := sendWebhook(webhookURL, a.message); err != nil {
+	if err := notify(a.message); err != nil {
 		log.Printf("Erreur envoi webhook: %v", err)
 	}
 }
 
-func sendWebhook(webhookURL, message string) error {
+const slackHost = "hooks.slack.com"
+
+var slackServicePath = regexp.MustCompile(`^/services/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$`)
+
+func slackPath(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host != slackHost || u.User != nil ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" ||
+		!slackServicePath.MatchString(u.Path) || len(u.Path) > 256 {
+		return "", errors.New("ALERT_WEBHOOK_URL must be a Slack HTTPS incoming webhook")
+	}
+	return u.Path, nil
+}
+
+func webhookClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return &http.Client{
+		Timeout:       10 * time.Second,
+		Transport:     transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+func sendWebhook(client *http.Client, path, message string) error {
 	body, err := json.Marshal(map[string]string{"text": message})
 	if err != nil {
 		return err
 	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(webhookURL, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, "https://hooks.slack.com", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return errors.New("could not prepare Slack webhook request")
+	}
+	req.URL.Path = path
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		// Transport errors carry the webhook's secret URL.
+		return errors.New("Slack webhook transport failed")
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("statut HTTP %d", resp.StatusCode)
 	}
 	return nil

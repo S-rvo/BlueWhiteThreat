@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -51,7 +52,7 @@ func collectSearch(ctx context.Context, client *http.Client, key string, queries
 				return fmt.Errorf("search transport failed: %w", err)
 			}
 			body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
-			resp.Body.Close()
+			readErr = errors.Join(readErr, resp.Body.Close())
 			if resp.StatusCode != http.StatusOK {
 				return fmt.Errorf("search HTTP %d; provider stopped for this run", resp.StatusCode)
 			}

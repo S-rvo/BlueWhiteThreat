@@ -60,6 +60,48 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+func TestClassifySourceUsesFrozenSourceThresholdAndFallback(t *testing.T) {
+	m := &model.Model{
+		Vocabulary: map[string]int{"known": 0}, IDF: []float64{1},
+		Weights: []float64{0}, Bias: 0, Threshold: .6,
+		SourceThresholds: map[string]float64{"special": .4},
+	}
+	c := New(m)
+	if !c.ClassifySource("known", "special").Relevant {
+		t.Fatal("expected source threshold to classify score 0.5 as relevant")
+	}
+	if c.ClassifySource("known", "unknown").Relevant || c.Classify("known").Relevant {
+		t.Fatal("expected unknown and empty sources to use global threshold")
+	}
+}
+
+func TestClassifySourceUsesOptionalSourceHead(t *testing.T) {
+	m := &model.Model{
+		Vocabulary: map[string]int{"known": 0}, IDF: []float64{1},
+		Weights: []float64{-10}, Bias: 0, Threshold: .5,
+		SourceHeads: map[string]model.SourceHead{"darkweb_page": {Weights: []float64{10}, Bias: 0}},
+	}
+	c := New(m)
+	if !c.ClassifySource("known", "darkweb_page").Relevant {
+		t.Fatal("expected source head to override shared weights")
+	}
+	if c.ClassifySource("known", "github-advisories").Relevant {
+		t.Fatal("expected unknown source to retain shared head")
+	}
+}
+
+func TestInvalidSourceHeadDoesNotKeepItsThreshold(t *testing.T) {
+	m := &model.Model{
+		Vocabulary: map[string]int{"known": 0}, IDF: []float64{1},
+		Weights: []float64{0}, Bias: 0, Threshold: .6,
+		SourceHeads:      map[string]model.SourceHead{"broken": {Weights: []float64{1, 2}}},
+		SourceThresholds: map[string]float64{"broken": .4},
+	}
+	if New(m).ClassifySource("known", "broken").Relevant {
+		t.Fatal("combined the shared score with a threshold belonging to an invalid source head")
+	}
+}
+
 func TestClassify_AllZeroVector(t *testing.T) {
 	// A document with no tokens in the vocabulary produces an all-zero
 	// TF-IDF vector, so the score should fall back to sigmoid(Bias).
@@ -142,4 +184,3 @@ func TestClassify_ScoreEqualsThreshold(t *testing.T) {
 		t.Fatalf("expected relevant=true when score==threshold, got score=%f", result.Score)
 	}
 }
-

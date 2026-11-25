@@ -4,23 +4,26 @@ on:
   push:
     branches:
       - main
-      - develops
+      - develop
+      - "release/**"
       - "crawler-*"
   pull_request:
     branches:
       - main
+      - develop
+      - "release/**"
       - "crawler-*"
 
 jobs:
   test-and-security-crawler:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       # Test Crawler
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
           cache-dependency-path: apps/crawler/go.sum
@@ -29,13 +32,15 @@ jobs:
           cd apps/crawler
           go mod tidy
           go test ./...
+      - name: Test du rapport de couverture
+        run: python3 -B -m unittest discover -s apps/crawler/scripts
 
       # Go Security Scan (code statique)
       - name: Go Security Scan (crawler)
         run: |
+          bash .github/scripts/install-gosec.sh
           cd apps/crawler
-          curl -sfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.29.0
-          $(go env GOPATH)/bin/gosec ./...
+          "$(go env GOPATH)/bin/gosec" ./...
 
       # Secrets Scan
       - name: Find secrets (crawler)

@@ -15,9 +15,13 @@ func ExtractWithFallback(ctx context.Context, primary, fallback extractor.Extrac
 	result, err := primary.Extract(ctx, text)
 	if err == nil {
 		cleaned := entities.ValidateAndClean(result)
-		if !cleaned.IsEmpty() {
+		if !cleaned.IsEmpty() || fallback == nil {
 			return cleaned, nil
 		}
+	}
+
+	if fallback == nil {
+		return entities.Entities{}, err
 	}
 
 	fbResult, fbErr := fallback.Extract(ctx, text)

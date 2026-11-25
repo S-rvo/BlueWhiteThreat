@@ -4,6 +4,8 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"math"
@@ -16,11 +18,21 @@ import (
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/db"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
 	"github.com/joho/godotenv"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var defaultIntervalMinutes = 10
 
+const legacyPipelineSourceType = "darkweb_page"
+
 func main() {
+	once := flag.Bool("once", false, "run one classification cycle and exit")
+	retentionReport := flag.Bool("retention-report", false, "report retention decisions from stored verdicts without writing")
+	flag.Parse()
+	if *once && *retentionReport {
+		log.Fatal("-retention-report and -once are mutually exclusive")
+	}
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env found or unreadable, continuing with existing environment.")
 	}
@@ -35,9 +47,20 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to load model from %s: %v (run cmd/train first)", modelPath, err)
 	}
+	if *retentionReport {
+		if err := printRetentionReport(classifier.Version()); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	log.Printf("Classifier service started (model version %s, interval %d min)", classifier.Version(), defaultIntervalMinutes)
-	runOnce(classifier)
+	if err := runOnce(classifier); err != nil && *once {
+		log.Fatal(err)
+	}
+	if *once {
+		return
+	}
 
 	ticker := time.NewTicker(time.Duration(defaultIntervalMinutes) * time.Minute)
 	defer ticker.Stop()
@@ -53,6 +76,29 @@ func main() {
 		log.Printf("Using model version %s", classifier.Version())
 		runOnce(classifier)
 	}
+}
+
+func printRetentionReport(modelVersion string) error {
+	uri := os.Getenv("RETENTION_MONGODB_URI")
+	if uri == "" {
+		return fmt.Errorf("RETENTION_MONGODB_URI is required; use a read-only MongoDB account")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri).SetServerSelectionTimeout(5*time.Second))
+	if err != nil {
+		return fmt.Errorf("invalid MongoDB configuration for the retention report")
+	}
+	defer func() {
+		closeCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stop()
+		_ = client.Disconnect(closeCtx)
+	}()
+	report, err := db.BuildRetentionReport(ctx, client, modelVersion)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(report)
 }
 
 func loadClassifier(modelPath, thresholdOverride string) (*classify.Classifier, error) {
@@ -93,55 +139,68 @@ func applyThresholdOverride(m *model.Model, raw string) bool {
 	return true
 }
 
-func runOnce(classifier *classify.Classifier) {
+func runOnce(classifier *classify.Classifier) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	client, err := db.Connect(ctx)
 	if err != nil {
 		log.Printf("failed to connect to MongoDB, will retry next tick: %v", err)
-		return
+		return err
 	}
 	defer client.Disconnect(ctx)
 
 	articles, err := db.FetchNeedingClassification(ctx, client, classifier.Version())
 	if err != nil {
 		log.Printf("failed to fetch articles needing classification, will retry next tick: %v", err)
-		return
+		return err
 	}
 	log.Printf("Found %d articles needing classification by model %s", len(articles), classifier.Version())
 
+	var writeErr error
 	for _, article := range articles {
-		relevance, skip := classifyArticle(classifier, article.Content)
+		relevance, skip := classifyArticleSource(classifier, article.Content, article.SourceType)
 		if skip {
 			log.Printf("skipping article %v: empty content", article.ID)
 			continue
 		}
 
-		if err := db.UpdateRelevance(ctx, client, article.ID, relevance); err != nil {
+		if err := db.UpdateRelevance(ctx, client, article, relevance); err != nil {
 			log.Printf("failed to update relevance for article %v: %v", article.ID, err)
-			continue
+			writeErr = err
 		}
 	}
+	return writeErr
 }
 
 // classifyArticle decides the relevance record for one article's content.
 // Empty content can't be scored and is skipped entirely (left for a later
-// pass). Link-directory pages (bootstrap.IsLinkDirectory) are excluded from
-// training data by cmd/bootstrap and cmd/export, so the live classifier
-// never saw one as a labeled example — scoring it here would apply a model
-// to data it was never evaluated against, so it's instead recorded directly
-// as not relevant, keeping training and inference consistent.
+// pass). Link-directory pages (bootstrap.IsLinkDirectory) and gated
+// login-wall pages (bootstrap.IsGatedLoginPage) are excluded from training
+// data by cmd/bootstrap and cmd/export, so the live classifier never saw one
+// as a labeled example — scoring it here would apply a model to data it was
+// never evaluated against, so it's instead recorded directly as not
+// relevant, keeping training and inference consistent.
 func classifyArticle(classifier *classify.Classifier, content string) (relevance db.Relevance, skip bool) {
+	return classifyArticleSource(classifier, content, "")
+}
+
+func classifyArticleSource(classifier *classify.Classifier, content, source string) (relevance db.Relevance, skip bool) {
 	if content == "" {
 		return db.Relevance{}, true
 	}
 
-	if bootstrap.IsLinkDirectory(content) {
+	if bootstrap.IsLinkDirectory(content) || bootstrap.IsGatedLoginPage(content) {
 		return db.Relevance{Relevant: false, Score: 0, ModelVersion: classifier.Version(), PolicyVersion: db.ClassificationPolicyVersion}, false
 	}
 
-	result := classifier.Classify(content)
+	// Documents scraped before source_type was introduced all came from the
+	// dark-web page pipeline. Keep their inference policy aligned with newly
+	// scraped documents without rewriting historical MongoDB records.
+	if source == "" {
+		source = legacyPipelineSourceType
+	}
+	result := classifier.ClassifySource(content, source)
 	return db.Relevance{
 		Relevant:        result.Relevant,
 		Score:           result.Score,

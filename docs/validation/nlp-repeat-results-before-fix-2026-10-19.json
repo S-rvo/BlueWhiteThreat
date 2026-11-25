@@ -1,0 +1,235 @@
+{
+  "all_decisions_stable": true,
+  "f1": 0,
+  "false_negatives": 12,
+  "false_positives": 0,
+  "inferences": 720,
+  "label_provenance": "assistant-authored synthetic diagnostic; not an independent model evaluation",
+  "model_sha256": "0c00b06c8f48df847d3ef813ac45d8f1689d49736912746c4862b9c29dbdbb89",
+  "model_version": "2026-10-17T20-52-35",
+  "precision": 0,
+  "recall": 0,
+  "repetitions_per_text": 30,
+  "results": [
+    {
+      "id": "cti-original",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.06786066507487984,
+      "max_score": 0.06786066507487984,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "ransomware-incident",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.06066281385872099,
+      "max_score": 0.06066281385872099,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "stolen-database-sale",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.053142782429571524,
+      "max_score": 0.053142782429571524,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "initial-access-offer",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.06004949443021567,
+      "max_score": 0.06004949443021567,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "phishing-campaign",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.043445692407881466,
+      "max_score": 0.043445692407881466,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "credential-theft",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.041203583078223416,
+      "max_score": 0.041203583078223416,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "vulnerability-exploitation",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.03711488311539639,
+      "max_score": 0.03711488311539639,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "malware-infrastructure",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.049789912321140835,
+      "max_score": 0.049789912321140835,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "data-leak-claim",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.07193934680996165,
+      "max_score": 0.07193934680996165,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "fr-ransomware",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.03490341340679453,
+      "max_score": 0.03490341340679453,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "fr-access-sale",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.03490341340679453,
+      "max_score": 0.03490341340679453,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "defensive-response",
+      "label": 1,
+      "relevant": false,
+      "min_score": 0.05300479822811337,
+      "max_score": 0.05300479822811337,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "cooking-original",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.03624859663699127,
+      "max_score": 0.03624859663699127,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "weather",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.020071581394321625,
+      "max_score": 0.020071581394321625,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "gardening",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.02175989822584085,
+      "max_score": 0.02175989822584085,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "sports",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.038541936849449225,
+      "max_score": 0.038541936849449225,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "normal-admin",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.033146415434708504,
+      "max_score": 0.033146415434708504,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "password-howto",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.03439812566243326,
+      "max_score": 0.03439812566243326,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "bitcoin-payment",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.043135170958044464,
+      "max_score": 0.043135170958044464,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "database-tutorial",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.03339553837463262,
+      "max_score": 0.03339553837463262,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "product-review",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.025982950870152663,
+      "max_score": 0.025982950870152663,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "fr-cooking",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.03490341340679453,
+      "max_score": 0.03490341340679453,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "fr-admin",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.03399905100442173,
+      "max_score": 0.03399905100442173,
+      "unique_verdicts": 1,
+      "stable": true
+    },
+    {
+      "id": "travel",
+      "label": 0,
+      "relevant": false,
+      "min_score": 0.022544997570283803,
+      "max_score": 0.022544997570283803,
+      "unique_verdicts": 1,
+      "stable": true
+    }
+  ],
+  "threshold": 0.5819606191352668,
+  "true_negatives": 12,
+  "true_positives": 0,
+  "unique_texts": 24
+}

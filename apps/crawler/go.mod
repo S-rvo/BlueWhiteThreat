@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter v0.0.0
+	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/gocolly/colly v1.2.0
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.1
 	github.com/redis/go-redis/v9 v9.7.3
@@ -16,7 +17,6 @@ replace github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter => ../../pkg/csamfilter
 
 require (
 	github.com/PuerkitoBio/goquery v1.10.2 // indirect
-	github.com/alicebob/miniredis/v2 v2.35.0 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/antchfx/htmlquery v1.3.4 // indirect
 	github.com/antchfx/xmlquery v1.4.4 // indirect

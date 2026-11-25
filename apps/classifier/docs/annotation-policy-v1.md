@@ -12,7 +12,10 @@ Un domaine Tor, un prix bas, une cryptomonnaie ou le mot « hacker » ne suffise
 
 Chaque annotation conserve l’identité déclarée et le type d’annotateur, la politique et son empreinte, l’empreinte du texte, une justification, les règles appliquées et des citations avec positions exactes en caractères Unicode. Un label décidé exige une déclaration de lecture complète. Une citation négative seule ne démontre pas l’absence d’un sujet dans le reste du document.
 
-`python3 scripts/validate_annotation_contract.py --help` décrit le contrôle et l’export. Par défaut, les annotations d’assistant ne sont pas exportables. L’option explicite d’entraînement sur annotations d’assistant conserve cette provenance et ne contourne pas les contrôles de nouveauté. Les réannotations du train restent bloquées pour une revue de groupe ; le validateur ne propose pas encore de mécanisme automatique pour lever ce blocage.
+Le protocole historique prévoyait un validateur `validate_annotation_contract.py`,
+absent du dépôt actuel. Par défaut, il excluait les annotations d’assistant de
+l’export. L’option explicite conservait leur provenance et les contrôles de
+nouveauté ; les réannotations du train restaient bloquées pour une revue de groupe.
 
 Ces contrôles vérifient la structure et la liaison aux données, pas la justesse sémantique ni l’identité réelle d’un humain. Ils s’appliquent à ce nouveau chemin d’annotation ; les anciens outils d’entraînement ne les invoquent pas automatiquement.
 

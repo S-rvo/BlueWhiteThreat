@@ -50,18 +50,38 @@ func Fingerprint(doc string) Print {
 	}
 }
 
+// CandidateKeys returns exact and shingle keys suitable for an inverted index.
+// Similar documents necessarily share at least one of these keys, allowing
+// callers to avoid comparing every document pair without changing Similar.
+func CandidateKeys(p Print) []string {
+	keys := make([]string, 0, len(p.shingles)+1)
+	keys = append(keys, "exact\x00"+p.normalized)
+	if p.tokens >= minTokensForShingling {
+		for shingle := range p.shingles {
+			keys = append(keys, "shingle\x00"+shingle)
+		}
+	}
+	return keys
+}
+
 // Similar reports whether a and b are near-duplicates: identical normalized
 // text, or both at least minTokensForShingling tokens long with a
 // five-word-shingle Jaccard similarity of at least jaccardThreshold.
 func Similar(a, b Print) bool {
+	return Similarity(a, b) >= jaccardThreshold
+}
+
+// Similarity returns normalized-text/shingle-set similarity. Exact normalized
+// matches score 1; documents that are too short for shingling score 0.
+func Similarity(a, b Print) float64 {
 	if a.normalized == b.normalized {
-		return true
+		return 1
 	}
 	if a.tokens < minTokensForShingling || b.tokens < minTokensForShingling {
-		return false
+		return 0
 	}
 	if len(a.shingles) == 0 || len(b.shingles) == 0 {
-		return false
+		return 0
 	}
 
 	intersection := 0
@@ -72,7 +92,7 @@ func Similar(a, b Print) bool {
 	}
 	union := len(a.shingles) + len(b.shingles) - intersection
 	if union == 0 {
-		return false
+		return 0
 	}
-	return float64(intersection)/float64(union) >= jaccardThreshold
+	return float64(intersection) / float64(union)
 }

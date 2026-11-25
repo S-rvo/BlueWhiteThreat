@@ -4,16 +4,19 @@ on:
   push:
     branches:
       - main
-      - develops
+      - develop
+      - "release/**"
   pull_request:
     branches:
       - main
+      - develop
+      - "release/**"
 
 jobs:
   secrets-global:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Find secrets (global)
@@ -24,7 +27,7 @@ jobs:
   docker-scan-global:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Scan Docker images (full)
         uses: aquasecurity/trivy-action@master
         with:
