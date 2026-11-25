@@ -232,7 +232,7 @@ func AddURLToQueue(ctx context.Context, url string) (string, error) {
 		return QueueReasonFarm, nil
 	}
 
-	return RedisClient.Eval(ctx, indexURLLua+`
+	return RedisClient.Eval(ctx, indexURLLua+scheduledHostsLua+`
  if redis.call('SISMEMBER',KEYS[1],ARGV[1])==1 or redis.call('SISMEMBER',KEYS[2],ARGV[1])==1 or redis.call('ZSCORE',KEYS[3],ARGV[1]) or redis.call('ZSCORE',KEYS[4],ARGV[1]) or redis.call('ZSCORE','crawler:dead',ARGV[1]) or redis.call('ZSCORE','crawler:blocked',ARGV[1]) or redis.call('ZSCORE','crawler:gone',ARGV[1]) then return 'duplicate' end
 
  if redis.call('HEXISTS','crawler:url_host',ARGV[1])==0 then
@@ -243,11 +243,11 @@ func AddURLToQueue(ctx context.Context, url string) (string, error) {
  end
  local budget='crawler:discovery_daily:'..ARGV[4]..':'..math.floor(tonumber(ARGV[3])/86400)
  if tonumber(redis.call('GET',budget) or '0')>=10000 then
- redis.call('ZADD',KEYS[3],(math.floor(tonumber(ARGV[3])/86400)+1)*86400,ARGV[1])
+ scheduleURL(KEYS[3],ARGV[1],(math.floor(tonumber(ARGV[3])/86400)+1)*86400)
  redis.call('HINCRBY','crawler:stats','budget_deferred_total',1); return 'budget' end
  redis.call('INCR',budget); redis.call('EXPIRE',budget,172800)
  if redis.call('SCARD',KEYS[1])>=tonumber(ARGV[2]) or redis.call('ZCARD','crawler:host_queue:'..ARGV[4])>=tonumber(ARGV[5]) then
- redis.call('ZADD',KEYS[3],ARGV[3],ARGV[1]); redis.call('HINCRBY','crawler:stats','deferred_total',1); return 'capacity' end
+ scheduleURL(KEYS[3],ARGV[1],ARGV[3]); redis.call('HINCRBY','crawler:stats','deferred_total',1); return 'capacity' end
  redis.call('SADD',KEYS[1],ARGV[1]); indexURL(ARGV[1],ARGV[3]); redis.call('HINCRBY','crawler:stats','urls_queued',1); return 'added'
  `, []string{"urls_to_crawl", "urls_crawled", "crawler:scheduled", "crawler:inflight"}, cleaned, maxQueueSize, time.Now().Unix(), host, maxReadyPerHost).Text()
 

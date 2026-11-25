@@ -112,3 +112,89 @@ func TestScrapeInfrastructureDoesNotConsumeRemoteAttempt(t *testing.T) {
 		t.Fatal("storage error counted as remote failure or not retried")
 	}
 }
+
+func TestScrapeGracefulReleaseRequeuesOnceAndFencesOldOwner(t *testing.T) {
+	ctx := context.Background()
+	r := queueRedis(t)
+	const u = "http://fixture.test/release"
+	r.SAdd(ctx, "urls_crawled", u)
+	if err := IndexScrapePending(ctx, r, 1); err != nil {
+		t.Fatal(err)
+	}
+	old, err := ClaimScrape(ctx, r)
+	if err != nil || old.URL != u {
+		t.Fatalf("initial claim: %v %v", old, err)
+	}
+	if err := ReleaseScrape(ctx, r, old); err != nil {
+		t.Fatal(err)
+	}
+	next, err := ClaimScrape(ctx, r)
+	if err != nil || next.URL != u || next.Token == old.Token {
+		t.Fatalf("replacement claim: %v %v", next, err)
+	}
+	if err := ReleaseScrape(ctx, r, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinishScrape(ctx, r, next, ScrapeSuccess); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.HGet(ctx, "scraper:stats", "released").Val(); n != "1" {
+		t.Fatalf("release count = %s", n)
+	}
+	if n := r.HGet(ctx, "scraper:stats", "success").Val(); n != "1" {
+		t.Fatalf("success count = %s", n)
+	}
+	if r.HExists(ctx, "scraper:attempts", u).Val() || r.ZCard(ctx, scrapePending).Val() != 0 {
+		t.Fatal("graceful release consumed a retry or requeued a confirmed job")
+	}
+}
+
+func TestOccupiedHostDefersWithoutRecordingFailure(t *testing.T) {
+	ctx := context.Background()
+	r := queueRedis(t)
+	const u = "http://fixture.test/host-busy"
+	r.SAdd(ctx, "urls_crawled", u)
+	r.ZAdd(ctx, scrapePending, redis.Z{Member: u, Score: 10})
+	claim, err := ClaimScrape(ctx, r)
+	if err != nil || claim.URL != u {
+		t.Fatalf("claim: %+v %v", claim, err)
+	}
+	if err := FinishScrape(ctx, r, claim, ScrapeDeferred); err != nil {
+		t.Fatal(err)
+	}
+	if r.HExists(ctx, "scraper:attempts", u).Val() || r.ZScore(ctx, "urls_scrape_failed_at", u).Err() != redis.Nil {
+		t.Fatal("occupied host was recorded as a remote failure")
+	}
+	if n, err := PromoteDueScrapeRetries(ctx, r, 100); n != 0 || err != nil {
+		t.Fatalf("promoted future job: %d %v", n, err)
+	}
+	r.ZAdd(ctx, "scraper:retry_due", redis.Z{Member: u, Score: 1})
+	if n, err := PromoteDueScrapeRetries(ctx, r, 100); n != 1 || err != nil {
+		t.Fatalf("did not promote eligible job: %d %v", n, err)
+	}
+	if next, err := ClaimScrape(ctx, r); next.URL != u || err != nil {
+		t.Fatalf("deferred job did not return: %+v %v", next, err)
+	}
+}
+
+func TestScrapeFairLaneDoesNotStarveOlderLowPriorityWork(t *testing.T) {
+	ctx := context.Background()
+	r := queueRedis(t)
+	old := "http://fixture.test/old"
+	r.SAdd(ctx, "urls_crawled", old)
+	r.ZAdd(ctx, scrapePending, redis.Z{Member: old, Score: 1})
+	for _, name := range []string{"a", "b", "c", "d"} {
+		u := "http://fixture.test/priority/" + name
+		r.SAdd(ctx, "urls_crawled", u)
+		r.ZAdd(ctx, scrapePending, redis.Z{Member: u, Score: 100})
+	}
+	for i := 0; i < 4; i++ {
+		claim, err := ClaimScrape(ctx, r)
+		if err != nil || claim.URL == "" || (claim.URL == old) != (i == 3) {
+			t.Fatalf("claim %d: %v %v", i, claim, err)
+		}
+		if err := FinishScrape(ctx, r, claim, ScrapeSuccess); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -14,9 +14,19 @@ import (
 	"github.com/joho/godotenv"
 )
 
-var DefaultInterval = 30 // 30 min par défaut
-
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--check-health" {
+		client := &http.Client{Timeout: 4 * time.Second}
+		resp, err := client.Get("http://127.0.0.1:8080/readyz")
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			log.Fatalf("scraper not ready (HTTP %d)", resp.StatusCode)
+		}
+		return
+	}
 	checkOnly := len(os.Args) == 2 && os.Args[1] == "--check-browser-sandbox"
 	if checkOnly || os.Getenv("SCRAPER_REQUIRE_SANDBOX") == "1" {
 		if err := sites.CheckBrowserSandbox(context.Background()); err != nil {
@@ -35,10 +45,6 @@ func main() {
 		log.Print("Lecture du fichier .env échouée.")
 	}
 
-	if i, err := strconv.Atoi(os.Getenv("SCRAPER_INTERVAL_MIN")); err == nil && i > 0 {
-		DefaultInterval = i
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	client, err := db.ConnectMongo()
@@ -51,15 +57,24 @@ func main() {
 		_ = client.Disconnect(closing)
 	}()
 
-	log.Printf("Lancement du scraper (interval: %d min)", DefaultInterval)
-	ticker := time.NewTicker(time.Duration(DefaultInterval) * time.Minute)
-	defer ticker.Stop()
-	for ctx.Err() == nil {
-		sites.RunDarkwebScraper(ctx, client)
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+	redisClient := db.ConnectRedis()
+	defer redisClient.Close()
+
+	server := &http.Server{
+		Addr:              ":8080",
+		Handler:           serviceHandler(redisClient, client),
+		ReadHeaderTimeout: 3 * time.Second,
+		WriteTimeout:      6 * time.Second,
+		IdleTimeout:       15 * time.Second,
 	}
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP scraper: %v", err) // restart policy reopens the service
+		}
+	}()
+	log.Print("Scraper continu actif")
+	sites.RunDarkwebScraper(ctx, redisClient, client)
+	closing, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = server.Shutdown(closing)
 }

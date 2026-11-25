@@ -13,14 +13,14 @@ func ReviveDeadURLs(ctx context.Context, minAge time.Duration, limit int) (int, 
 		return 0, fmt.Errorf("revival requires age >=7 days and limit 1..100")
 	}
 	now := time.Now()
-	return RedisClient.Eval(ctx, `
+	return RedisClient.Eval(ctx, scheduledHostsLua+`
  local urls=redis.call('ZRANGEBYSCORE',KEYS[1],'-inf',ARGV[1],'LIMIT',0,ARGV[2])
  local n=0
  for _,u in ipairs(urls) do
   if not redis.call('ZSCORE','crawler:inflight',u) and redis.call('SISMEMBER','urls_to_crawl',u)==0 and not redis.call('ZSCORE',KEYS[2],u) then
    redis.call('ZREM',KEYS[1],u)
    redis.call('HDEL','crawler:attempts',u)
-   redis.call('ZADD',KEYS[2],ARGV[3],u)
+   scheduleURL(KEYS[2],u,ARGV[3])
    n=n+1
   end
  end

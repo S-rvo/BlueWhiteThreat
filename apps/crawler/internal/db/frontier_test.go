@@ -155,3 +155,31 @@ func TestInfrastructureRetryAndGoneDoNotPolluteSiteFailures(t *testing.T) {
 		t.Fatalf("gone URL got re-admitted: %s %v", reason, err)
 	}
 }
+
+func TestScheduledHostIndexDiscardsStaleHeadsAndClaimsEligibleHost(t *testing.T) {
+	setupTestRedisClient(t)
+	now := time.Now().Unix()
+	RedisClient.Set(ctx, "crawler:scheduled_index_next", now+600, 0)
+	RedisClient.HSet(ctx, "crawler:host_ready", "busy.onion", now+300)
+	const old = "http://busy.onion/old"
+	const eligible = "http://available.onion/due"
+	const stale = "http://available.onion/removed-by-older-worker"
+	if err := RedisClient.Eval(ctx, scheduledHostsLua+`
+scheduleURL(KEYS[1],ARGV[1],ARGV[4]-300)
+scheduleURL(KEYS[1],ARGV[2],ARGV[4]-30)
+scheduleURL(KEYS[1],ARGV[3],ARGV[4]-600)
+redis.call('ZREM',KEYS[1],ARGV[3])
+return 1`, []string{"crawler:scheduled"}, old, eligible, stale, now).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, err := ClaimURL(ctx)
+	if err != nil || got != eligible {
+		t.Fatalf("claim=%q err=%v, want %q", got, err, eligible)
+	}
+	if RedisClient.ZCard(ctx, "crawler:scheduled").Val() != 1 ||
+		RedisClient.ZCard(ctx, "crawler:scheduled_host:available.onion").Val() != 0 ||
+		RedisClient.ZCard(ctx, "crawler:inflight").Val() != 1 {
+		t.Fatal("index discarded canonical work or reused a stale head")
+	}
+}

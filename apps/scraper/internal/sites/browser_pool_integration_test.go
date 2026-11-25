@@ -1,7 +1,9 @@
 package sites
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ func TestPooledBrowserSurvivesTwoJobsAndRebuildsAfterExit(t *testing.T) {
 	if os.Getenv("BWT_CHECK_POOLED_CHROMIUM") != "1" {
 		t.Skip("requires disposable, sandboxed Chromium")
 	}
+	t.Setenv("BWT_BROWSER_SECRET_PROBE", "not-for-chromium")
 	parent, stop := context.WithTimeout(context.Background(), 45*time.Second)
 	defer stop()
 	browser := newPooledBrowserContext(parent, "127.0.0.1:9")
@@ -34,6 +37,12 @@ func TestPooledBrowserSurvivesTwoJobsAndRebuildsAfterExit(t *testing.T) {
 		return chromedp.FromContext(tab).Browser.Process().Pid
 	}
 	first := visit("premiere")
+	if os.Getenv("SCRAPER_CHROMIUM_EXECUTABLE") == "/usr/local/bin/bwt-chromium" {
+		env, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", first))
+		if err != nil || bytes.Contains(env, []byte("BWT_BROWSER_SECRET_PROBE=")) {
+			t.Fatalf("browser environment not isolated: %v", err)
+		}
+	}
 	second := visit("deuxieme")
 	if first != second {
 		t.Fatalf("two jobs used different browser processes: %d, %d", first, second)

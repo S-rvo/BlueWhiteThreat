@@ -19,40 +19,83 @@ func ClaimURL(ctx context.Context) (string, string, error) {
 		return "", "", err
 	}
 	token := hex.EncodeToString(random[:])
-	v, err := RedisClient.Eval(ctx, indexURLLua+`
+	v, err := RedisClient.Eval(ctx, indexURLLua+scheduledHostsLua+`
  local now=tonumber(ARGV[1])
- -- A bounded rotating scan lets eligible hosts bypass a saturated ready set.
- -- Keep crawler:scheduled authoritative: a rollback can use the old worker.
- local function hostFor(u)
-  return redis.call('HGET','crawler:url_host',u) or string.match(u,'^https?://([^/?#]+)')
- end
  for _,u in ipairs(redis.call('ZRANGEBYSCORE',KEYS[3],'-inf',now,'LIMIT',0,128)) do
   redis.call('ZREM',KEYS[3],u); redis.call('HDEL',KEYS[4],u)
-  redis.call('ZADD',KEYS[2],now,u)
+  scheduleURL(KEYS[2],u,now)
+ end
+ -- Incremental migration/reconciliation. Use a shared cursor; don't scan a
+ -- legacy 500k+ task ZSET all at once or during process initialization.
+ if tonumber(redis.call('GET','crawler:scheduled_index_next') or '0')<=now then
+  local cursor=redis.call('GET','crawler:scheduled_index_progress') or '0'
+  local scan=redis.call('ZSCAN',KEYS[2],cursor,'COUNT',128)
+  local changed={}
+  for i=1,#scan[2],2 do
+   local u,due=scan[2][i],scan[2][i+1]
+   local host=scheduledHost(u)
+   if host then
+    redis.call('ZADD','crawler:scheduled_host:'..host,due,u)
+    changed[host]=true
+   end
+  end
+  for host,_ in pairs(changed) do refreshScheduledHost(host) end
+  redis.call('SET','crawler:scheduled_index_progress',scan[1])
+  if scan[1]=='0' then redis.call('SET','crawler:scheduled_index_next',now+1800) end
+ end
+ local function takeScheduled(u,host,due)
+  redis.call('ZREM',KEYS[2],u)
+  redis.call('ZREM','crawler:scheduled_host:'..host,u)
+  refreshScheduledHost(host)
+  redis.call('HINCRBY','crawler:stats','scheduled_delay_seconds_total',now-due)
+  redis.call('HINCRBY','crawler:stats','scheduled_promoted_total',1)
+  return u
  end
  local function scheduled()
+  for _,host in ipairs(redis.call('ZRANGEBYSCORE','crawler:scheduled_hosts','-inf',now,'LIMIT',0,64)) do
+   local q='crawler:scheduled_host:'..host
+   local ready=tonumber(redis.call('HGET','crawler:host_ready',host) or '0')
+   if ready<=now then
+    for i=1,16 do
+     local head=redis.call('ZRANGE',q,0,0,'WITHSCORES')
+     local u=head[1]
+     if not u then break end
+     local due=redis.call('ZSCORE',KEYS[2],u)
+     local canonical=scheduledHost(u)
+     if not due or canonical~=host then
+      redis.call('ZREM',q,u)
+      if due and canonical then
+       redis.call('ZADD','crawler:scheduled_host:'..canonical,due,u)
+       refreshScheduledHost(canonical)
+      end
+     elseif tonumber(head[2])~=tonumber(due) then
+      redis.call('ZADD',q,due,u)
+     elseif tonumber(due)<=now then
+      return takeScheduled(u,host,tonumber(due))
+     else break end
+    end
+   end
+   refreshScheduledHost(host)
+  end
+  -- Fallback while indexes are rebuilt or an older worker still writes.
   if redis.call('ZCOUNT',KEYS[2],'-inf',now)==0 then return nil end
   local cursor=redis.call('GET','crawler:scheduled_scan_cursor') or '0'
   local scan=redis.call('ZSCAN',KEYS[2],cursor,'COUNT',256)
   if scan[1]=='0' then redis.call('DEL','crawler:scheduled_scan_cursor')
   else redis.call('SET','crawler:scheduled_scan_cursor',scan[1]) end
   local page=scan[2]
-  local best,bestDue=nil,nil
+  local best,bestDue,bestHost=nil,nil,nil
   for i=1,#page,2 do
    local candidate,due=page[i],tonumber(page[i+1])
    if due<=now and (not bestDue or due<bestDue or (due==bestDue and candidate<best)) then
-    local host=hostFor(candidate)
+    local host=scheduledHost(candidate)
     if host and tonumber(redis.call('HGET','crawler:host_ready',host) or '0')<=now then
-     best,bestDue=candidate,due
+     best,bestDue,bestHost=candidate,due,host
     end
    end
   end
-  if best then
-   redis.call('ZREM',KEYS[2],best)
-   redis.call('HINCRBY','crawler:stats','scheduled_delay_seconds_total',now-bestDue)
-   redis.call('HINCRBY','crawler:stats','scheduled_promoted_total',1)
-  end
-  return best
+  if best then return takeScheduled(best,bestHost,bestDue) end
+  return nil
  end
  local function ready()
  local u=nil
@@ -87,9 +130,10 @@ func ClaimURL(ctx context.Context) (string, string, error) {
   if not u then u=ready() end
  end
  if not u then return '' end
- local host=hostFor(u)
+ local host=scheduledHost(u)
  redis.call('HSET','crawler:stats','last_claim_scheduled',deferred and '1' or '0')
  redis.call('HSET','crawler:host_ready',host,now+600)
+ refreshScheduledHost(host)
  redis.call('HSET','crawler:host_last_claim',host,now)
  redis.call('ZADD','crawler:hosts',now+600,host)
  redis.call('SREM',KEYS[1],u)
@@ -128,7 +172,7 @@ func finishClaim(ctx context.Context, u, token string, success, infra bool, dela
 	if len(status) > 0 {
 		code = status[0]
 	}
-	v, err := RedisClient.Eval(ctx, `
+	v, err := RedisClient.Eval(ctx, scheduledHostsLua+`
  if redis.call('HGET',KEYS[1],ARGV[1])~=ARGV[2] or tonumber(redis.call('ZSCORE',KEYS[2],ARGV[1]) or '0')<=tonumber(ARGV[4]) then return 0 end
  redis.call('HDEL',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1])
  local host=ARGV[7]
@@ -136,10 +180,11 @@ func finishClaim(ctx context.Context, u, token string, success, infra bool, dela
  local ready=tonumber(ARGV[4])+math.max(2,math.min(60,math.ceil(latency/1000)))
  if ARGV[3]=='0' and ARGV[8]=='0' then ready=tonumber(ARGV[5]) end
  redis.call('HSET','crawler:host_ready',host,ready)
+ refreshScheduledHost(host)
  redis.call('ZADD','crawler:hosts',ready,host)
  if ARGV[8]=='1' then
   redis.call('HINCRBY','crawler:stats','infrastructure_retry_total',1)
-  redis.call('ZADD',KEYS[3],ARGV[5],ARGV[1]); return 1
+  scheduleURL(KEYS[3],ARGV[1],ARGV[5]); return 1
  end
  if ARGV[6]=='410' then
   redis.call('HDEL','crawler:attempts',ARGV[1])
@@ -157,7 +202,7 @@ func finishClaim(ctx context.Context, u, token string, success, infra bool, dela
  else redis.call('HINCRBY','crawler:stats','fetch_failure_total',1) end
  if ARGV[3]=='0' and redis.call('HINCRBY','crawler:attempts',ARGV[1],1)>=10 then
  redis.call('ZADD','crawler:dead',ARGV[4],ARGV[1]); return 1 end
- redis.call('ZADD',KEYS[3],ARGV[5],ARGV[1]); return 1`, []string{"crawler:tokens", "crawler:inflight", "crawler:scheduled"}, u, token, boolInt(success), time.Now().Unix(), time.Now().Add(delay).Unix(), code, host, boolInt(infra), int64(queuePriority(u))*10_000_000_000).Int()
+ scheduleURL(KEYS[3],ARGV[1],ARGV[5]); return 1`, []string{"crawler:tokens", "crawler:inflight", "crawler:scheduled"}, u, token, boolInt(success), time.Now().Unix(), time.Now().Add(delay).Unix(), code, host, boolInt(infra), int64(queuePriority(u))*10_000_000_000).Int()
 	if err == nil && v == 0 {
 		return fmt.Errorf("expired or superseded lease")
 	}
@@ -173,11 +218,12 @@ func DropClaim(ctx context.Context, u, token string) error {
 	if err != nil {
 		return err
 	}
-	v, err := RedisClient.Eval(ctx, `
+	v, err := RedisClient.Eval(ctx, scheduledHostsLua+`
  if redis.call('HGET',KEYS[1],ARGV[1])~=ARGV[2] or tonumber(redis.call('ZSCORE',KEYS[2],ARGV[1]) or '0')<=tonumber(ARGV[3]) then return 0 end
  redis.call('HDEL',KEYS[1],ARGV[1]); redis.call('ZREM',KEYS[2],ARGV[1])
  local host=ARGV[4]
  redis.call('HSET','crawler:host_ready',host,ARGV[3])
+ refreshScheduledHost(host)
  redis.call('ZADD','crawler:hosts',ARGV[3],host)
  redis.call('ZADD','crawler:blocked',ARGV[3],ARGV[1])
  redis.call('HDEL','crawler:attempts',ARGV[1])
@@ -212,11 +258,12 @@ func RenewClaim(ctx context.Context, u, token string) error {
 	if err != nil {
 		return err
 	}
-	n, err := RedisClient.Eval(ctx, `
+	n, err := RedisClient.Eval(ctx, scheduledHostsLua+`
  if redis.call('HGET','crawler:tokens',ARGV[1])~=ARGV[2] or tonumber(redis.call('ZSCORE','crawler:inflight',ARGV[1]) or '0')<=tonumber(ARGV[3]) then return 0 end
  redis.call('ZADD','crawler:inflight',ARGV[4],ARGV[1])
  local host=ARGV[5]
  redis.call('HSET','crawler:host_ready',host,ARGV[4])
+ refreshScheduledHost(host)
  redis.call('ZADD','crawler:hosts',ARGV[4],host)
  return 1`, nil, u, token, time.Now().Unix(), time.Now().Add(10*time.Minute).Unix(), host).Int()
 	if err != nil {

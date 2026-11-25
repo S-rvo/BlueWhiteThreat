@@ -23,7 +23,7 @@ func BuildChromedpOptions(torProxy string) []chromedp.ExecAllocatorOption {
 	// silent HTTP -> HTTPS rewrites that violate the renderer's pinned origin.
 	// Explicit HTTPS URLs and server redirects retain their existing policy.
 	opts := append([]chromedp.ExecAllocatorOption(nil), chromedp.DefaultExecAllocatorOptions[:]...)
-	return append(opts,
+	opts = append(opts,
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("enable-features", false),
@@ -33,7 +33,12 @@ func BuildChromedpOptions(torProxy string) []chromedp.ExecAllocatorOption {
 		chromedp.Flag("disable-setuid-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", false),
 		chromedp.ProxyServer(ProxyServerFlagValue(torProxy)),
+		chromedp.WSURLReadTimeout(15*time.Second),
 	)
+	if executable := os.Getenv("SCRAPER_CHROMIUM_EXECUTABLE"); executable != "" {
+		opts = append(opts, chromedp.ExecPath(executable))
+	}
+	return opts
 }
 
 // newChromedpContext crée un contexte chromedp configuré avec le proxy Tor donné.
@@ -47,7 +52,7 @@ func newChromedpContext(parent context.Context, torProxy string) (context.Contex
 	}
 }
 
-// pooledBrowser garde un process Chrome vivant pour tout un cycle de scraping
+// pooledBrowser garde un process Chrome vivant entre deux tâches
 // (un par worker) au lieu d'en relancer un neuf à chaque URL. Un process
 // Chrome + négociation SOCKS5 complète par URL est l'une des causes
 // principales du taux d'échec Tor plus élevé côté scraper que côté crawler
@@ -55,10 +60,11 @@ func newChromedpContext(parent context.Context, torProxy string) (context.Contex
 // nécessaire après un échec (le process peut être dans un état incertain) ou
 // pour retenter via un proxy différent.
 type pooledBrowser struct {
-	parent context.Context
-	proxy  string
-	ctx    context.Context
-	cancel context.CancelFunc
+	parent      context.Context
+	proxy       string
+	ctx         context.Context
+	cancel      context.CancelFunc
+	initialized bool
 }
 
 func newPooledBrowser(proxy string) *pooledBrowser {
@@ -73,6 +79,7 @@ func newPooledBrowserContext(parent context.Context, proxy string) *pooledBrowse
 func (b *pooledBrowser) rebuild(proxy string) {
 	b.cancel()
 	b.proxy = proxy
+	b.initialized = false
 	b.ctx, b.cancel = newChromedpContext(b.parent, proxy)
 }
 
@@ -85,8 +92,24 @@ func (b *pooledBrowser) newTab() (context.Context, context.CancelFunc, error) {
 	if b.ctx.Err() != nil {
 		b.rebuild(b.proxy)
 	}
-	if err := chromedp.Run(b.ctx); err != nil {
-		return nil, nil, fmt.Errorf("initialisation Chromium: %w", err)
+	if !b.initialized {
+		// Launch on the long-lived context, but cancel that browser if Chromium
+		// never becomes usable. A per-job context must not own the process.
+		fired := make(chan struct{})
+		stopBrowser := b.cancel
+		watchdog := time.AfterFunc(20*time.Second, func() {
+			defer close(fired)
+			stopBrowser()
+		})
+		err := chromedp.Run(b.ctx)
+		if !watchdog.Stop() {
+			<-fired
+			return nil, nil, fmt.Errorf("initialisation Chromium: %w", context.DeadlineExceeded)
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("initialisation Chromium: %w", err)
+		}
+		b.initialized = true
 	}
 	ctx, cancel := chromedp.NewContext(b.ctx, chromedp.WithNewBrowserContext())
 	return ctx, cancel, nil

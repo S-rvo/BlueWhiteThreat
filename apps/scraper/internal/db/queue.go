@@ -32,6 +32,7 @@ const (
 	ScrapePermanent      ScrapeOutcome = "permanent"
 	ScrapeBlocked        ScrapeOutcome = "blocked"
 	ScrapeInfrastructure ScrapeOutcome = "infrastructure"
+	ScrapeDeferred       ScrapeOutcome = "deferred"
 )
 
 func ScrapeBatchSize() (int, error) {
@@ -104,10 +105,16 @@ for _,u in ipairs(redis.call('ZRANGEBYSCORE',KEYS[2],'-inf',now,'LIMIT',0,64)) d
  redis.call('ZREM',KEYS[2],u)
  redis.call('HDEL',KEYS[3],u)
  redis.call('HDEL',KEYS[4],u)
- if score then redis.call('ZADD',KEYS[1],'GT',score,u) end
+ if score then
+  redis.call('ZADD',KEYS[1],'GT',score,u)
+  redis.call('HINCRBY','scraper:stats','recovered',1)
+ end
 end
+-- Reserve one claim in four for lower-priority/older work when queued.
+local take='ZPOPMAX'
+if tonumber(redis.call('HGET','scraper:stats','claimed') or '0')%4==3 then take='ZPOPMIN' end
 for i=1,64 do
- local row=redis.call('ZPOPMAX',KEYS[1])
+ local row=redis.call(take,KEYS[1])
  if not row[1] then return '' end
  local u=row[1]
  if redis.call('SISMEMBER','urls_crawled',u)==1 and redis.call('SISMEMBER','urls_scraped',u)==0 and not redis.call('ZSCORE',KEYS[2],u)
@@ -115,16 +122,35 @@ for i=1,64 do
   redis.call('ZADD',KEYS[2],ARGV[2],u)
   redis.call('HSET',KEYS[3],u,ARGV[3])
   redis.call('HSET',KEYS[4],u,row[2])
+  redis.call('HINCRBY','scraper:stats','claimed',1)
   return u
  end
 end
 return ''
 `)
 
+// ReleaseScrape returns a lease on graceful shutdown without consuming a retry.
+func ReleaseScrape(ctx context.Context, client *redis.Client, claim ScrapeClaim) error {
+	return releaseScrapeScript.Run(ctx, client, []string{scrapePending, scrapeInflight, scrapeTokens, scrapeClaimScore},
+		claim.URL, claim.Token, time.Now().Unix()).Err()
+}
+
+var releaseScrapeScript = redis.NewScript(`
+local u=ARGV[1]
+if redis.call('HGET',KEYS[3],u)~=ARGV[2] or tonumber(redis.call('ZSCORE',KEYS[2],u) or '0')<=tonumber(ARGV[3]) then return 0 end
+local score=redis.call('HGET',KEYS[4],u)
+redis.call('ZREM',KEYS[2],u)
+redis.call('HDEL',KEYS[3],u)
+redis.call('HDEL',KEYS[4],u)
+if score then redis.call('ZADD',KEYS[1],'GT',score,u) end
+redis.call('HINCRBY','scraper:stats','released',1)
+return 1
+`)
+
 // FinishScrape acknowledges a result only if this worker still owns the lease.
 func FinishScrape(ctx context.Context, client *redis.Client, claim ScrapeClaim, outcome ScrapeOutcome) error {
 	switch outcome {
-	case ScrapeSuccess, ScrapeTransient, ScrapePermanent, ScrapeBlocked, ScrapeInfrastructure:
+	case ScrapeSuccess, ScrapeTransient, ScrapePermanent, ScrapeBlocked, ScrapeInfrastructure, ScrapeDeferred:
 	default:
 		return fmt.Errorf("invalid scrape outcome %q", outcome)
 	}
@@ -143,9 +169,12 @@ redis.call('ZREM',KEYS[2],u)
 redis.call('HDEL',KEYS[3],u)
 redis.call('HDEL',KEYS[4],u)
 redis.call('SADD','urls_scraped',u)
+redis.call('HINCRBY','scraper:stats',outcome,1)
 redis.call('ZREM','urls_scraped_at',u)
 redis.call('ZREM','urls_scrape_failed_at',u)
-if outcome=='infrastructure' then
+if outcome=='deferred' then
+ redis.call('ZADD','scraper:retry_due',now+60,u)
+elseif outcome=='infrastructure' then
  redis.call('ZADD','urls_scrape_failed_at',now,u)
  redis.call('ZADD','scraper:retry_due',now+300,u)
 elseif outcome=='transient' then

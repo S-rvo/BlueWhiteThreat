@@ -24,9 +24,10 @@ func ConnectRedis() *redis.Client {
 		port = "6379"
 	}
 	return redis.NewClient(&redis.Options{
-		Addr:     host + ":" + port,
-		Password: os.Getenv("REDIS_PASSWORD"),
-		DB:       0,
+		Addr:                  host + ":" + port,
+		Password:              os.Getenv("REDIS_PASSWORD"),
+		ContextTimeoutEnabled: true,
+		DB:                    0,
 	})
 }
 
@@ -189,12 +190,20 @@ func MarkURLScrapeFailed(ctx context.Context, client *redis.Client, url string) 
 // transitoire depuis plus de maxAge, selon le même mécanisme que
 // RequeueStaleScrapedURLs mais sur le sorted set "urls_scrape_failed_at".
 func RequeueFailedScrapedURLs(ctx context.Context, client *redis.Client, maxAge time.Duration, limit int64) (int64, error) {
-	n, err := requeueStaleFromSortedSet(ctx, client, "scraper:retry_due", 0, limit)
+	n, err := PromoteDueScrapeRetries(ctx, client, limit)
 	if err != nil || n >= limit {
 		return n, err
 	}
-	legacy, err := requeueStaleFromSortedSet(ctx, client, "urls_scrape_failed_at", maxAge, limit-n)
+	legacy, err := RequeueLegacyScrapeFailures(ctx, client, maxAge, limit-n)
 	return n + legacy, err
+}
+
+func PromoteDueScrapeRetries(ctx context.Context, client *redis.Client, limit int64) (int64, error) {
+	return requeueStaleFromSortedSet(ctx, client, "scraper:retry_due", 0, limit)
+}
+
+func RequeueLegacyScrapeFailures(ctx context.Context, client *redis.Client, maxAge time.Duration, limit int64) (int64, error) {
+	return requeueStaleFromSortedSet(ctx, client, "urls_scrape_failed_at", maxAge, limit)
 }
 
 func requeueStaleFromSortedSet(ctx context.Context, client *redis.Client, sortedSetKey string, maxAge time.Duration, limit int64) (int64, error) {

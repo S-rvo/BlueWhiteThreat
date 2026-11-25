@@ -104,13 +104,17 @@ func preparePublicRender(ctx context.Context, target string) (func(), error) {
 	}
 	token := hex.EncodeToString(tokenBytes)
 	var leaseUntil int64
+	maxWait := time.NewTimer(3 * time.Second)
+	defer maxWait.Stop()
+	poll := time.NewTicker(time.Second)
+	defer poll.Stop()
 	for {
 		now := time.Now().Unix()
 		leaseUntil = now + 180
 		n, e := acquireRenderHost(ctx, client, host, token, now, leaseUntil)
 		if e != nil {
 			closeRenderRedis()
-			return nil, e
+			return nil, fmt.Errorf("%w: refresh host lease: %w", errScrapeStorage, e)
 		}
 		if n == 1 {
 			break
@@ -119,7 +123,10 @@ func preparePublicRender(ctx context.Context, target string) (func(), error) {
 		case <-ctx.Done():
 			closeRenderRedis()
 			return nil, ctx.Err()
-		case <-time.After(time.Second):
+		case <-maxWait.C:
+			closeRenderRedis()
+			return nil, errScrapeHostBusy
+		case <-poll.C:
 		}
 	}
 	cooldown := int64(2)
@@ -201,22 +208,33 @@ func preparePublicRender(ctx context.Context, target string) (func(), error) {
 	}, nil
 }
 
+// Keep the crawler's derived scheduler index in sync when rendering borrows
+// or releases its shared host lease. The canonical availability is host_ready.
+const refreshScheduledRenderHostLua = `
+local function refreshScheduledRenderHost(host,ready)
+ local due=redis.call('ZRANGE','crawler:scheduled_host:'..host,0,0,'WITHSCORES')[2]
+ if due then redis.call('ZADD','crawler:scheduled_hosts',math.max(tonumber(ready),tonumber(due)),host) end
+end
+`
+
 func acquireRenderHost(ctx context.Context, client *redis.Client, host, token string, now, until int64) (int, error) {
-	return client.Eval(ctx, `
+	return client.Eval(ctx, refreshScheduledRenderHostLua+`
 if tonumber(redis.call('HGET','crawler:host_ready',ARGV[1]) or '0')>tonumber(ARGV[2]) then return 0 end
 redis.call('HSET','crawler:host_ready',ARGV[1],ARGV[3])
 redis.call('HSET','crawler:render_host_owner',ARGV[1],ARGV[4])
 redis.call('ZADD','crawler:hosts','XX',ARGV[3],ARGV[1])
+refreshScheduledRenderHost(ARGV[1],ARGV[3])
 return 1`, nil, host, now, until, token).Int()
 }
 
 func releaseRenderHost(ctx context.Context, client *redis.Client, host, token string, until, ready int64) error {
-	return client.Eval(ctx, `
+	return client.Eval(ctx, refreshScheduledRenderHostLua+`
 if redis.call('HGET','crawler:render_host_owner',ARGV[1])==ARGV[2] then
  redis.call('HDEL','crawler:render_host_owner',ARGV[1])
  if tonumber(redis.call('HGET','crawler:host_ready',ARGV[1]) or '0')==tonumber(ARGV[3]) then
   redis.call('HSET','crawler:host_ready',ARGV[1],ARGV[4])
   redis.call('ZADD','crawler:hosts','XX',ARGV[4],ARGV[1])
+  refreshScheduledRenderHost(ARGV[1],ARGV[4])
  end
 end
 return 1`, nil, host, token, until, ready).Err()

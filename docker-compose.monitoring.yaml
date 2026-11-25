@@ -16,6 +16,7 @@ services:
     restart: unless-stopped
 
   prometheus:
+    networks: [default, scrape-observe]
     image: prom/prometheus:v3.15.0
     container_name: bluewhitethreat_prometheus
     command:
@@ -88,3 +89,7 @@ volumes:
   loki_data:
   alloy_data:
   grafana_data:
+
+networks:
+  scrape-observe:
+    internal: true

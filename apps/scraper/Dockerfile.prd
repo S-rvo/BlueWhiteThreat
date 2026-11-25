@@ -14,8 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 scraper && useradd --system --uid 10001 --gid 10001 --home-dir /tmp scraper
 COPY --from=build /out/scraper /usr/local/bin/scraper
+COPY --chmod=0755 apps/scraper/scripts/chromium-sanitized.sh /usr/local/bin/bwt-chromium
 WORKDIR /app
 RUN mkdir -p data && printf '{}\n' > data/sites.json
-ENV HOME=/tmp XDG_CACHE_HOME=/tmp/cache XDG_CONFIG_HOME=/tmp/config SCRAPER_REQUIRE_SANDBOX=1
+ENV HOME=/tmp XDG_CACHE_HOME=/tmp/cache XDG_CONFIG_HOME=/tmp/config SCRAPER_REQUIRE_SANDBOX=1 \
+    SCRAPER_CHROMIUM_EXECUTABLE=/usr/local/bin/bwt-chromium
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/scraper"]
