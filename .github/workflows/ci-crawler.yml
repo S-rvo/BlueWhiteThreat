@@ -4,11 +4,14 @@ on:
   push:
     branches:
       - main
-      - develops
+      - develop
+      - "release/**"
       - "crawler-*"
   pull_request:
     branches:
       - main
+      - develop
+      - "release/**"
       - "crawler-*"
 
 jobs:
@@ -29,6 +32,8 @@ jobs:
           cd apps/crawler
           go mod tidy
           go test ./...
+      - name: Test du rapport de couverture
+        run: python3 -B -m unittest discover -s apps/crawler/scripts
 
       # Go Security Scan (code statique)
       - name: Go Security Scan (crawler)

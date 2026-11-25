@@ -1,0 +1,33 @@
+name: Git Flow
+
+on:
+  pull_request:
+    branches: [main, develop, 'release/**']
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+
+permissions: {}
+
+jobs:
+  gitflow-branch-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vérifier les branches de la PR
+        shell: bash
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          case "$BASE:$HEAD" in
+            develop:feature/?*|develop:fix/?*|release/?*:fix/?*)
+              exit 0
+              ;;
+            main:release/?*|main:hotfix/?*|develop:main|release/?*:main)
+              if [[ "$HEAD_REPOSITORY" == "$BASE_REPOSITORY" ]]; then
+                exit 0
+              fi
+              ;;
+          esac
+          printf 'Flux Git Flow invalide : %s → %s. Voir AGENTS.md.\n' "$HEAD" "$BASE" >&2
+          exit 1

@@ -2,7 +2,7 @@ name: CI Classifier
 
 on:
   push:
-    branches: [main, develops]
+    branches: [main, develop, 'release/**']
     paths:
       - 'apps/classifier/**'
       - '.github/workflows/ci-classifier.yml'

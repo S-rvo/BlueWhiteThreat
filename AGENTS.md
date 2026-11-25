@@ -7,9 +7,37 @@ l'importe). Ne pas dupliquer son contenu ailleurs.
 
 ## Convention de branche
 
-Trunk-based : commits directs sur `main`, pas de `develop`/`feature/*`
-obligatoire. Ce n'est pas une absence de process, c'est la convention
-historique de ce repo (vérifiable via `git log --all --oneline --graph`).
+Git Flow : `main` représente les versions publiées et `develop` intègre
+les changements de la prochaine version. Les deux branches reçoivent les
+changements par pull request (PR), pas par commit direct.
+
+| Travail | Branche de départ | Branche de travail | Cible de la PR |
+| --- | --- | --- | --- |
+| Fonctionnalité, correction courante, docs ou maintenance | `develop` | `feature/<sujet>` ou `fix/<sujet>` | `develop` |
+| Stabilisation et publication | `develop` | `release/<version>` | `main` |
+| Correction d'une version en préparation | `release/<version>` | `fix/<sujet>` | `release/<version>` |
+| Correction urgente en production | `main` | `hotfix/<sujet>` | `main` |
+| Report d'une publication ou d'un hotfix | — | `main` | `develop` et, pour un hotfix, toute release en cours |
+
+- Avant de partir, récupérer les références distantes (`git fetch origin`)
+  et créer la branche depuis `origin/develop`, `origin/main` ou
+  `origin/release/<version>` selon le tableau. Utiliser un worktree séparé
+  si celui en cours contient des modifications sans rapport.
+- Réserver `release/<version>` à la stabilisation (corrections, version et
+  notes de version). Après fusion d'une release ou d'un hotfix dans
+  `main`, taguer le commit de fusion en `vX.Y.Z`, puis ouvrir la PR de report.
+- Utiliser un **commit de fusion** pour les promotions vers `main` et les
+  reports depuis `main` : un squash ferait perdre le lien d'ascendance.
+- Le contrôle CI `gitflow-branch-policy` valide les couples source/cible
+  des PR. Les promotions vers `main` et les reports depuis `main` doivent
+  provenir d'une branche de ce dépôt.
+
+**Activation sur GitHub :** après publication des workflows, protéger
+`main` et `develop` avec un ruleset exigeant une PR et le contrôle
+`gitflow-branch-policy`, et bloquant la suppression et le force-push.
+Garder les commits de fusion disponibles. Vérifier que le contrôle est
+apparu sur une PR avant de le rendre obligatoire ; les jobs filtrés par
+chemin ne doivent pas être rendus obligatoires.
 
 ## Avant tout commit
 
