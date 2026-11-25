@@ -36,6 +36,11 @@ const (
 // SaveScrapedPage upsert une page scrapée dans MongoDB.article, par URL unique.
 // Les pages indexant du CSAM sont rejetées avant toute écriture.
 func SaveScrapedPage(page ScrapedPage) (int, error) {
+	return saveScrapedPage(context.Background(), nil, page)
+}
+
+// A production cycle shares one Mongo client across all workers.
+func saveScrapedPage(parent context.Context, client *mongo.Client, page ScrapedPage) (int, error) {
 	if page.SourceType == "" {
 		page.SourceType = SourceTypeUnknown
 	}
@@ -43,12 +48,22 @@ func SaveScrapedPage(page ScrapedPage) (int, error) {
 		log.Printf("Contenu bloqué (CSAM) détecté sur %s — page rejetée, non persistée", page.URL)
 		return 0, fmt.Errorf("%w: %s", ErrBlockedContent, page.URL)
 	}
-	client, err := db.ConnectMongo()
-	if err != nil {
+	if err := parent.Err(); err != nil {
 		return 0, err
 	}
-	defer client.Disconnect(context.Background())
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	if client == nil {
+		var err error
+		client, err = db.ConnectMongo()
+		if err != nil {
+			return 0, err
+		}
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = client.Disconnect(ctx)
+		}()
+	}
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	// Evaluate against the old content in the same atomic update. A new text
 	// must not inherit the previous version's verdict; an unchanged page keeps it.

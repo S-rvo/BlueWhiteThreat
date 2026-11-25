@@ -1,0 +1,1 @@
+user default on nopass ~* &* +@all -del -unlink -rename -renamenx -restore -migrate -move -copy -swapdb (+del ~crawler:content:* ~crawler:scheduled_scan_cursor ~urls_to_crawl_priority)

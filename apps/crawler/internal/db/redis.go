@@ -71,6 +71,10 @@ func SetupRedisQueues() error {
 		})
 	}
 
+	const migrationKey = "crawler:migration:frontier_v1"
+	if done, err := RedisClient.Exists(ctx, migrationKey).Result(); err != nil || done == 1 {
+		return err
+	}
 	// Rebuild the small scheduling index from the durable queue. This makes
 	// prioritisation effective immediately for queues created by older builds;
 	// urls_to_crawl remains the source of truth and no URL is discarded.
@@ -86,7 +90,10 @@ func SetupRedisQueues() error {
 		return fmt.Errorf("backfill urls_crawled_at: %w", err)
 	}
 
-	return ReconcileFrontier()
+	if err := ReconcileFrontier(); err != nil {
+		return err
+	}
+	return RedisClient.Set(ctx, migrationKey, 1, 0).Err()
 }
 
 func backfillCrawledAt() error {
@@ -151,7 +158,10 @@ func rebuildPriorityQueue() error {
 // pas absorber une file qui grossirait sans limite (seeds + liens découverts
 // + requeue de fraîcheur). Au-delà, les nouveaux ajouts sont silencieusement
 // différés durablement dans crawler:scheduled pour éviter de perdre les liens.
-const maxQueueSize = 5000
+const (
+	maxQueueSize    = 5000
+	maxReadyPerHost = 64
+)
 
 // alertCooldownKeyPrefix préfixe les clés Redis utilisées par
 // TryMarkAlertSent pour que le cooldown d'alerte (cmd/alerting) survive un
@@ -223,7 +233,7 @@ func AddURLToQueue(ctx context.Context, url string) (string, error) {
 	}
 
 	return RedisClient.Eval(ctx, indexURLLua+`
- if redis.call('SISMEMBER',KEYS[1],ARGV[1])==1 or redis.call('SISMEMBER',KEYS[2],ARGV[1])==1 or redis.call('ZSCORE',KEYS[3],ARGV[1]) or redis.call('ZSCORE',KEYS[4],ARGV[1]) or redis.call('ZSCORE','crawler:dead',ARGV[1]) then return 'duplicate' end
+ if redis.call('SISMEMBER',KEYS[1],ARGV[1])==1 or redis.call('SISMEMBER',KEYS[2],ARGV[1])==1 or redis.call('ZSCORE',KEYS[3],ARGV[1]) or redis.call('ZSCORE',KEYS[4],ARGV[1]) or redis.call('ZSCORE','crawler:dead',ARGV[1]) or redis.call('ZSCORE','crawler:blocked',ARGV[1]) or redis.call('ZSCORE','crawler:gone',ARGV[1]) then return 'duplicate' end
 
  if redis.call('HEXISTS','crawler:url_host',ARGV[1])==0 then
  if redis.call('HLEN','crawler:url_host')>=1000000 or tonumber(redis.call('HGET','crawler:stored_per_host',ARGV[4]) or '0')>=50000 then
@@ -236,10 +246,10 @@ func AddURLToQueue(ctx context.Context, url string) (string, error) {
  redis.call('ZADD',KEYS[3],(math.floor(tonumber(ARGV[3])/86400)+1)*86400,ARGV[1])
  redis.call('HINCRBY','crawler:stats','budget_deferred_total',1); return 'budget' end
  redis.call('INCR',budget); redis.call('EXPIRE',budget,172800)
- if redis.call('SCARD',KEYS[1])>=tonumber(ARGV[2]) then
+ if redis.call('SCARD',KEYS[1])>=tonumber(ARGV[2]) or redis.call('ZCARD','crawler:host_queue:'..ARGV[4])>=tonumber(ARGV[5]) then
  redis.call('ZADD',KEYS[3],ARGV[3],ARGV[1]); redis.call('HINCRBY','crawler:stats','deferred_total',1); return 'capacity' end
  redis.call('SADD',KEYS[1],ARGV[1]); indexURL(ARGV[1],ARGV[3]); redis.call('HINCRBY','crawler:stats','urls_queued',1); return 'added'
- `, []string{"urls_to_crawl", "urls_crawled", "crawler:scheduled", "crawler:inflight"}, cleaned, maxQueueSize, time.Now().Unix(), host).Text()
+ `, []string{"urls_to_crawl", "urls_crawled", "crawler:scheduled", "crawler:inflight"}, cleaned, maxQueueSize, time.Now().Unix(), host, maxReadyPerHost).Text()
 
 }
 
@@ -311,8 +321,10 @@ func RequeueStaleURLs(ctx context.Context, maxAge time.Duration, limit int64) (i
 	for _, url := range stale {
 		added, err := RedisClient.Eval(ctx, indexURLLua+`
  if redis.call('SCARD',KEYS[1])>=tonumber(ARGV[2]) then return 0 end
- if redis.call('ZSCORE',KEYS[2],ARGV[1]) or redis.call('ZSCORE',KEYS[3],ARGV[1]) then return 0 end
- local added=redis.call('SADD',KEYS[1],ARGV[1]); indexURL(ARGV[1],0); return added`, []string{"urls_to_crawl", "crawler:scheduled", "crawler:inflight"}, url, maxQueueSize).Int64()
+ if redis.call('ZSCORE',KEYS[2],ARGV[1]) or redis.call('ZSCORE',KEYS[3],ARGV[1]) or redis.call('ZSCORE','crawler:dead',ARGV[1]) or redis.call('ZSCORE','crawler:blocked',ARGV[1]) or redis.call('ZSCORE','crawler:gone',ARGV[1]) then return 0 end
+ local host=redis.call('HGET','crawler:url_host',ARGV[1]) or string.match(ARGV[1],'^https?://([^/?#]+)')
+ if not host or redis.call('ZCARD','crawler:host_queue:'..host)>=tonumber(ARGV[3]) then return 0 end
+ local added=redis.call('SADD',KEYS[1],ARGV[1]); indexURL(ARGV[1],0); return added`, []string{"urls_to_crawl", "crawler:scheduled", "crawler:inflight"}, url, maxQueueSize, maxReadyPerHost).Int64()
 		if err != nil {
 			return requeued, err
 		}
@@ -370,11 +382,36 @@ func FetchCrawlerStats() (map[string]string, error) {
 		stats["oldest_crawled_age_seconds"] = fmt.Sprintf("%d", ageSeconds)
 	}
 
-	for name, key := range map[string]string{"inflight_count": "crawler:inflight", "scheduled_count": "crawler:scheduled", "dead_count": "crawler:dead"} {
-		if n, err := RedisClient.ZCard(ctx, key).Result(); err == nil {
+	now := time.Now().Unix()
+	pipe := RedisClient.Pipeline()
+	due := pipe.ZCount(ctx, "crawler:scheduled", "-inf", fmt.Sprint(now))
+	oldestDue := pipe.ZRangeWithScores(ctx, "crawler:scheduled", 0, 0)
+	counts := map[string]*redis.IntCmd{}
+	for name, key := range map[string]string{
+		"inflight_count":  "crawler:inflight",
+		"scheduled_count": "crawler:scheduled",
+		"dead_count":      "crawler:dead",
+		"gone_count":      "crawler:gone",
+		"blocked_count":   "crawler:blocked",
+	} {
+		counts[name] = pipe.ZCard(ctx, key)
+	}
+	_, _ = pipe.Exec(ctx)
+	for name, cmd := range counts {
+		if n, err := cmd.Result(); err == nil {
 			stats[name] = fmt.Sprint(n)
 		}
 	}
+	if n, err := due.Result(); err == nil {
+		stats["scheduled_due_count"] = fmt.Sprint(n)
+		if total, err := counts["scheduled_count"].Result(); err == nil {
+			stats["scheduled_future_count"] = fmt.Sprint(max(int64(0), total-n))
+		}
+	}
+	if scores, err := oldestDue.Result(); err == nil && len(scores) > 0 {
+		stats["oldest_due_age_seconds"] = fmt.Sprint(max(int64(0), now-int64(scores[0].Score)))
+	}
+
 	if n, err := RedisClient.HLen(ctx, "crawler:url_host").Result(); err == nil {
 		stats["known_url_count"] = fmt.Sprint(n)
 	}

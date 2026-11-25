@@ -9,9 +9,11 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/db"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 func sitesConfigPath() string {
@@ -98,13 +100,19 @@ func scraperWorkersPerProxy() int {
 	return n
 }
 
-// RunDarkwebScraper traite toutes les URLs découvertes par le crawler et pas
-// encore scrapées : récupère leur contenu via Tor, puis les persiste en Mongo.
-func RunDarkwebScraper() {
-	ctx := context.Background()
+var errScrapeStorage = errors.New("scrape storage unavailable")
+var errScrapeBrowser = errors.New("scrape browser unavailable")
+var errScrapePolicy = errors.New("scrape policy denied")
+
+// RunDarkwebScraper processes a bounded cycle from the shared Redis frontier.
+func RunDarkwebScraper(ctx context.Context, mongoClient *mongo.Client) {
 	redisClient := db.ConnectRedis()
 	defer redisClient.Close()
-
+	maxBatch, err := db.ScrapeBatchSize()
+	if err != nil {
+		log.Print(err)
+		return
+	}
 	if requeued, err := db.RequeueStaleScrapedURLs(ctx, redisClient, staleRescrapeMaxAge, staleRescrapeLimit); err != nil {
 		log.Printf("Erreur requeue des URLs scrapées obsolètes: %v", err)
 	} else if requeued > 0 {
@@ -115,64 +123,76 @@ func RunDarkwebScraper() {
 	} else if requeued > 0 {
 		log.Printf("%d URLs en échec transitoire remises en file", requeued)
 	}
-
-	urls, err := db.GetUnscrapedURLs(ctx, redisClient)
-	if err != nil {
-		log.Printf("Erreur lecture des URLs non-scrapées: %v", err)
+	if err := db.IndexScrapePending(ctx, redisClient, 8); err != nil {
+		log.Printf("Erreur indexation de la file scraper: %v", err)
 		return
 	}
-	if len(urls) == 0 {
-		log.Println("Aucune nouvelle URL à scraper")
-		return
-	}
-	log.Printf("%d nouvelles URLs à scraper", len(urls))
 
 	configs, err := LoadSiteConfigs(sitesConfigPath())
 	if err != nil {
 		log.Printf("Erreur chargement sites.json: %v", err)
 		configs = map[string]SiteConfig{}
 	}
-
 	proxies := torProxies()
 	rotator := NewTorProxyRotator(proxies)
 	workersPerProxy := scraperWorkersPerProxy()
-
-	urlCh := make(chan string)
+	var slots, completed atomic.Int64
 	var wg sync.WaitGroup
 	for _, proxy := range proxies {
 		for i := 0; i < workersPerProxy; i++ {
 			wg.Add(1)
 			go func(homeProxy string) {
 				defer wg.Done()
-				browser := newPooledBrowser(homeProxy)
+				browser := newPooledBrowserContext(ctx, homeProxy)
 				defer browser.close()
-				for targetURL := range urlCh {
-					err, permanent := scrapeWithRetry(browser, targetURL, configs, rotator)
+				consecutiveInfra := 0
+				for ctx.Err() == nil && slots.Add(1) <= int64(maxBatch) {
+					claim, err := db.ClaimScrape(ctx, redisClient)
+					if err != nil {
+						log.Printf("Erreur réservation scraper: %v", err)
+						return
+					}
+					if claim.URL == "" {
+						return
+					}
+					err, permanent := scrapeWithRetry(browser, claim.URL, configs, rotator, mongoClient)
+					if ctx.Err() != nil {
+						return // A lease is recovered automatically after expiry.
+					}
+					outcome := db.ScrapeSuccess
 					switch {
-					case err == nil:
-						if markErr := db.MarkURLScraped(ctx, redisClient, targetURL); markErr != nil {
-							log.Printf("Erreur marquage %s comme scrapée: %v", targetURL, markErr)
-						}
+					case errors.Is(err, errScrapePolicy):
+						outcome = db.ScrapeBlocked
 					case permanent:
-						log.Printf("Échec permanent scraping %s: %v", targetURL, err)
-						if markErr := db.MarkURLScraped(ctx, redisClient, targetURL); markErr != nil {
-							log.Printf("Erreur marquage %s comme scrapée: %v", targetURL, markErr)
+						outcome = db.ScrapePermanent
+					case errors.Is(err, errScrapeStorage), errors.Is(err, errScrapeBrowser):
+						outcome = db.ScrapeInfrastructure
+					case err != nil:
+						outcome = db.ScrapeTransient
+					}
+					if err != nil {
+						log.Printf("Scrape %s (%s): %v", claim.URL, outcome, err)
+					}
+					if markErr := db.FinishScrape(ctx, redisClient, claim, outcome); markErr != nil {
+						log.Printf("Erreur confirmation scraping: %v", markErr)
+					} else {
+						completed.Add(1)
+					}
+					if outcome == db.ScrapeInfrastructure {
+						consecutiveInfra++
+						if consecutiveInfra >= 3 {
+							log.Print("Pause du worker scraper après trois erreurs d'infrastructure")
+							return
 						}
-					default:
-						log.Printf("Échec transitoire scraping %s après %d tentatives: %v", targetURL, maxScrapeAttempts, err)
-						if markErr := db.MarkURLScrapeFailed(ctx, redisClient, targetURL); markErr != nil {
-							log.Printf("Erreur marquage %s comme échec transitoire: %v", targetURL, markErr)
-						}
+					} else {
+						consecutiveInfra = 0
 					}
 				}
 			}(proxy)
 		}
 	}
-	for _, targetURL := range urls {
-		urlCh <- targetURL
-	}
-	close(urlCh)
 	wg.Wait()
+	log.Printf("Cycle scraper: %d résultats confirmés", completed.Load())
 }
 
 // scrapeWithRetry retente une URL en échec transitoire sur un proxy Tor
@@ -180,14 +200,21 @@ func RunDarkwebScraper() {
 // navigateur du worker à chaque échec -- un process Chrome ayant échoué
 // (timeout, circuit mort) n'est pas digne de confiance pour l'URL suivante.
 // Un échec permanent (ErrPermanentScrapeFailure) n'est jamais retenté.
-func scrapeWithRetry(browser *pooledBrowser, targetURL string, configs map[string]SiteConfig, rotator *TorProxyRotator) (err error, permanent bool) {
+func scrapeWithRetry(browser *pooledBrowser, targetURL string, configs map[string]SiteConfig, rotator *TorProxyRotator, client *mongo.Client) (err error, permanent bool) {
 	for attempt := 1; attempt <= maxScrapeAttempts; attempt++ {
-		err = scrapeOneGuarded(browser, targetURL, configs)
+		err = scrapeOneGuarded(browser, targetURL, configs, client)
 		if err == nil {
 			return nil, false
 		}
-		if errors.Is(err, ErrPermanentScrapeFailure) {
+		if errors.Is(err, ErrPermanentScrapeFailure) || errors.Is(err, errScrapePolicy) {
 			return err, true
+		}
+		if errors.Is(err, errScrapeStorage) || browser.parent.Err() != nil {
+			return err, false
+		}
+		if errors.Is(err, errScrapeBrowser) {
+			browser.rebuild(browser.proxy)
+			continue
 		}
 		retryProxy := rotator.Next()
 		if attempt < maxScrapeAttempts {
@@ -201,25 +228,43 @@ func scrapeWithRetry(browser *pooledBrowser, targetURL string, configs map[strin
 // scrapeOneGuarded lance scrapeOne dans une goroutine séparée et borne son
 // attente, sans démonter le navigateur persistant du worker directement --
 // c'est à l'appelant (scrapeWithRetry) de décider de le reconstruire.
-func scrapeOneGuarded(browser *pooledBrowser, targetURL string, configs map[string]SiteConfig) error {
-	fetchCtx, cancelTimeout := context.WithTimeout(browser.ctx, fetchTimeout)
+func scrapeOneGuarded(browser *pooledBrowser, targetURL string, configs map[string]SiteConfig, clients ...*mongo.Client) error {
+	var client *mongo.Client
+	if len(clients) != 0 {
+		client = clients[0]
+	}
+	tab, closeTab, err := browser.newTab()
+	if err != nil {
+		return fmt.Errorf("%w: %w", errScrapeBrowser, err)
+	}
+	defer closeTab()
+	fetchCtx, cancelTimeout := context.WithTimeout(tab, fetchTimeout)
 	defer cancelTimeout()
 	done := make(chan error, 1)
 	go func() {
-		done <- scrapeOne(fetchCtx, targetURL, configs)
+		done <- scrapeOneWithClient(fetchCtx, targetURL, configs, client)
 	}()
 	select {
 	case err := <-done:
+		if errors.Is(err, context.Canceled) {
+			return fmt.Errorf("%w: %w", errScrapeBrowser, err)
+		}
 		return err
+	case <-browser.ctx.Done():
+		return fmt.Errorf("%w: %w", errScrapeBrowser, browser.ctx.Err())
 	case <-time.After(hangGuard):
 		cancelTimeout()
-		return fmt.Errorf("scrapeOne bloqué au-delà de %s, contexte annulé", hangGuard)
+		return fmt.Errorf("%w: tâche bloquée au-delà de %s", errScrapeBrowser, hangGuard)
 	}
 }
 
 func scrapeOne(ctx context.Context, targetURL string, configs map[string]SiteConfig) error {
+	return scrapeOneWithClient(ctx, targetURL, configs, nil)
+}
+
+func scrapeOneWithClient(ctx context.Context, targetURL string, configs map[string]SiteConfig, client *mongo.Client) error {
 	parsed, err := url.Parse(targetURL)
-	if err != nil {
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return fmt.Errorf("%w: url invalide: %v", ErrPermanentScrapeFailure, err)
 	}
 
@@ -240,11 +285,11 @@ func scrapeOne(ctx context.Context, targetURL string, configs map[string]SiteCon
 		ScrapedAt:  time.Now().UTC(),
 		Content:    content,
 	}
-	if _, err := SaveScrapedPage(page); err != nil {
+	if _, err := saveScrapedPage(ctx, client, page); err != nil {
 		if errors.Is(err, ErrBlockedContent) {
-			return fmt.Errorf("%w: %v", ErrPermanentScrapeFailure, err)
+			return fmt.Errorf("%w: %v", errScrapePolicy, err)
 		}
-		return fmt.Errorf("échec sauvegarde Mongo: %w", err)
+		return fmt.Errorf("%w: %w", errScrapeStorage, err)
 	}
 	return nil
 }

@@ -181,10 +181,9 @@ func crawlerWorker(ctx context.Context, sweep bool) {
 	}
 }
 
-// releaseForRetry relâche la lease en échec : la politesse hôte est rendue,
-// le compteur de tentatives avance, le dead-letter reste atteignable.
+// Storage errors are not evidence that the remote site is dead.
 func releaseForRetry(ctx context.Context, url, token string) {
-	if e := db.FinishClaim(ctx, url, token, false, db.RetryDelay(ctx, url)); e != nil {
+	if e := db.DeferClaim(ctx, url, token, time.Minute); e != nil {
 		log.Printf("release: %v", e)
 	}
 }
@@ -245,6 +244,12 @@ func processURL(parent context.Context, url, token string) {
 		return
 	}
 	if workCtx.Err() != nil {
+		return
+	}
+	if result.Status == http.StatusGone {
+		if e := db.FinishClaim(workCtx, url, token, true, 0, http.StatusGone); e != nil {
+			log.Printf("gone: %v", e)
+		}
 		return
 	}
 	// Persist discovery before acknowledgment so a storage failure is replayed.

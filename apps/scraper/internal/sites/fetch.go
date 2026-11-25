@@ -3,6 +3,7 @@ package sites
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -25,10 +26,12 @@ func BuildChromedpOptions(torProxy string) []chromedp.ExecAllocatorOption {
 	return append(opts,
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("disable-features", "site-per-process,Translate,BlinkGenPropertyTrees,HttpsUpgrades"),
+		chromedp.Flag("enable-features", false),
+		chromedp.Flag("disable-features", "Translate,BlinkGenPropertyTrees,HttpsUpgrades"),
 		chromedp.Flag("blink-settings", "imagesEnabled=false"),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("no-sandbox", false),
+		chromedp.Flag("disable-setuid-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", false),
 		chromedp.ProxyServer(ProxyServerFlagValue(torProxy)),
 	)
 }
@@ -52,20 +55,41 @@ func newChromedpContext(parent context.Context, torProxy string) (context.Contex
 // nécessaire après un échec (le process peut être dans un état incertain) ou
 // pour retenter via un proxy différent.
 type pooledBrowser struct {
+	parent context.Context
 	proxy  string
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
 func newPooledBrowser(proxy string) *pooledBrowser {
-	ctx, cancel := newChromedpContext(context.Background(), proxy)
-	return &pooledBrowser{proxy: proxy, ctx: ctx, cancel: cancel}
+	return newPooledBrowserContext(context.Background(), proxy)
+}
+
+func newPooledBrowserContext(parent context.Context, proxy string) *pooledBrowser {
+	ctx, cancel := newChromedpContext(parent, proxy)
+	return &pooledBrowser{parent: parent, proxy: proxy, ctx: ctx, cancel: cancel}
 }
 
 func (b *pooledBrowser) rebuild(proxy string) {
 	b.cancel()
 	b.proxy = proxy
-	b.ctx, b.cancel = newChromedpContext(context.Background(), proxy)
+	b.ctx, b.cancel = newChromedpContext(b.parent, proxy)
+}
+
+// The first chromedp.Run owns the browser process. Do it on the worker
+// context instead of the first URL's deadline, then use an isolated tab per URL.
+func (b *pooledBrowser) newTab() (context.Context, context.CancelFunc, error) {
+	if err := b.parent.Err(); err != nil {
+		return nil, nil, err
+	}
+	if b.ctx.Err() != nil {
+		b.rebuild(b.proxy)
+	}
+	if err := chromedp.Run(b.ctx); err != nil {
+		return nil, nil, fmt.Errorf("initialisation Chromium: %w", err)
+	}
+	ctx, cancel := chromedp.NewContext(b.ctx, chromedp.WithNewBrowserContext())
+	return ctx, cancel, nil
 }
 
 func (b *pooledBrowser) close() {
@@ -128,12 +152,14 @@ func FetchPage(ctx context.Context, targetURL string, cfg *SiteConfig) (string, 
 	// Only public pages contribute links; authenticated sessions may expose private URLs.
 	if cfg == nil {
 		var links []string
-		if e := chromedp.Run(ctx, chromedp.Evaluate(`Array.from(new Set(Array.from(document.querySelectorAll('a[href]'),a=>a.href))).slice(0,5000)`, &links)); e != nil {
-			return "", fmt.Errorf("rendered discovery: %w", e)
+		linkCtx, cancelLinks := context.WithTimeout(ctx, 4*time.Second)
+		defer cancelLinks()
+		if e := chromedp.Run(linkCtx, chromedp.Evaluate(`Array.from(new Set(Array.from(document.querySelectorAll('a[href]'),a=>a.href))).slice(0,5000)`, &links)); e != nil {
+			log.Printf("rendered discovery: %v", e)
 		} else if len(links) > 0 {
-			e = publishRenderedLinks(ctx, targetURL, links)
+			e = publishRenderedLinks(linkCtx, targetURL, links)
 			if e != nil {
-				return "", fmt.Errorf("rendered discovery: %w", e)
+				log.Printf("rendered discovery: %v", e)
 			}
 		}
 	}

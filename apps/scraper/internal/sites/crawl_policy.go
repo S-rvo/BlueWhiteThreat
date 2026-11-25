@@ -19,6 +19,7 @@ import (
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
+	"github.com/redis/go-redis/v9"
 	"github.com/temoto/robotstxt"
 )
 
@@ -106,8 +107,7 @@ func preparePublicRender(ctx context.Context, target string) (func(), error) {
 	for {
 		now := time.Now().Unix()
 		leaseUntil = now + 180
-		n, e := client.Eval(ctx, `local ready=tonumber(redis.call('HGET','crawler:host_ready',ARGV[1]) or '0');if ready>tonumber(ARGV[2]) then return 0 end
-redis.call('HSET','crawler:host_ready',ARGV[1],tonumber(ARGV[2])+180);redis.call('HSET','crawler:render_host_owner',ARGV[1],ARGV[3]);return 1`, nil, host, now, token).Int()
+		n, e := acquireRenderHost(ctx, client, host, token, now, leaseUntil)
 		if e != nil {
 			closeRenderRedis()
 			return nil, e
@@ -127,8 +127,7 @@ redis.call('HSET','crawler:host_ready',ARGV[1],tonumber(ARGV[2])+180);redis.call
 		c, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		// If the lease expired, a subsequent crawler claim owns the host now.
-		if err := client.Eval(c, `if redis.call('HGET','crawler:render_host_owner',ARGV[1])==ARGV[2] then
-redis.call('HDEL','crawler:render_host_owner',ARGV[1]);if tonumber(redis.call('HGET','crawler:host_ready',ARGV[1]) or '0')==tonumber(ARGV[3]) then redis.call('HSET','crawler:host_ready',ARGV[1],tonumber(ARGV[4])+tonumber(ARGV[5])) end end return 1`, nil, host, token, leaseUntil, time.Now().Unix(), cooldown).Err(); err != nil {
+		if err := releaseRenderHost(c, client, host, token, leaseUntil, time.Now().Unix()+cooldown); err != nil {
 			log.Printf("release render host lease: %v", err)
 		}
 		closeRenderRedis()
@@ -142,7 +141,7 @@ redis.call('HDEL','crawler:render_host_owner',ARGV[1]);if tonumber(redis.call('H
 	}
 	if !robots.TestAgent(origin.RequestURI(), crawlAgent) {
 		release()
-		return nil, fmt.Errorf("robots disallows page")
+		return nil, fmt.Errorf("%w: robots disallows page", errScrapePolicy)
 	}
 	if err = chromedp.Run(ctx); err != nil {
 		release()
@@ -154,6 +153,7 @@ redis.call('HDEL','crawler:render_host_owner',ARGV[1]);if tonumber(redis.call('H
 	if group := robots.FindGroup(crawlAgent); group.CrawlDelay > delay {
 		delay = group.CrawlDelay
 	}
+	cooldown = int64((delay + time.Second - 1) / time.Second)
 	next := time.Now().Add(delay)
 	chromedp.ListenTarget(listenCtx, func(ev interface{}) {
 		paused, ok := ev.(*fetch.EventRequestPaused)
@@ -199,4 +199,25 @@ redis.call('HDEL','crawler:render_host_owner',ARGV[1]);if tonumber(redis.call('H
 		cancelListen()
 		release()
 	}, nil
+}
+
+func acquireRenderHost(ctx context.Context, client *redis.Client, host, token string, now, until int64) (int, error) {
+	return client.Eval(ctx, `
+if tonumber(redis.call('HGET','crawler:host_ready',ARGV[1]) or '0')>tonumber(ARGV[2]) then return 0 end
+redis.call('HSET','crawler:host_ready',ARGV[1],ARGV[3])
+redis.call('HSET','crawler:render_host_owner',ARGV[1],ARGV[4])
+redis.call('ZADD','crawler:hosts','XX',ARGV[3],ARGV[1])
+return 1`, nil, host, now, until, token).Int()
+}
+
+func releaseRenderHost(ctx context.Context, client *redis.Client, host, token string, until, ready int64) error {
+	return client.Eval(ctx, `
+if redis.call('HGET','crawler:render_host_owner',ARGV[1])==ARGV[2] then
+ redis.call('HDEL','crawler:render_host_owner',ARGV[1])
+ if tonumber(redis.call('HGET','crawler:host_ready',ARGV[1]) or '0')==tonumber(ARGV[3]) then
+  redis.call('HSET','crawler:host_ready',ARGV[1],ARGV[4])
+  redis.call('ZADD','crawler:hosts','XX',ARGV[4],ARGV[1])
+ end
+end
+return 1`, nil, host, token, until, ready).Err()
 }

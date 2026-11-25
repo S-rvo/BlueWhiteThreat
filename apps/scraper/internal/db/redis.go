@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -38,13 +37,9 @@ func GetUnscrapedURLs(ctx context.Context, client *redis.Client) ([]string, erro
 	if err != nil {
 		return nil, err
 	}
-	limit := 300
-	if raw := os.Getenv("SCRAPER_BATCH_SIZE"); raw != "" {
-		parsed, parseErr := strconv.Atoi(raw)
-		if parseErr != nil || parsed < 1 {
-			return nil, fmt.Errorf("invalid SCRAPER_BATCH_SIZE %q", raw)
-		}
-		limit = parsed
+	limit, err := ScrapeBatchSize()
+	if err != nil {
+		return nil, err
 	}
 	freshness, err := crawlTimestamps(ctx, client, urls)
 	if err != nil {
@@ -157,8 +152,10 @@ func prioritizeURLs(urls []string, freshness map[string]float64, limit int) []st
 
 // MarkURLScraped marque une URL comme traitée pour ne pas la retraiter au tick suivant.
 func MarkURLScraped(ctx context.Context, client *redis.Client, url string) error {
-	pipe := client.Pipeline()
+	pipe := client.TxPipeline()
 	pipe.SAdd(ctx, "urls_scraped", url)
+	pipe.ZRem(ctx, "urls_scrape_failed_at", url)
+	pipe.ZRem(ctx, "scraper:retry_due", url)
 	pipe.ZAdd(ctx, "urls_scraped_at", redis.Z{Score: float64(time.Now().Unix()), Member: url})
 	_, err := pipe.Exec(ctx)
 	return err
@@ -179,8 +176,10 @@ func RequeueStaleScrapedURLs(ctx context.Context, client *redis.Client, maxAge t
 // re-exposition bien plus courte (voir RequeueFailedScrapedURLs) : un échec
 // transitoire ne doit pas être traité comme un succès ni hériter de son délai.
 func MarkURLScrapeFailed(ctx context.Context, client *redis.Client, url string) error {
-	pipe := client.Pipeline()
+	pipe := client.TxPipeline()
 	pipe.SAdd(ctx, "urls_scraped", url)
+	pipe.ZRem(ctx, "urls_scraped_at", url)
+	pipe.ZRem(ctx, "scraper:retry_due", url)
 	pipe.ZAdd(ctx, "urls_scrape_failed_at", redis.Z{Score: float64(time.Now().Unix()), Member: url})
 	_, err := pipe.Exec(ctx)
 	return err
@@ -190,27 +189,73 @@ func MarkURLScrapeFailed(ctx context.Context, client *redis.Client, url string) 
 // transitoire depuis plus de maxAge, selon le même mécanisme que
 // RequeueStaleScrapedURLs mais sur le sorted set "urls_scrape_failed_at".
 func RequeueFailedScrapedURLs(ctx context.Context, client *redis.Client, maxAge time.Duration, limit int64) (int64, error) {
-	return requeueStaleFromSortedSet(ctx, client, "urls_scrape_failed_at", maxAge, limit)
+	n, err := requeueStaleFromSortedSet(ctx, client, "scraper:retry_due", 0, limit)
+	if err != nil || n >= limit {
+		return n, err
+	}
+	legacy, err := requeueStaleFromSortedSet(ctx, client, "urls_scrape_failed_at", maxAge, limit-n)
+	return n + legacy, err
 }
 
 func requeueStaleFromSortedSet(ctx context.Context, client *redis.Client, sortedSetKey string, maxAge time.Duration, limit int64) (int64, error) {
 	cutoff := time.Now().Add(-maxAge).Unix()
+	if limit < 1 {
+		return 0, nil
+	}
+	// The legacy failure index may also include backoff-controlled URLs. Scan
+	// past those entries in bounded pages instead of stopping at the first page.
+	offset := int64(0)
+	if sortedSetKey == "urls_scrape_failed_at" {
+		cursor, err := client.Get(ctx, "scraper:legacy_failed_offset").Int64()
+		if err != nil && err != redis.Nil {
+			return 0, err
+		}
+		offset = cursor
+	}
 	stale, err := client.ZRangeByScore(ctx, sortedSetKey, &redis.ZRangeBy{
-		Min:   "-inf",
-		Max:   fmt.Sprintf("%d", cutoff),
-		Count: limit,
+		Min: "-inf", Max: fmt.Sprint(cutoff), Offset: offset, Count: limit,
 	}).Result()
 	if err != nil {
 		return 0, err
 	}
-	if len(stale) == 0 {
-		return 0, nil
+	args := make([]interface{}, 0, 3+2*len(stale))
+	args = append(args, cutoff, offset, limit)
+	for _, u := range stale {
+		args = append(args, u, priorityScore(u)*priorityStride)
 	}
-	pipe := client.Pipeline()
-	pipe.SRem(ctx, "urls_scraped", stale)
-	pipe.ZRem(ctx, sortedSetKey, stale)
-	if _, err := pipe.Exec(ctx); err != nil {
-		return 0, err
-	}
-	return int64(len(stale)), nil
+	return requeueScrapeScript.Run(ctx, client, []string{sortedSetKey, scrapePending}, args...).Int64()
 }
+
+var requeueScrapeScript = redis.NewScript(`
+local n=0
+for i=4,#ARGV,2 do
+ local u=ARGV[i]
+ local score=redis.call('ZSCORE',KEYS[1],u)
+ if score and tonumber(score)<=tonumber(ARGV[1])
+    and (KEYS[1]~='urls_scrape_failed_at' or not redis.call('ZSCORE','scraper:retry_due',u))
+    and not redis.call('ZSCORE','scraper:inflight',u) then
+  redis.call('ZREM',KEYS[1],u)
+  if KEYS[1]=='scraper:retry_due' then redis.call('ZREM','urls_scrape_failed_at',u) end
+  -- If a legacy URL has both marks, only the newer outcome may reopen it.
+  if not redis.call('ZSCORE','urls_scraped_at',u)
+     and not redis.call('ZSCORE','urls_scrape_failed_at',u)
+     and not redis.call('ZSCORE','scraper:dead',u)
+     and not redis.call('ZSCORE','scraper:invalid',u)
+     and not redis.call('ZSCORE','scraper:blocked',u) then
+   redis.call('SREM','urls_scraped',u)
+   if redis.call('SISMEMBER','urls_crawled',u)==1 then
+    local ts=tonumber(redis.call('ZSCORE','urls_crawled_at',u) or '0')
+    redis.call('ZADD',KEYS[2],tonumber(ARGV[i+1])+ts,u)
+   end
+  end
+  n=n+1
+ end
+end
+if KEYS[1]=='urls_scrape_failed_at' then
+ local scanned=(#ARGV-3)/2
+ local offset=tonumber(ARGV[2])+scanned-n
+ if scanned<tonumber(ARGV[3]) then offset=0 end
+ redis.call('SET','scraper:legacy_failed_offset',offset)
+end
+return n
+`)
