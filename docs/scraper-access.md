@@ -1,6 +1,6 @@
 # Connecteurs : inscription, session et challenges
 
-Dernière mise à jour : 6 novembre 2026.
+Dernière mise à jour : 25 novembre 2026.
 
 Évolution optionnelle du scraper, désactivée en l'absence de configuration. Aucun site réel n'est préconfiguré. Cette extension dépasse le périmètre MVP décrit dans `mvp-2027-cadrage.md` (§ Collecte des forums) ; les exclusions du MVP restent son contrat historique, et ne décrivent pas cette extension.
 
@@ -26,7 +26,12 @@ git check-ignore apps/scraper/.credentials.env
 
 Si le fichier existe déjà, la création s’arrête sans le modifier. Le principal exécutable Go charge ce fichier depuis son répertoire de travail `apps/scraper`. Les commandes auxiliaires ne bénéficient pas automatiquement de ce chargement. Docker Compose utilise le chemin déclaré dans `env_file`.
 
-**Attention au build Docker :** être ignoré par Git ne suffit pas à exclure un secret du contexte de build. Le Dockerfile de développement utilise `COPY apps/scraper/. .`. Avant de construire ou distribuer une image, exclure `.credentials.env`, les autres fichiers de secrets et les états de session via le `.dockerignore` du contexte concerné ; charger les secrets à l’exécution seulement. La validation Compose ne vérifie pas cette isolation.
+**Attention au build Docker :** être ignoré par Git ne suffit pas à
+exclure un secret du contexte de build. Les deux Dockerfiles du scraper
+utilisent des listes d’inclusion dédiées qui excluent les fichiers
+d’environnement et états de session. Charger les secrets à l’exécution
+seulement ; ne pas redistribuer une ancienne image dont le contexte n’était
+pas filtré. Voir [isolation du scraper](scraper-isolation-backup.md).
 
 ## Configuration
 
@@ -46,7 +51,13 @@ Sans solveur ou sans réponse, le résultat est `human_action_required`. Pas de 
 
 ## Limites opérationnelles
 
-Le délai global existant reste applicable. La politique actuelle du worker marque aussi les URL en échec comme traitées : une reprise après intervention nécessite donc leur remise en file par l'opérateur. Pas de retry automatique ajouté. Les sessions reposent sur les cookies, pas sur localStorage/IndexedDB. Les contrôles de contenu et le pipeline d'analyse existants restent inchangés.
+Le délai global reste applicable. Le scraper distingue désormais
+une sauvegarde, un échec temporaire à retenter, une quarantaine et un refus.
+Un challenge nécessitant une intervention n’est pas une page sauvegardée ;
+consulter l’état de la tâche avant toute remise en file et ne pas augmenter
+les tentatives pour contourner un refus. Voir [les états Redis](redis-crawler-scraper.md).
+Les sessions reposent sur les cookies, pas sur localStorage/IndexedDB.
+Les contrôles de contenu et le pipeline d’analyse restent inchangés.
 
 Tests : `cd apps/scraper && go test ./...`. Les tests unitaires couvrent état, validation et contrat HTTP du solveur ; une validation navigateur sur les formulaires cibles reste nécessaire avant activation.
 
@@ -62,13 +73,13 @@ Les cookies sont essayés en premier ; si la session a expiré, le compte enregi
 
 **Pertinence :** ce registre indique qu’un accès est enregistré et réutilisable, pas que la source est pertinente CTI. Les verdicts NLP/IA et l’admission au suivi restent indépendants ; aucun identifiant n’est ajouté au contenu analysé.
 
-## Configuration locale installée
+## Configuration locale
 
 La clé locale persistante est dans `apps/scraper/.credentials.env` (permissions 0600, ignoré par Git). Docker Compose transmet ce fichier uniquement au service scraper. Le point d’entrée principal Go le charge aussi lors d’un lancement depuis `apps/scraper` ; les variables déjà exportées restent prioritaires. Ne pas afficher cette clé ni la régénérer lors d’un redémarrage. Sauvegarder ce fichier séparément des états de comptes.
 
-Les sites ayant `state_file` utilisent automatiquement `credentials_key_env: BWT_CREDENTIALS_KEY` sauf clé personnalisée explicite. `data/sites.json` est encore vide : aucun compte ni formulaire réel n’a été configuré.
+Les sites ayant `state_file` utilisent automatiquement `credentials_key_env: BWT_CREDENTIALS_KEY` sauf clé personnalisée explicite. Le fichier livré dans l’image est vide : aucun compte ni formulaire réel n’est préconfiguré.
 
-Après configuration des sites, recréer le service pour charger le nouvel environnement : `docker compose up -d --no-deps --force-recreate scraper`. Cette opération n’a pas été exécutée pendant la configuration.
+Après configuration des sites, recréer le service pour charger le nouvel environnement : `docker compose up -d --no-deps --force-recreate scraper`.
 
 Vérification : `go test ./...`, `go test -race ./internal/sites` et `go vet ./...` depuis `apps/scraper`. Tests de chiffrement/restauration, origine, mauvaise clé, champs d’inscription, état et permissions, contrat HTTP du solveur et clé par défaut. Ces tests ne remplacent pas la validation navigateur des formulaires cibles.
 
@@ -85,7 +96,14 @@ Vérification : `go test ./...`, `go test -race ./internal/sites` et `go vet ./.
 | `registration` | URL, champs CSS → variables, soumission et confirmation ; optionnel |
 | `captcha` | Sélecteur du challenge, champ réponse, solveur, jeton et soumission optionnelle |
 
-Le chemin `/run/bwt-sessions/example.json` de l’exemple exige un montage persistant pour survivre à une recréation du conteneur. Avec le montage actuel du dépôt sur `/app`, un chemin tel que `/app/db/scraper-sessions/example.json` peut être utilisé dans le conteneur ; `/db` à la racine du dépôt est ignoré par Git. Pour un lancement natif, adapter ce chemin au système local. Les répertoires existants conservent leurs permissions : vérifier leur confidentialité, pas seulement celle du fichier.
+Le chemin `/run/bwt-sessions/example.json` de l’exemple exige un montage
+persistant. Via la surcharge Compose locale, monter en lecture seule le
+seul fichier de configuration (et renseigner `SITES_CONFIG_PATH`) et
+monter séparément le répertoire privé de sessions en écriture pour
+l’UID/GID `10001:10001`. Ne pas remonter le dépôt sur `/app`. Garder la
+configuration propre au poste et les états dans un emplacement ignoré par
+Git, tel que `.local/` ou `db/`. Vérifier aussi les permissions du
+répertoire hôte.
 
 ## Diagnostic et reprise
 
@@ -98,6 +116,6 @@ Le chemin `/run/bwt-sessions/example.json` de l’exemple exige un montage persi
 | `human_action_required` | Vérifier le challenge configuré, son adaptateur ou réaliser l’intervention attendue |
 | Inscription sans confirmation | Vérifier le compte côté site avant de remettre un marqueur à zéro |
 | Compte inchangé après modification des variables | Comportement prévu : les identifiants persistés sont prioritaires |
-| URL abandonnée après erreur | Vérifier `urls_scraped` et effectuer une remise en file ciblée ; pas de purge globale |
+| URL sans nouvelle tentative | Vérifier `scraper:retry_due`, `scraper:dead` et `scraper:blocked` ; diagnostiquer avant toute reprise ciblée |
 
 Ne pas inclure de mot de passe, cookie, jeton ni clé dans les logs de diagnostic, tickets, corpus ou captures. L’archivage d’un état conserve des secrets : le protéger et définir sa rétention.

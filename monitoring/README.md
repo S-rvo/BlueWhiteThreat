@@ -169,3 +169,14 @@ Lorsqu'un service Go exposera `/metrics` :
 3. ajouter la cible à `monitoring/prometheus/prometheus.yml` ;
 4. ajouter ou modifier les panneaux dans `monitoring/grafana/dashboards/bluewhitethreat-overview.json` ;
 5. mettre à jour `docs/runbook-services.md` et vérifier que la cible est `UP`.
+
+
+### Files crawler et scraper
+
+Dans le dashboard **Crawler et scraper — files Redis**, comparer les volumes
+prêts/échus/futurs, l’âge de l’échéance la plus ancienne et le débit confirmé.
+Le scraper collecte ces compteurs au même endroit dans Redis : ne pas additionner
+les réplicas crawler. Un navigateur occupé, une erreur réseau et un report
+d’hôte réservé sont des résultats distincts. La cible Prometheus
+`bwt-crawl-queues` nécessite le fichier Compose applicatif et la version
+continue du scraper ; elle est normalement absente en monitoring seul.

@@ -7,6 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestRenderedChunksLossless(t *testing.T) {
@@ -60,5 +63,32 @@ func TestRenderRobots(t *testing.T) {
 		if err == nil && tc.status == 200 && robots.TestAgent("/private", crawlAgent) {
 			t.Fatal("disallow ignored")
 		}
+	}
+}
+
+func TestRenderLeaseKeepsCrawlerIndexSynchronized(t *testing.T) {
+	server := miniredis.RunT(t)
+	r := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = r.Close() })
+	ctx := context.Background()
+	const host = "fixture.test"
+	r.ZAdd(ctx, "crawler:hosts", redis.Z{Member: host, Score: 0})
+	if n, err := acquireRenderHost(ctx, r, host, "render-a", 1000, 1180); err != nil || n != 1 {
+		t.Fatalf("acquire=%d %v", n, err)
+	}
+	if score := r.ZScore(ctx, "crawler:hosts", host).Val(); score != 1180 {
+		t.Fatalf("crawler index did not receive the lease: %f", score)
+	}
+	if err := releaseRenderHost(ctx, r, host, "stale-token", 1180, 1002); err != nil {
+		t.Fatal(err)
+	}
+	if score := r.ZScore(ctx, "crawler:hosts", host).Val(); score != 1180 {
+		t.Fatalf("old token released a newer lease: %f", score)
+	}
+	if err := releaseRenderHost(ctx, r, host, "render-a", 1180, 1002); err != nil {
+		t.Fatal(err)
+	}
+	if score := r.ZScore(ctx, "crawler:hosts", host).Val(); score != 1002 || r.HGet(ctx, "crawler:host_ready", host).Val() != "1002" {
+		t.Fatalf("crawler index retains a stale lease: %f", score)
 	}
 }

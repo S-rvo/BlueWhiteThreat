@@ -1,5 +1,25 @@
+x-crawler-runtime: &crawler-runtime
+  build:
+    context: .
+    dockerfile: apps/crawler/Dockerfile.prd
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  depends_on:
+    - redis
+    - neo4j
+  environment:
+    - REDIS_HOST=redis
+    - REDIS_PORT=6379
+    - NEO4J_URI=bolt://neo4j:7687
+    - NEO4J_USER=neo4j
+    - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in the root .env}
+  restart: unless-stopped
+
 services:
   tor1:
+    networks: [default, crawl-proxy]
     build:
       context: ./apps/proxy
       dockerfile: Dockerfile.dev
@@ -11,6 +31,7 @@ services:
     restart: unless-stopped
 
   tor2:
+    networks: [default, crawl-proxy]
     build:
       context: ./apps/proxy
       dockerfile: Dockerfile.dev
@@ -22,6 +43,7 @@ services:
     restart: unless-stopped
 
   tor3:
+    networks: [default, crawl-proxy]
     build:
       context: ./apps/proxy
       dockerfile: Dockerfile.dev
@@ -33,68 +55,17 @@ services:
     restart: unless-stopped
 
   crawler:
-    build:
-      context: .
-      dockerfile: apps/crawler/Dockerfile.dev
+    <<: *crawler-runtime
     container_name: crawler_service
-    volumes:
-      - .:/app
-    depends_on:
-      - redis
-      - neo4j
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in the root .env}
-    restart: unless-stopped
 
-  # Réplicas additionnels pour le scaling horizontal : GetNextURLFromQueue
-  # dépile Redis de façon atomique (SPop, ou SRandMemberN+SRem conditionné sur
-  # removed>0), donc plusieurs process peuvent consommer la même file sans
-  # collision ni changement de code. Toujours gratés dans les 3 mêmes proxys
-  # Tor (tor1-3) -- ne pas ajouter de nouveaux conteneurs tor4/tor5 sans
-  # vérifier d'abord que ces 3 là sont bien le goulot d'étranglement réel :
-  # `docker compose logs crawler crawler2 crawler3 | grep -i "proxy\|timeout"`
-  # sur une fenêtre de quelques heures. Un taux d'erreurs/timeouts proxy en
-  # hausse avec le nombre de réplicas (et non juste le volume d'URLs) est le
-  # signal à chercher, pas une intuition.
+  # Shared frontiers and token leases make horizontal replicas safe.
   crawler2:
-    build:
-      context: .
-      dockerfile: apps/crawler/Dockerfile.dev
+    <<: *crawler-runtime
     container_name: crawler_service_2
-    volumes:
-      - .:/app
-    depends_on:
-      - redis
-      - neo4j
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in the root .env}
-    restart: unless-stopped
 
   crawler3:
-    build:
-      context: .
-      dockerfile: apps/crawler/Dockerfile.dev
+    <<: *crawler-runtime
     container_name: crawler_service_3
-    volumes:
-      - .:/app
-    depends_on:
-      - redis
-      - neo4j
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in the root .env}
-    restart: unless-stopped
 
   # Scheduling réel pour l'approvisionnement en seeds (point 3 du plan de
   # fraîcheur) : désactivé par défaut (profile dédié), à lancer explicitement
@@ -142,6 +113,7 @@ services:
     restart: unless-stopped
 
   redis:
+    networks: [default, scraper-data]
     image: redis:8.0-rc1-alpine
     container_name: redis_service
     # AOF (appendfsync everysec) en plus des snapshots RDB : la frontière est
@@ -154,9 +126,10 @@ services:
     # besoin, et l'AOF n'offre AUCUNE protection contre un wipe logique (un
     # flush est appendé comme toute commande). Ferme au niveau serveur la
     # classe d'incident du 2026-11-10 (suppression accidentelle de la file).
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--rename-command", "FLUSHALL", "", "--rename-command", "FLUSHDB", ""]
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--rename-command", "FLUSHALL", "", "--rename-command", "FLUSHDB", "", "--aclfile", "/usr/local/etc/redis/users.acl"]
     volumes:
       - ./db/redis:/data
+      - ./ops/redis/users.acl:/usr/local/etc/redis/users.acl:ro
     ports:
       - "127.0.0.1:6379:6379"
     restart: unless-stopped
@@ -168,35 +141,39 @@ services:
   redis-backup:
     image: redis:8.0-rc1-alpine
     container_name: redis_backup
+    init: true
     volumes:
-      - ./db/redis-backups:/backups
+      - "${BWT_REDIS_BACKUP_PATH:-./db/redis-backups}:/backups"
+      - ./apps/crawler/scripts/redis-backup.sh:/usr/local/bin/bwt-redis-backup.sh:ro
     depends_on:
       - redis
-    entrypoint:
-      - sh
-      - -c
-      - >
-        while true; do
-        ts=$$(date +%Y%m%d-%H%M%S);
-        if redis-cli -h redis --rdb /backups/dump-$$ts.rdb; then
-        echo "backup ok: dump-$$ts.rdb";
-        else
-        echo "backup FAILED: $$ts" >&2;
-        fi;
-        ls -t /backups/dump-*.rdb 2>/dev/null | tail -n +15 | xargs -r rm -f;
-        sleep 86400;
-        done
+    entrypoint: ["sh", "/usr/local/bin/bwt-redis-backup.sh"]
+    command: []
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/bwt-redis-backup.sh", "--check"]
+      interval: 5m
+      start_period: 5m
+      start_interval: 10s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
   scraper:
+    networks: [crawl-proxy, scraper-data, scrape-observe]
     build:
       context: .
-      dockerfile: apps/scraper/Dockerfile.dev
+      dockerfile: apps/scraper/Dockerfile.prd
     container_name: scraper_service
     init: true
     pids_limit: 1024
-    volumes:
-      - .:/app
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./ops/scraper/seccomp.json
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777,size=256m
+    shm_size: 256m
     depends_on:
       - mongodb
       - redis
@@ -204,10 +181,18 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - MONGO_HOST=mongodb
+      - SCRAPER_REQUIRE_SANDBOX=1
     env_file:
       - ./apps/scraper/.env
       - ./apps/scraper/.credentials.env
     restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/scraper", "--check-health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
 
   classifier:
     build:
@@ -268,6 +253,7 @@ services:
         required: false
 
   mongodb:
+    networks: [default, scraper-data]
     image: mongo:8.0.9
     container_name: mongodb_service
     ports:
@@ -327,3 +313,13 @@ volumes:
   redis_data:
   neo4j_data:
   ollama_data:
+
+# The scraper reaches its state stores, Tor SOCKS and monitoring on separate
+# internal networks; it does not join the general application network.
+networks:
+  crawl-proxy:
+    internal: true
+  scraper-data:
+    internal: true
+  scrape-observe:
+    internal: true

@@ -8,6 +8,11 @@
 !*.env.example
 !*.env.*.example
 
+# Surcharges Compose et fichiers de travail propres à une installation.
+/docker-compose.override.yaml
+/docker-compose.override.yml
+/.local/
+
 # Données Docker : bind-mounts Redis actuels et ancien bind-mount MongoDB.
 /db/
 /infra/db/

@@ -26,3 +26,8 @@ scrape_configs:
     scrape_timeout: 5s
     static_configs:
       - targets: ["api:8083"]
+
+  # Available when the monitoring and application Compose files are combined.
+  - job_name: bwt-crawl-queues
+    static_configs:
+      - targets: ["scraper:8080"]
