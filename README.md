@@ -5,7 +5,9 @@ Le système repose sur une architecture modulaire intégrant plusieurs mécanism
 
 **Crawler** : explore automatiquement les sources ciblées pour identifier des pages ou ressources pertinentes.
 
-**Scraper** : extrait le contenu brut des pages identifiées (HTML, JSON, etc.).
+**Collectseeds** (facultatif) : soumet au crawler des points de départ issus de catalogues publics, distinctement des liens découverts pendant le crawl.
+
+**Scraper** : traite en continu la file de rendu Chromium et sauvegarde les pages extraites dans MongoDB.
 
 **Parser** : transforme le contenu extrait en entités exploitables (IOCs, noms de malware, groupes, infrastructures, etc.).
 
@@ -31,6 +33,8 @@ Ce projet vise à fournir un outil de veille automatisée sur les menaces issues
 
 - [`docs/mvp-2027-cadrage.md`](docs/mvp-2027-cadrage.md) : périmètre et contrats du MVP de janvier 2027.
 - [`docs/runbook-services.md`](docs/runbook-services.md) : datasheet pour préparer, lancer, tester, diagnostiquer et modifier chaque service selon les rôles technicien, analyste et développeur.
+- [Files Redis et fonctionnement continu](docs/redis-crawler-scraper.md) : états des tâches, reprise après interruption, capacité et exploitation sur Mac.
+- [Isolement du scraper et sauvegardes Redis](docs/scraper-isolation-backup.md) : sandbox, réseau, sauvegarde et contrôle de restauration.
 - [`monitoring/README.md`](monitoring/README.md) : démarrage et exploitation du dashboard Grafana, des métriques Prometheus et des logs Loki.
 
 ## Cartographie du code avec Graphify
