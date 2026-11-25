@@ -3,7 +3,14 @@ package db
 import (
 	"log"
 	"regexp"
+	"time"
 )
+
+// farmPrefixesTTL bounds "farm:prefixes:<hash>" (refreshed on each SAdd) so a
+// backend that never crosses the detection threshold does not accumulate a
+// Redis key forever. The blocking decision itself, once made, is persisted
+// separately and permanently in "dynamic_blocked_hashes".
+const farmPrefixesTTL = 30 * 24 * time.Hour
 
 // onionHashRegex captures the real Tor v3 address (56 base32 chars) embedded
 // anywhere in a host, regardless of any subdomain-style prefix in front of it.
@@ -49,6 +56,7 @@ func IsFarmBackend(rawURL string) bool {
 	if err := RedisClient.SAdd(ctx, key, prefix).Err(); err != nil {
 		return false
 	}
+	RedisClient.Expire(ctx, key, farmPrefixesTTL)
 	count, err := RedisClient.SCard(ctx, key).Result()
 	if err != nil {
 		return false

@@ -1,16 +1,23 @@
-# Dockerfile
-FROM golang:1.24 as builder
-
-WORKDIR /app
-COPY go.mod go.sum ./
+FROM golang:1.24-bookworm AS build
+WORKDIR /src/apps/scraper
+COPY pkg/csamfilter /src/pkg/csamfilter
+COPY apps/scraper/go.mod apps/scraper/go.sum ./
 RUN go mod download
-COPY . .
-RUN go build -o scraper ./cmd/main.go
+COPY apps/scraper/cmd ./cmd
+COPY apps/scraper/internal ./internal
+COPY apps/scraper/tests ./tests
+RUN go test ./...
+RUN CGO_ENABLED=0 go build -trimpath -o /out/scraper ./cmd
 
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-RUN adduser -D -g '' scraperuser
-USER scraperuser
-WORKDIR /home/scraperuser
-COPY --from=builder /app/scraper .
-ENTRYPOINT [ "./scraper" ]
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates chromium fonts-liberation \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 scraper && useradd --system --uid 10001 --gid 10001 --home-dir /tmp scraper
+COPY --from=build /out/scraper /usr/local/bin/scraper
+COPY --chmod=0755 apps/scraper/scripts/chromium-sanitized.sh /usr/local/bin/bwt-chromium
+WORKDIR /app
+RUN mkdir -p data && printf '{}\n' > data/sites.json
+ENV HOME=/tmp XDG_CACHE_HOME=/tmp/cache XDG_CONFIG_HOME=/tmp/config SCRAPER_REQUIRE_SANDBOX=1 \
+    SCRAPER_CHROMIUM_EXECUTABLE=/usr/local/bin/bwt-chromium
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/scraper"]

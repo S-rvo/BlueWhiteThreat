@@ -1,38 +1,57 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/api"
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/crawler"
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/db"
+	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/seeddata"
 	"github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter"
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	// Initialisation des bases de données
 	initDatabases()
 	defer db.CloseRedis()
 	defer db.CloseNeo4j()
 
 	// Lancer l'API en parallèle
-	go startAPI()
+	go startAPI(ctx)
 
 	// Ajouter les URLs de départ
 	startURLs := []string{
 		"http://6nhmgdpnyoljh5uzr5kwlatx2u3diou4ldeommfxjz3wkhalzgjqxzqd.onion",
 	}
+	// Seeds additionnels : adresses de sites de leak ransomware connus,
+	// issues d'une source CTI clearnet publique (ThreatCluster, 2026-11-06),
+	// nécessaires car le seed unique précédent a un graphe de liens déjà
+	// entièrement exploré (voir pistes-a-creuser point 11).
+	for _, line := range strings.Split(seeddata.SeedURLsFile, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			startURLs = append(startURLs, line)
+		}
+	}
 	for _, url := range startURLs {
-		if err := db.AddURLToQueue(url); err != nil {
+		if _, err := db.AddURLToQueue(ctx, url); err != nil {
 			log.Printf("Error adding start URL to queue: %v", err)
 		}
 	}
 
 	// Démarrer le crawler
-	startCrawler(1)
+	startCrawler(ctx)
 }
 
 // initDatabases initialise Redis et Neo4j
@@ -58,7 +77,7 @@ func initDatabases() {
 }
 
 // startAPI lance l'API HTTP
-func startAPI() {
+func startAPI(ctx context.Context) {
 
 	router := api.NewRouter()
 	srv := &http.Server{
@@ -69,31 +88,79 @@ func startAPI() {
 		IdleTimeout:  120 * time.Second,
 	}
 	log.Println("API listening at http://localhost:8080")
-	log.Fatal(srv.ListenAndServe())
+	go func() {
+		<-ctx.Done()
+		c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(c)
+	}()
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("API: %v", err)
+	}
 }
 
-// startCrawler gère la boucle principale de crawling
-func startCrawler(maxDepth int) {
-	for {
-		queueSize, err := db.GetQueueSize()
+// Sans la puissance de calcul de Google, la fraîcheur du graphe de liens ne
+// peut venir que d'un re-crawl périodique, borné, du contenu déjà visité
+// (voir pistes-a-creuser point 11) : un sweep modeste plutôt qu'un balayage
+// massif qu'on n'a pas les ressources Tor pour absorber.
+const (
+	staleRequeueMaxAge = 7 * 24 * time.Hour
+	staleRequeueLimit  = 200
+	staleRequeueEvery  = 30 * time.Minute
+	idleRetryInterval  = 2 * time.Minute
+)
+
+// startCrawler gère la boucle principale de crawling. Elle ne se termine
+// jamais : une file vide est un état transitoire (tout le graphe connu a été
+// visité récemment), pas une fin de tâche -- contrairement à l'ancien
+// comportement qui faisait sortir le process et comptait sur
+// `restart: unless-stopped` pour "relancer" une queue déjà vide.
+func startCrawler(ctx context.Context) {
+	workers := 4
+	if n, err := strconv.Atoi(os.Getenv("CRAWLER_WORKERS")); err == nil && n >= 1 && n <= 32 {
+		workers = n
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(sweep bool) { defer wg.Done(); crawlerWorker(ctx, sweep) }(i == 0)
+	}
+	wg.Wait()
+}
+func crawlerWorker(ctx context.Context, sweep bool) {
+	lastStaleSweep := time.Now()
+
+	maybeRequeueStale := func() {
+		if !sweep || time.Since(lastStaleSweep) < staleRequeueEvery {
+			return
+		}
+		lastStaleSweep = time.Now()
+		requeued, err := db.RequeueStaleURLs(ctx, staleRequeueMaxAge, staleRequeueLimit)
 		if err != nil {
-			log.Fatalf("Error getting queue size: %v", err)
+			log.Printf("Error requeuing stale URLs: %v", err)
+			return
+		}
+		if requeued > 0 {
+			log.Printf("Requeued %d stale URLs for re-crawl", requeued)
+		}
+	}
+
+	for ctx.Err() == nil {
+		maybeRequeueStale()
+		if sweep {
+			if err := db.DrainRenderedLinks(ctx); err != nil {
+				log.Printf("rendered links: %v", err)
+			}
 		}
 
-		if queueSize == 0 {
-			log.Println("Queue is empty. Crawler has completed.")
-			break
-		}
-
-		url, err := db.GetNextURLFromQueue()
+		url, token, err := db.ClaimURL(ctx)
 		if err != nil {
-			log.Printf("Error getting next URL from queue: %v", err)
-			time.Sleep(1 * time.Second)
+			log.Printf("Claim failed: %v", err)
+			pause(ctx, time.Second)
 			continue
 		}
 		if url == "" {
-			log.Println("No URL returned from queue, but queue is not empty. Retrying...")
-			time.Sleep(1 * time.Second)
+			pause(ctx, time.Second)
 			continue
 		}
 
@@ -103,58 +170,133 @@ func startCrawler(maxDepth int) {
 		// l'ajout, sinon ces entrées historiques sont crawlées en
 		// direct sur Tor sans aucun contrôle.
 		if csamfilter.IsBlockedURL(url) || db.IsFarmBackend(url) {
-			if err := db.MarkURLAsCrawled(url); err != nil {
-				log.Printf("Error marking blocked URL as crawled: %v", err)
+			if err := db.DropClaim(ctx, url, token); err != nil {
+				log.Printf("Error dropping blocked URL: %v", err)
 			}
 			continue
 		}
 
-		processURL(url, maxDepth)
-		time.Sleep(500 * time.Millisecond)
+		processURL(ctx, url, token)
+		pause(ctx, 500*time.Millisecond)
 	}
+}
 
-	crawled, _ := db.GetCrawledCount()
-	log.Printf("Crawling complete! Total URLs crawled: %d", crawled)
+// Storage errors are not evidence that the remote site is dead.
+func releaseForRetry(ctx context.Context, url, token string) {
+	if e := db.DeferClaim(ctx, url, token, time.Minute); e != nil {
+		log.Printf("release: %v", e)
+	}
 }
 
 // processURL traite une URL spécifique : crawling + stockage
-func processURL(url string, maxDepth int) {
-	log.Printf("Crawling URL: %s", url)
-
-	_, links, statusCode, err := crawler.Crawler(url, maxDepth)
+func processURL(parent context.Context, url, token string) {
+	workCtx, cancel := context.WithCancel(parent)
+	defer cancel()
+	started := time.Now()
+	defer func() {
+		if err := db.RecordProcessingDuration(workCtx, time.Since(started)); err != nil {
+			log.Printf("metrics: %v", err)
+		}
+	}()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if err := db.RenewClaim(workCtx, url, token); err != nil {
+					log.Printf("lease renewal: %v", err)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	metadata, err := db.FetchMetadata(workCtx, url)
 	if err != nil {
-		log.Printf("Error crawling URL %s: %v", url, err)
-		if err := db.MarkURLAsCrawled(url); err != nil {
-			log.Printf("Error marking URL as crawled: %v", err)
+		log.Printf("metadata: %v", err)
+		releaseForRetry(workCtx, url, token)
+		return
+	}
+	fetchStarted := time.Now()
+	result, err := crawler.FetchContext(workCtx, url, metadata)
+	if e := db.RecordHostFetch(workCtx, url, result.Status, time.Since(fetchStarted), err != nil); e != nil {
+		log.Printf("host metrics: %v", e)
+	}
+	if workCtx.Err() != nil {
+		return
+	}
+	if err != nil {
+		delay := db.RetryDelay(workCtx, url)
+		if result.RetryAfter > delay {
+			delay = result.RetryAfter
+		}
+		if e := db.FinishClaim(workCtx, url, token, false, delay); e != nil {
+			log.Printf("retry: %v", e)
+		}
+		log.Printf("fetch %s: %v", url, err)
+		return
+	}
+	if workCtx.Err() != nil {
+		return
+	}
+	if result.Status == http.StatusGone {
+		if e := db.FinishClaim(workCtx, url, token, true, 0, http.StatusGone); e != nil {
+			log.Printf("gone: %v", e)
 		}
 		return
 	}
-
-	log.Printf("Crawled URL: %s - Status: %d, Found %d links", url, statusCode, len(links))
-
-	// Marquer l'URL comme crawlée
-	if err := db.MarkURLAsCrawled(url); err != nil {
-		log.Printf("Error marking URL as crawled: %v", err)
+	// Persist discovery before acknowledgment so a storage failure is replayed.
+	if err := db.SaveURL(workCtx, url); err != nil {
+		log.Printf("graph: %v", err)
+		releaseForRetry(workCtx, url, token)
+		return
 	}
-
-	// Sauvegarder l'URL de départ dans Neo4j
-	if err := db.SaveURL(url); err != nil {
-		log.Printf("Error saving URL in Neo4j: %v", err)
-	}
-
-	// Traiter les liens trouvés
-	for _, newURL := range links {
-		// Ajouter en queue Redis
-		if err := db.AddURLToQueue(newURL); err != nil {
-			log.Printf("Error adding new URL to queue: %v", err)
+	acceptedLinks := make([]string, 0, len(result.Links))
+	for _, link := range result.Links {
+		if workCtx.Err() != nil {
+			return
 		}
-		// Enregistrer la relation Neo4j
-		if err := db.SaveLink(url, newURL); err != nil {
-			log.Printf("Error saving link in Neo4j: %v", err)
+		reason, err := db.AddURLToQueue(workCtx, link)
+		if err != nil {
+			log.Printf("enqueue: %v", err)
+			releaseForRetry(workCtx, url, token)
+			return
+		}
+
+		if reason != "storage" && reason != "trap" && reason != db.QueueReasonBlocked && reason != db.QueueReasonFarm {
+			acceptedLinks = append(acceptedLinks, link)
 		}
 	}
+	if err := db.SaveLinks(workCtx, url, acceptedLinks); err != nil {
+		log.Printf("graph: %v", err)
+		releaseForRetry(workCtx, url, token)
+		return
+	}
+	interval := crawler.RevisitInterval(result, metadata)
+	if result.Status != http.StatusNotModified {
+		if err := db.SaveClaimMetadata(workCtx, url, token, result.ETag, result.Modified, result.Hash); err != nil {
+			log.Printf("metadata: %v", err)
+			releaseForRetry(workCtx, url, token)
+			return
+		}
+	}
+	if err := db.FinishClaim(workCtx, url, token, true, interval, result.Status); err != nil {
+		log.Printf("ack: %v", err)
+	}
+}
 
-	crawled, _ := db.GetCrawledCount()
-	queued, _ := db.GetQueueSize()
-	log.Printf("Stats - Crawled: %d, Queued: %d", crawled, queued)
+func pause(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }

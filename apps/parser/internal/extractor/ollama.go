@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -21,7 +22,10 @@ func NewOllamaExtractor(baseURL, model string) *OllamaExtractor {
 	return &OllamaExtractor{
 		baseURL: baseURL,
 		model:   model,
-		client:  &http.Client{Timeout: 60 * time.Second},
+		client: &http.Client{
+			Timeout:       60 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 	}
 }
 
@@ -76,19 +80,33 @@ func (o *OllamaExtractor) Extract(ctx context.Context, text string) (entities.En
 		return entities.Entities{}, fmt.Errorf("ollama request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return entities.Entities{}, fmt.Errorf("Ollama HTTP status %d", resp.StatusCode)
+	}
+	const maxResponseBytes = 1 << 20
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return entities.Entities{}, fmt.Errorf("read Ollama response: %w", err)
+	}
+	if len(data) > maxResponseBytes {
+		return entities.Entities{}, fmt.Errorf("Ollama response exceeds size limit")
+	}
 
 	var parsed struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	if err := json.Unmarshal(data, &parsed); err != nil {
 		return entities.Entities{}, fmt.Errorf("decode ollama response: %w", err)
 	}
 
-	var out entities.Entities
+	var out *entities.Entities
 	if err := json.Unmarshal([]byte(parsed.Message.Content), &out); err != nil {
 		return entities.Entities{}, fmt.Errorf("model output is not valid JSON: %w", err)
 	}
-	return out, nil
+	if out == nil {
+		return entities.Entities{}, fmt.Errorf("Ollama did not return an entities object")
+	}
+	return *out, nil
 }

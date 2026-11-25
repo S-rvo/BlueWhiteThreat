@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/crawler/internal/db"
 )
@@ -32,5 +35,36 @@ func GetCrawlerStatsHandler() http.HandlerFunc {
 		if err := json.NewEncoder(w).Encode(stats); err != nil {
 			log.Printf("Error encoding stats response: %v", err)
 		}
+	}
+}
+
+func ReadinessHandler(w http.ResponseWriter, r *http.Request) {
+	if err := db.Ready(); err != nil {
+		http.Error(w, "dependencies unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	HealthCheckHandler(w, r)
+}
+
+func HostStatsHandler(w http.ResponseWriter, r *http.Request) {
+	host := strings.ToLower(r.URL.Query().Get("host"))
+	if host == "" || len(host) > 300 || strings.ContainsAny(host, "/\\ \n\r") {
+		http.Error(w, "invalid host", 400)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if db.RedisClient == nil {
+		http.Error(w, "unavailable", 503)
+		return
+	}
+	stats, err := db.RedisClient.HGetAll(ctx, "crawler:host_stats:"+host).Result()
+	if err != nil {
+		http.Error(w, "unavailable", 503)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(stats); err != nil {
+		log.Printf("host stats: %v", err)
 	}
 }

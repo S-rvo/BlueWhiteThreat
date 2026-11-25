@@ -2,9 +2,12 @@ package db
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
@@ -15,37 +18,31 @@ var driver neo4j.DriverWithContext
 func InitNeo4jDriver(uri, username, password string) error {
 	var err error
 	driver, err = neo4j.NewDriverWithContext(uri, neo4j.BasicAuth(username, password, ""))
-	return err
+	if err != nil {
+		return err
+	}
+	if err := EnsureGraphSchema(); err != nil {
+		return errors.Join(err, driver.Close(context.Background()))
+	}
+	return nil
 }
 
 // SaveURL crée un nœud URL s'il n'existe pas déjà
-func SaveURL(url string) error {
+func SaveURL(ctx context.Context, url string) error {
+	c, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	cleanedURL := cleanOnionURL(url)
-	session := driver.NewSession(context.Background(), neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
-	defer session.Close(context.Background())
+	session := driver.NewSession(c, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(c)
 
-	_, err := session.ExecuteWrite(context.Background(), func(tx neo4j.ManagedTransaction) (any, error) {
-		_, err := tx.Run(context.Background(),
+	_, err := session.ExecuteWrite(c, func(tx neo4j.ManagedTransaction) (any, error) {
+		result, err := tx.Run(c,
 			"MERGE (u:URL {url: $url})",
 			map[string]interface{}{"url": cleanedURL})
-		return nil, err
-	})
-	return err
-}
-
-// SaveLink crée une relation LINKS_TO entre deux URLs
-func SaveLink(sourceURL, targetURL string) error {
-	cleanedSource := cleanOnionURL(sourceURL)
-	cleanedTarget := cleanOnionURL(targetURL)
-	session := driver.NewSession(context.Background(), neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
-	defer session.Close(context.Background())
-
-	_, err := session.ExecuteWrite(context.Background(), func(tx neo4j.ManagedTransaction) (any, error) {
-		_, err := tx.Run(context.Background(),
-			`MATCH (src:URL {url: $source})
-			 MERGE (tgt:URL {url: $target})
-			 MERGE (src)-[:LINKS_TO]->(tgt)`,
-			map[string]interface{}{"source": cleanedSource, "target": cleanedTarget})
+		if err != nil {
+			return nil, err
+		}
+		_, err = result.Consume(c)
 		return nil, err
 	})
 	return err
@@ -61,10 +58,78 @@ func CloseNeo4j() {
 }
 
 func cleanOnionURL(raw string) string {
-	raw = strings.ToLower(strings.TrimSpace(raw))
+	raw = strings.TrimSpace(raw)
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return raw
 	}
-	return parsed.Scheme + "://" + parsed.Host
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Fragment = ""
+	if parsed.Path == "/" {
+		parsed.Path = ""
+	}
+	return parsed.String()
+}
+
+// SaveLinks persists a page's edges in bounded transactions.
+func SaveLinks(ctx context.Context, source string, links []string) error {
+	for offset := 0; offset < len(links); offset += 250 {
+		end := offset + 250
+		if end > len(links) {
+			end = len(links)
+		}
+		batch := make([]string, 0, end-offset)
+		for _, link := range links[offset:end] {
+			batch = append(batch, cleanOnionURL(link))
+		}
+		if err := saveLinkBatch(ctx, source, batch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func saveLinkBatch(ctx context.Context, source string, links []string) error {
+	c, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	session := driver.NewSession(c, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(c)
+	_, err := session.ExecuteWrite(c, func(tx neo4j.ManagedTransaction) (any, error) {
+		result, err := tx.Run(c, "MERGE (src:URL {url: $source}) WITH src UNWIND $links AS link MERGE (tgt:URL {url: link}) MERGE (src)-[:LINKS_TO]->(tgt)", map[string]interface{}{"source": cleanOnionURL(source), "links": links})
+		if err != nil {
+			return nil, err
+		}
+		_, err = result.Consume(c)
+		return nil, err
+	})
+	return err
+}
+
+func Ready() error {
+	c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if RedisClient == nil || driver == nil {
+		return fmt.Errorf("databases not initialized")
+	}
+	if err := RedisClient.Ping(c).Err(); err != nil {
+		return err
+	}
+	return driver.VerifyConnectivity(c)
+}
+
+// EnsureGraphSchema is migration v1. Existing duplicates cause an actionable
+// startup error; no existing nodes are removed or merged automatically.
+func EnsureGraphSchema() error {
+	c, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	session := driver.NewSession(c, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(c)
+	result, err := session.Run(c, "CREATE CONSTRAINT crawler_url_unique IF NOT EXISTS FOR (u:URL) REQUIRE u.url IS UNIQUE", nil)
+	if err == nil {
+		_, err = result.Consume(c)
+	}
+	if err != nil {
+		return fmt.Errorf("crawler schema v1 (URL.url uniqueness): inspect duplicate URLs before migration: %w", err)
+	}
+	return nil
 }

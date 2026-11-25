@@ -10,12 +10,13 @@ import (
 
 func TestSaveLoadRoundTrip(t *testing.T) {
 	original := &Model{
-		Vocabulary: map[string]int{"malware": 0, "phishing": 1, "cve": 2},
-		IDF:        []float64{1.2, 0.8, 2.5},
-		Weights:    []float64{0.5, -0.3, 1.1},
-		Bias:       -0.42,
-		Threshold:  0.5,
-		Version:    "v1.0.0",
+		Vocabulary:  map[string]int{"malware": 0, "phishing": 1, "cve": 2},
+		IDF:         []float64{1.2, 0.8, 2.5},
+		Weights:     []float64{0.5, -0.3, 1.1},
+		Bias:        -0.42,
+		Threshold:   0.5,
+		SourceHeads: map[string]SourceHead{"darkweb_page": {Weights: []float64{.1, .2, .3}, Bias: -.2, Calibration: Calibrator{A: 1, B: .1}}},
+		Version:     "v1.0.0",
 	}
 
 	path := filepath.Join(t.TempDir(), "model.json")
@@ -70,5 +71,23 @@ func TestLoadInvalidJSON(t *testing.T) {
 	}
 	if m != nil {
 		t.Fatalf("Load() on invalid JSON returned non-nil model: %+v", m)
+	}
+}
+
+func TestLoadRejectsIncoherentDimensions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad-model.json")
+	data := `{"vocabulary":{"x":0},"idf":[1],"weights":[1],"threshold":0.5,"source_heads":{"darkweb_page":{"weights":[1,2],"bias":0,"calibration":{"a":1,"b":0}}}}`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("accepted a source head with an incoherent dimension")
+	}
+}
+
+func TestSaveRejectsInvalidDecisionValues(t *testing.T) {
+	m := &Model{Vocabulary: map[string]int{"x": 0}, IDF: []float64{1}, Weights: []float64{1}, Threshold: 2}
+	if err := Save(filepath.Join(t.TempDir(), "bad-model.json"), m); err == nil {
+		t.Fatal("accepted threshold outside [0,1]")
 	}
 }

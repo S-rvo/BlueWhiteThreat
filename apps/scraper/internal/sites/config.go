@@ -8,12 +8,17 @@ import (
 // SiteConfig décrit comment se connecter (optionnellement) à un site .onion
 // avant d'en récupérer le contenu.
 type SiteConfig struct {
-	LoginURL         string `json:"login_url"`
-	UsernameSelector string `json:"username_selector"`
-	PasswordSelector string `json:"password_selector"`
-	SubmitSelector   string `json:"submit_selector"`
-	UsernameEnv      string `json:"username_env"`
-	PasswordEnv      string `json:"password_env"`
+	LoginURL          string              `json:"login_url"`
+	UsernameSelector  string              `json:"username_selector"`
+	PasswordSelector  string              `json:"password_selector"`
+	SubmitSelector    string              `json:"submit_selector"`
+	UsernameEnv       string              `json:"username_env"`
+	PasswordEnv       string              `json:"password_env"`
+	SuccessSelector   string              `json:"success_selector"`
+	CredentialsKeyEnv string              `json:"credentials_key_env,omitempty"`
+	StateFile         string              `json:"state_file"`
+	Registration      *RegistrationConfig `json:"registration,omitempty"`
+	CAPTCHA           *CAPTCHAConfig      `json:"captcha,omitempty"`
 }
 
 // LoadSiteConfigs charge la config par domaine depuis un fichier JSON.
@@ -31,6 +36,14 @@ func LoadSiteConfigs(path string) (map[string]SiteConfig, error) {
 	var configs map[string]SiteConfig
 	if err := json.Unmarshal(data, &configs); err != nil {
 		return nil, err
+	}
+	// Persistent site accounts use the scraper key by default. Sites without a
+	// state file retain environment-only credentials.
+	for host, cfg := range configs {
+		if cfg.StateFile != "" && cfg.CredentialsKeyEnv == "" {
+			cfg.CredentialsKeyEnv = "BWT_CREDENTIALS_KEY"
+			configs[host] = cfg
+		}
 	}
 	return configs, nil
 }

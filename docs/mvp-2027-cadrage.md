@@ -1,8 +1,27 @@
 # Cadrage de référence — MVP BlueWhiteThreat, janvier 2027
 
 > Statut : brouillon de travail à valider par les deux étudiants  
-> Dernière mise à jour : 19 octobre 2026
+> Dernière mise à jour documentaire : 6 novembre 2026
 > Ticket de référence : GitHub #22
+
+## Note d’implémentation — extension des accès, 6 novembre 2026
+
+Le cadrage ci-dessous conserve le contrat MVP historique, notamment sa matrice des obstacles. Le code du scraper comporte désormais une extension optionnelle distincte : inscription bornée, sessions persistantes, identifiants chiffrés liés au site et adaptateur HTTP de challenge. Voir le [guide d’accès du scraper](scraper-access.md) pour le comportement réellement implémenté et ses limites. Cette extension ne constitue pas une validation de l’ensemble des exigences du MVP.
+
+En particulier, les cookies actuels sont stockés dans un fichier 0600, sans chiffrement applicatif ; le coffre référencé depuis MongoDB, la rotation automatisée, les états opérationnels complets et la reprise planifiée restent des objectifs, pas des fonctions livrées. L’admission CTI demeure indépendante de la possession d’un compte.
+
+## État d’implémentation — 24 novembre 2026
+
+- La chaîne ingestion → classifieur → extraction → relation Neo4j est
+  [rejouable sur fixtures](validation/2026-11-24-pipeline-smoke.md). Les
+  compteurs de couverture, de files d’attente et de fraîcheur sont exposés
+  dans [Prometheus](../monitoring/README.md#métriques-pipeline).
+- Ce test ne qualifie ni le classifieur ni le modèle d’extraction. Voir le
+  [nouveau protocole humain et la mesure du parser](qualification-nlp-parser.md).
+- Le registre de suivi, le versionnement et la purge des anciennes relations
+  du graphe, les workers de revisite dédiés, le connecteur Telegram public,
+  STIX/TAXII et les alertes CTI restent à livrer. L’extraction de mentions ne
+  constitue pas, à elle seule, un verdict CTI indépendant pour l’admission.
 
 ## 1. Finalité du MVP
 

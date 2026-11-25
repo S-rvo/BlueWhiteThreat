@@ -1,0 +1,70 @@
+{
+  "source_local": "data/darkweb-live-eval-2026-11-05/test-result.json",
+  "source_sha256": "bd792dade2112b196441da20bcfeaa7afbe5f4648af4b1d2dbfed95814cd1504",
+  "label_authority": "two local AI models, not human ground truth",
+  "threshold": 0.7625664883893212,
+  "baseline_threshold": 0.4887874623244017,
+  "baseline": {
+    "n": 140,
+    "tp": 1,
+    "fp": 24,
+    "fn": 0,
+    "tn": 115,
+    "precision": 0.04,
+    "recall": 1.0,
+    "f1": 0.07692307692307693,
+    "precision_ci95": [
+      0.007096233501987265,
+      0.19544063736193734
+    ],
+    "recall_ci95": [
+      0.20654931437723745,
+      1
+    ],
+    "transmission_rate": 0.17857142857142858
+  },
+  "candidate": {
+    "n": 140,
+    "tp": 0,
+    "fp": 4,
+    "fn": 1,
+    "tn": 135,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "precision_ci95": [
+      0,
+      0.4898908364545973
+    ],
+    "recall_ci95": [
+      0,
+      0.7934506856227626
+    ],
+    "transmission_rate": 0.02857142857142857
+  },
+  "annotation": {
+    "documents": 200,
+    "completed": 200,
+    "counts": {
+      "consensus": 140,
+      "pending": 0,
+      "abstention": 54,
+      "disagreement": 6
+    },
+    "consensus_coverage_completed": 0.7,
+    "label_authority": "agreement of two local AI models; not human truth",
+    "nlp_scored": false
+  },
+  "coverage": 0.7,
+  "minimum_class_counts_met": false,
+  "test_sources_supported": false,
+  "test_strata_supported": false,
+  "status": "not_qualified",
+  "production_promotion": false,
+  "limitations": [
+    "AI consensus can share errors.",
+    "Lexical deduplication does not prove event independence.",
+    "Public Q&A and advisories are not representative of Tor forums.",
+    "French advisories are a supplement, not forum posts."
+  ]
+}

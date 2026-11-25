@@ -26,21 +26,37 @@ func csvFile(t *testing.T, path string, rows [][]string) {
 		t.Fatal(err)
 	}
 }
+func runtimeFixture(t *testing.T, temp string) string {
+	t.Helper()
+	root := filepath.Join(temp, "classifier")
+	files := []string{"go.mod", "go.sum", "../scraper/internal/sites/content.go", "../scraper/internal/sites/fetch.go"}
+	for _, dir := range []string{"internal/text", "internal/tfidf", "internal/model", "internal/classify", "internal/dedup", "internal/confirmation", "internal/evalmetrics", "cmd/confirmfinal", "cmd/prepareconfirmation"} {
+		files = append(files, filepath.Join(dir, "fixture.go"))
+	}
+	for _, name := range files {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(name+" fixture\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
 func setup(t *testing.T) (dir, root string) {
 	t.Helper()
-	root, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
 	temp := t.TempDir()
+	root = runtimeFixture(t, temp)
 	dir = filepath.Join(temp, "campaign")
 	m := &model.Model{Vocabulary: map[string]int{"ransomware": 0}, IDF: []float64{1}, Weights: []float64{4}, Bias: -1, Threshold: 0.5, Version: "provisional-test"}
-	if err = model.Save(filepath.Join(temp, "candidate.json"), m); err != nil {
+	if err := model.Save(filepath.Join(temp, "candidate.json"), m); err != nil {
 		t.Fatal(err)
 	}
 	corpus := filepath.Join(temp, "corpus.csv")
 	csvFile(t, corpus, [][]string{{"id", "text", "label"}, {"used", "Fresh apples pears orchard harvest farming seasons", "0"}})
-	if _, err = Freeze(dir, filepath.Join(temp, "candidate.json"), corpus, root); err != nil {
+	if _, err := Freeze(dir, filepath.Join(temp, "candidate.json"), corpus, root); err != nil {
 		t.Fatal(err)
 	}
 	return
@@ -122,6 +138,17 @@ func TestFreezeDetectsTamperingAndDoesNotOverwrite(t *testing.T) {
 	}
 	if _, err = Load(dir, root); err == nil {
 		t.Fatal("accepted runtime mismatch")
+	}
+}
+
+func TestFreezeDetectsScraperSourceChange(t *testing.T) {
+	dir, root := setup(t)
+	extraction := filepath.Join(root, "../scraper/internal/sites/content.go")
+	if err := os.WriteFile(extraction, []byte("changed at runtime"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir, root); err == nil {
+		t.Fatal("accepted a change to the scraper source")
 	}
 }
 func TestConfirmationConsumesCampaignAndPersistsEvidence(t *testing.T) {

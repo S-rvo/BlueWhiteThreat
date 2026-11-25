@@ -1,7 +1,7 @@
 # Datasheet opérationnelle — services BlueWhiteThreat
 
 > Public : technicien, analyste CTI et développeur  
-> État de référence : branche `main`, 12 octobre 2026  
+> État de référence : 25 novembre 2026
 > Portée : environnement local de développement et de démonstration, pas production
 
 ## 1. Objectif du document
@@ -24,7 +24,15 @@ Elle complète `docs/mvp-2027-cadrage.md`. Elle décrit l'existant observable da
 3. Utiliser des fixtures sûres pour les tests, le développement frontend et la soutenance.
 4. Ne pas contourner de captcha, authentification, rate-limit ou mesure anti-bot.
 5. Arrêter la collecte et le réentraînement si le garde-fou de contenu interdit signale une correspondance ; une revue humaine est alors obligatoire.
-6. Considérer les identifiants `root/root`, `neo4j/password` et `user/user` présents dans la configuration comme des valeurs locales de développement à remplacer avant tout environnement partagé.
+6. Les ports Compose sont publiés uniquement sur `127.0.0.1`. Renseigner des identifiants dédiés hors Git. Si une ancienne installation a utilisé des identifiants par défaut ou exposé ses ports, prévoir une rotation séparée et vérifier les accès. La modification du YAML et de `.env` ne change pas les conteneurs déjà en cours ni le mot de passe des volumes existants.
+
+**Migration des images locales.** L’image de développement du scraper déjà
+construite avant ce correctif peut contenir les fichiers `.env` et
+`.credentials.env`. Ne pas redistribuer les anciennes images ni exporter
+leur cache de build. Recréer l’image avec le contexte filtré lors d’une
+maintenance ; si une image a été partagée, traiter les identifiants comme
+potentiellement exposés. Préparer une migration des sessions avant toute
+rotation de leur clé de chiffrement.
 
 ## 3. Carte rapide des services
 
@@ -33,15 +41,15 @@ Elle complète `docs/mvp-2027-cadrage.md`. Elle décrit l'existant observable da
 | `tor1`, `tor2`, `tor3` | `apps/proxy` | Existant | `9051`, `9052`, `9053` | réseau Tor | Proxies SOCKS5 dédiés à la collecte Tor |
 | `redis` | image officielle | Existant | `6379` | aucune | Files et ensembles de déduplication |
 | `mongodb` | image officielle | Existant | `27017` | aucune | Contenu brut, classification et entités |
-| `mongo-express` | image officielle | Existant, accès à vérifier | `8082` déclaré | MongoDB | Inspection de développement de MongoDB |
 | `neo4j` | image officielle | Existant | `7474`, `7687` | aucune | Graphe des URL, entités et relations |
-| `crawler` | `apps/crawler` | Existant, seed codée en dur | aucun port hôte | Redis, Neo4j, Tor | Découverte des URL `.onion` |
-| `scraper` | `apps/scraper` | Existant | aucun | Redis, MongoDB, Tor | Récupération des pages découvertes |
+| `crawler`, `crawler2`, `crawler3` | `apps/crawler` | Existant | aucun | Redis, Neo4j, Tor | Découverte et revisites ; file et baux partagés |
+| `collectseeds` | `apps/crawler/cmd/collectseeds` | Profil facultatif `seeds` | aucun | Redis, catalogues publics | Import quotidien de points de départ |
+| `scraper` | `apps/scraper` | Continu, Chromium cloisonné | aucun (8080 interne) | Redis, MongoDB, Tor | Rendu et sauvegarde des pages |
+| `redis-backup` | `apps/crawler/scripts/redis-backup.sh` | Existant | aucun | Redis, emplacement de sauvegarde | Export RDB et rotation locale |
 | `classifier` | `apps/classifier` | Existant, modèle requis | aucun | MongoDB, `model.json` | Pertinence CTI et boucle de revue humaine |
-| `api` | `apps/api` | Existant, minimal | `8083` | MongoDB | Lecture brute de la collection `article` |
+| `api` | `apps/api` | Profil facultatif `api` | `8083` | MongoDB | Métadonnées pertinentes paginées et métriques agrégées |
 | `front` | `apps/front` | Existant, partiel | `8080` | API, futur graphe | Interface Nuxt analyste |
-| `target` | `apps/target` | Existant, fixture | `8081` | aucune fonctionnelle | Site Vue de test, jamais une source réelle |
-| parser CTI | futur `apps/parser` | **Planifié** | à définir | MongoDB, Ollama, Neo4j | Extraction d'entités structurées |
+| `parser` | `apps/parser` | Existant | aucun | MongoDB, Ollama, Neo4j | Extraction d'entités et projection dans le graphe |
 | registre des sources | à définir | **Planifié** | à définir | API, base de données | Validation analyste des sources candidates |
 | connecteur forums | à définir | **Planifié** | aucun prévu | registre, MongoDB | Collecte de forums validés |
 | connecteur Telegram | `apps/telegram/cmd/telegram` | **Découverte et suivi paginé sans compte** | aucun | GitHub, Telegram ; MongoDB optionnel | Files découverte/suivi, curseurs, planificateur, sortie JSON ou MongoDB ; voir `apps/telegram/README.md` |
@@ -54,37 +62,45 @@ Elle complète `docs/mvp-2027-cadrage.md`. Elle décrit l'existant observable da
 
 - Docker avec la commande `docker compose` ;
 - Go 1.24 pour travailler hors conteneur sur les services Go ;
-- Node.js 22 pour travailler hors conteneur sur `front` et `target` ;
+- Node.js 22 pour travailler hors conteneur sur `front` ;
 - Git ;
-- au moins les ports 6379, 7474, 7687, 8080 à 8083 et 9051 à 9053 libres.
+- au moins les ports 6379, 7474, 7687, 8080, 8083 et 9051 à 9053 libres.
 
 ### 4.2 Fichiers d'environnement locaux
 
 Depuis la racine du dépôt :
 
 ```bash
+cp .env.example .env
 cp apps/scraper/.env.example apps/scraper/.env
 cp apps/classifier/.env.example apps/classifier/.env
 ```
 
-Renseigner les fichiers sans les commiter. Pour l'environnement Compose actuel, les valeurs de développement doivent être cohérentes entre MongoDB, le scraper et le classifieur :
+Renseigner les fichiers sans les commiter. Dans le `.env` racine, définir `NEO4J_PASSWORD`. Si le volume Neo4j existe déjà, utiliser son mot de passe actuel ; le modifier dans ce fichier ne le fait pas tourner dans Neo4j. Pour l'environnement Compose actuel, les valeurs de développement doivent être cohérentes entre MongoDB, le scraper et le classifieur :
 
 ```dotenv
 MONGO_HOST=mongodb
 MONGO_PORT=27017
-MONGO_INITDB_ROOT_USERNAME=root
-MONGO_INITDB_ROOT_PASSWORD=root
+MONGO_INITDB_ROOT_USERNAME=
+MONGO_INITDB_ROOT_PASSWORD=
 MONGO_DB=BlueWhiteThreat
 ```
 
 Ajouter côté scraper :
 
 ```dotenv
-SCRAPER_INTERVAL_MIN=30
+SCRAPER_WORKERS_PER_PROXY=2
 REDIS_HOST=redis
 REDIS_PORT=6379
-SITES_CONFIG_PATH=./data/sites.json
 ```
+
+Le scraper charge aussi `apps/scraper/.credentials.env`, réservé à sa clé `BWT_CREDENTIALS_KEY`. Ce fichier privé est transmis uniquement au service scraper par Compose ; ne pas placer la clé dans le `.env` partagé avec MongoDB et le parser. Sur une nouvelle installation, suivre la [préparation de la clé](scraper-access.md#préparer-une-nouvelle-installation). Ne jamais remplacer une clé existante pour un simple redémarrage.
+
+Le scraper n’a plus d’intervalle de traitement à configurer. N’ajouter
+`SITES_CONFIG_PATH` que pour une configuration explicite montée en lecture seule.
+Si le poste a besoin de réglages spécifiques, garder
+`docker-compose.override.yaml` local et ignoré par Git. Pour un disque de
+sauvegarde séparé, voir [isolation et sauvegarde](scraper-isolation-backup.md).
 
 Ajouter côté classifieur :
 
@@ -99,7 +115,7 @@ Laisser `RELEVANCE_THRESHOLD` vide pour utiliser le seuil enregistré dans le mo
 ### 4.3 Contrôle avant démarrage
 
 ```bash
-docker compose config
+docker compose config --quiet
 docker compose config --services
 git status --short
 ```
@@ -110,10 +126,10 @@ Résultat attendu : la configuration Compose est valide et les fichiers `.env` n
 
 ### 5.1 Démarrage prudent de l'infrastructure
 
-Ne pas commencer par `docker compose up` sur toute la stack : le classifieur s'arrête si `model.json` n'existe pas et le crawler utilise actuellement une seed `.onion` codée en dur.
+Démarrer l’infrastructure séparément afin de contrôler les bases avant les workers et de ne pas lancer de collecte involontaire. Le classifieur demande un `model.json` présent.
 
 ```bash
-docker compose up -d redis mongodb neo4j tor1 tor2 tor3 target
+docker compose up -d redis redis-backup mongodb neo4j tor1 tor2 tor3
 docker compose ps
 ```
 
@@ -122,7 +138,7 @@ docker compose ps
 ```bash
 docker compose exec redis redis-cli ping
 docker compose exec redis redis-cli HGETALL crawler:stats
-docker compose exec neo4j cypher-shell -u neo4j -p password "RETURN 1 AS ok;"
+docker compose exec neo4j cypher-shell -u neo4j "RETURN 1 AS ok;"
 docker compose logs --tail=50 mongodb neo4j tor1 tor2 tor3
 ```
 
@@ -140,10 +156,16 @@ Uniquement après validation du périmètre des sources :
 ```bash
 docker compose up -d crawler
 docker compose up -d scraper
-docker compose up -d api front
+docker compose --profile api up -d api front
 ```
 
-Le classifieur se lance seulement après création de `apps/classifier/model.json`, décrite dans sa fiche.
+Le conteneur scraper contient déjà six workers Chromium par défaut. Vérifier
+d’abord son débit, les échecs et la RAM avant d’augmenter la concurrence.
+`collectseeds` est un service distinct, facultatif ; son absence n’arrête pas
+le traitement des files existantes. Voir [les états des files](redis-crawler-scraper.md).
+
+Le classifieur charge `apps/classifier/model.json` en lecture seule en production.
+Le modèle versionné suffit pour le démarrage ; aucun entraînement n’est nécessaire.
 
 ### 5.4 Supervision courante
 
@@ -159,8 +181,11 @@ Contrôles utiles :
 docker compose exec redis redis-cli SCARD urls_to_crawl
 docker compose exec redis redis-cli SCARD urls_crawled
 docker compose exec redis redis-cli SCARD urls_scraped
-docker compose exec crawler curl -fsS http://localhost:8080/health
-docker compose exec crawler curl -fsS http://localhost:8080/stats
+docker compose exec redis wget -qO- http://crawler:8080/health
+docker compose exec redis wget -qO- http://crawler:8080/stats
+docker compose exec scraper /usr/local/bin/scraper --check-health
+docker compose exec redis redis-cli ZCARD scraper:pending
+docker compose exec redis redis-cli HGETALL scraper:stats
 curl -fsS http://localhost:8083/data
 ```
 
@@ -187,8 +212,7 @@ Ne pas utiliser `docker compose down -v` dans le workflow normal : cette option 
 | Usage | Adresse locale | État |
 |---|---|---|
 | Interface analyste Nuxt | `http://localhost:8080` | Partielle |
-| API articles | `http://localhost:8083/data` | Fonctionnelle mais non paginée |
-| Fixture de test | `http://localhost:8081` | Développement uniquement |
+| API articles | `http://localhost:8083/data?limit=25` | Métadonnées uniquement ; curseur dans les en-têtes |
 | Neo4j Browser | `http://localhost:7474` | Fonctionnel |
 | Mongo Express | `http://localhost:8082` | À vérifier avant usage |
 
@@ -212,7 +236,9 @@ Depuis `apps/classifier`, avec MongoDB accessible :
 go run ./cmd/export
 ```
 
-Le fichier `review_queue.jsonl` contient les candidats non encore revus. L'analyste crée un fichier séparé de décisions au format JSONL :
+Le fichier local `review_queue.jsonl`, ignoré par Git, contient les candidats non
+encore revus et du texte collecté. L'analyste crée un fichier séparé de décisions au
+format JSONL :
 
 ```json
 {"id":"identifiant-du-document","label":1}
@@ -223,12 +249,11 @@ Puis le développeur ou l'opérateur applique les décisions :
 
 ```bash
 DECISIONS_PATH=decisions.jsonl go run ./cmd/applyreview
-go run ./cmd/bootstrap
-go run ./cmd/checkfilter
-go run ./cmd/train
 ```
 
 Convention : `1` signifie pertinent CTI, `0` non pertinent. Les décisions doivent être prises sur des lots bornés et relues ; elles ne doivent pas contenir le texte source dans le fichier de décisions.
+L’application de décisions ne déclenche aucun entraînement. La procédure de
+préparation d’un candidat figure dans la fiche du classifieur.
 
 ### 6.4 Workflow des nouvelles sources — cible non encore implémentée
 
@@ -266,11 +291,10 @@ cd apps/api && go test ./...
 
 Au 12 octobre 2026, ces quatre commandes passent. L'API ne contient toutefois aucun test applicatif ; sa commande valide uniquement la compilation.
 
-Frontend et fixture :
+Frontend :
 
 ```bash
 cd apps/front && npm ci && npm run build
-cd apps/target && npm ci && npm run build
 ```
 
 Ces builds nécessitent le téléchargement des dépendances si `node_modules` est absent.
@@ -349,7 +373,7 @@ docker compose exec mongodb sh -lc 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p 
 
 **Critère prêt.** La commande retourne `ok: 1`.
 
-**Modification.** Les schémas applicatifs sont dans `apps/scraper/internal/sites/page.go`, `apps/classifier/internal/db/mongo.go` et, à terme, le parser. Toute évolution de champ doit préserver provenance et compatibilité de lecture.
+**Modification.** Les schémas applicatifs sont dans `apps/scraper/internal/sites/page.go`, `apps/classifier/internal/db/mongo.go` et `apps/parser/internal/db/mongo.go`. Toute évolution de champ doit préserver provenance et compatibilité de lecture.
 
 ### 8.4 Neo4j — `neo4j`
 
@@ -359,31 +383,16 @@ docker compose exec mongodb sh -lc 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p 
 
 ```bash
 docker compose up -d neo4j
-docker compose exec neo4j cypher-shell -u neo4j -p password "RETURN 1 AS ok;"
+docker compose exec neo4j cypher-shell -u neo4j "RETURN 1 AS ok;"
 ```
 
 **Inspection.** Ouvrir `http://localhost:7474` puis utiliser des requêtes bornées, par exemple `MATCH (n) RETURN n LIMIT 25`.
 
 **Modification.** Code actuel : `apps/crawler/internal/db/neo4j.go`. La projection CTI planifiée doit utiliser `MERGE`, des contraintes d'unicité et une provenance documentaire.
 
-### 8.5 Fixture web — `target`
+### 8.5 Crawler — `crawler`
 
-**Responsabilité.** Fournir une interface locale contrôlée pour des essais de scraping/front ; elle ne représente pas une source fiable réelle.
-
-**Lancer/tester.**
-
-```bash
-docker compose up -d target
-curl -I http://localhost:8081
-```
-
-**Modifier.** Répertoire `apps/target`, puis `npm run dev` ou `npm run build`.
-
-**Limite.** Le scraper darkweb actuel force un proxy Tor pour les URL de sa file. La fixture n'est donc pas encore un corpus de bout en bout directement compatible avec ce chemin.
-
-### 8.6 Crawler — `crawler`
-
-**Responsabilité.** Lire une seed, découvrir des liens, dédupliquer via Redis et écrire les relations URL dans Neo4j.
+**Responsabilité.** Visiter les pages planifiées, découvrir des liens, dédupliquer et réserver via Redis, puis écrire les relations URL dans Neo4j.
 
 **Fichiers principaux.** `apps/crawler/cmd/main.go`, `internal/crawler`, `internal/db`, `internal/api`.
 
@@ -397,8 +406,8 @@ docker compose logs -f crawler
 **Smoke test.**
 
 ```bash
-docker compose exec crawler curl -fsS http://localhost:8080/health
-docker compose exec crawler curl -fsS http://localhost:8080/stats
+docker compose exec redis wget -qO- http://crawler:8080/health
+docker compose exec redis wget -qO- http://crawler:8080/stats
 ```
 
 **Tests développeur.**
@@ -408,13 +417,20 @@ cd apps/crawler
 go test ./...
 ```
 
-**Critère prêt.** Connexions Redis/Neo4j établies, endpoint `/health` à `ok`, progression ou fin contrôlée de la file.
+**Critère prêt.** `/ready` vérifie aussi Redis et Neo4j, contrairement à
+`/health` qui indique seulement que l’API répond. Quand la file est vide,
+le crawler attend : la progression doit être lue avec les échéances.
 
-**Limite bloquante.** La seed est codée en dur dans `cmd/main.go` et le crawler s'arrête quand la file est vide. Ne pas le considérer comme une collecte continue ni comme compatible avec le futur registre avant correction.
+**Collectseeds.** Le profil facultatif `seeds` consulte toutes les 24 heures des
+catalogues publics (dont DeepDarkCTI et Ahmia) pour soumettre des points de
+départ à Redis. Il dénombre les résultats, mais c’est le crawler qui vérifie
+si les adresses répondent. Distinguer `collectseeds_last_found`,
+`collectseeds_last_added` et les admissions différées dans Redis. Ni ces
+chiffres ni la découverte n’engagent le futur registre de sources.
 
-### 8.7 Scraper — `scraper`
+### 8.6 Scraper — `scraper`
 
-**Responsabilité.** Calculer `urls_crawled - urls_scraped`, charger les pages via les trois proxies Tor et persister le contenu dans MongoDB.
+**Responsabilité.** Réserver une tâche Redis, rendre la page puis sauvegarder le contenu dans MongoDB avant de confirmer le succès.
 
 **Fichiers principaux.** `apps/scraper/cmd/main.go`, `internal/sites`, `internal/db`, `data/sites.json`.
 
@@ -425,7 +441,11 @@ docker compose up -d scraper
 docker compose logs -f scraper
 ```
 
-Le scraper exécute un passage au démarrage puis un nouveau passage toutes les `SCRAPER_INTERVAL_MIN` minutes.
+Le scraper travaille en continu, abandonne Chromium quand il reste inactif
+et réessaie après une panne d’infrastructure. À l’arrêt propre, un worker
+libère sa réservation ; après un arrêt brutal, la file la récupère à
+expiration. Sur un Mac en vraie veille, tout traitement est suspendu.
+Voir le [guide Mac et les contrôles de bascule](redis-crawler-scraper.md).
 
 **Tests développeur.**
 
@@ -434,27 +454,59 @@ cd apps/scraper
 go test ./...
 ```
 
-**Critère prêt.** Les URL non traitées sont consommées, les documents sont upsertés dans `BlueWhiteThreat.article` et les URL terminées rejoignent `urls_scraped`.
+**Critère prêt.** `--check-health` vérifie Redis et MongoDB ; un succès métier
+se mesure dans `scraper:stats` après écriture MongoDB. Un conteneur sain
+n’indique pas à lui seul que des pages sont sauvegardées.
 
-**Configuration de connexion optionnelle.** `apps/scraper/data/sites.json` ne doit contenir que les noms des variables d'environnement, jamais les identifiants eux-mêmes.
+**Configuration de connexion optionnelle.** Partir de `apps/scraper/examples/sites.json` et monter un fichier local dédié en lecture seule, jamais le dépôt. Le fichier contient des sélecteurs, chemins d’état et noms de variables, pas les identifiants eux-mêmes. Voir le [guide d’accès du scraper](scraper-access.md).
+
+- Avec `state_file`, `credentials_key_env` vaut par défaut `BWT_CREDENTIALS_KEY`.
+- Le fichier d’état lie les identifiants chiffrés à une origine ; ne pas le partager entre sites.
+- Les cookies sont restaurés en premier ; après expiration, le compte enregistré sert à la connexion.
+- `registration_attempted` évite les inscriptions répétées, même après un timeout.
+- Le solveur est un adaptateur HTTP à configurer, pas un service de résolution livré avec le projet.
+- Les clés et fichiers d’état sont à sauvegarder séparément ; les cookies ne sont pas chiffrés par cette implémentation.
+- La présence d’un compte n’influence pas les verdicts NLP/IA.
+
+Après modification de l’environnement, recréer le scraper :
+
+```bash
+docker compose up -d --no-deps --force-recreate scraper
+```
+
+Tests complémentaires depuis `apps/scraper` :
+
+```bash
+go test -race ./internal/sites
+go vet ./...
+```
+
+Les tests unitaires couvrent le chiffrement et la restauration, le lien au site, les clés invalides, les permissions, la configuration par défaut et le contrat HTTP du solveur. Les formulaires réels nécessitent encore une validation navigateur.
 
 **Limite importante.** Le code marque actuellement une URL comme scrapée même après un échec, afin d'éviter les boucles infinies. L'opérateur doit donc utiliser les logs pour distinguer succès et abandon ; un statut de tentative persistant reste à concevoir.
 
-### 8.8 Classifieur — `classifier`
+### 8.7 Classifieur — `classifier`
 
 **Responsabilité.** Ajouter `relevance.relevant`, `score` et `model_version` aux articles non classés.
 
-**Fichiers principaux.** `apps/classifier/cmd`, `internal`, `data/seed_keywords.json`, `retrain_loop.sh`.
+**Fichiers principaux.** `apps/classifier/cmd`, `internal`, `data/seed_keywords.json`.
 
-**Préparer le modèle.** Depuis `apps/classifier`, avec MongoDB accessible et un corpus autorisé :
+**Préparer un candidat (sur décision explicite).** Depuis `apps/classifier`,
+avec MongoDB accessible et un corpus identifié :
 
 ```bash
-go run ./cmd/bootstrap
+BOOTSTRAP_OUTPUT=/chemin/corpus.csv go run ./cmd/bootstrap
 go run ./cmd/checkfilter
-go run ./cmd/train
 ```
 
-Ne pas exécuter `train` si `checkfilter` trouve une correspondance. Le fichier `model.json` généré est local et ignoré par Git.
+Attendre la fin du contrôle et lire le résultat : le code de sortie seul
+n’indique pas le nombre de correspondances. Si le contrôle échoue ou trouve
+une correspondance, arrêter la procédure. Sinon, écrire le candidat et son
+rapport hors de l’artefact déployé :
+
+```bash
+TRAINING_DATA=/chemin/corpus.csv CANDIDATE_MODEL_PATH=/chemin/candidat.json go run ./cmd/train
+```
 
 **Lancer.**
 
@@ -467,7 +519,7 @@ docker compose logs -f classifier
 
 ```bash
 cd apps/classifier
-go test ./...
+go test ./cmd/... ./internal/...
 ```
 
 **Diagnostic.**
@@ -476,31 +528,44 @@ go test ./...
 go run ./cmd/diagfp --threshold 0.99 --limit 30
 ```
 
-**Boucle automatique.** `./retrain_loop.sh` est un processus continu. Ne le lancer que sous supervision, après validation du corpus et de la politique de promotion du modèle.
+**Reprendre une amélioration.** Consulter le [registre des essais](../apps/classifier/EXPERIMENTS.md)
+avant toute nouvelle campagne. L’ancienne boucle automatique est archivée et
+ne fait plus partie du démarrage ni du runbook opérateur.
 
 **Critère prêt.** Un modèle est chargé, les articles non classés reçoivent un verdict et les logs indiquent sa version et le nombre de documents traités.
 
-### 8.9 API — `api`
+### 8.8 API — `api`
 
-**Responsabilité actuelle.** Exposer `GET /data`, qui retourne tous les documents de `BlueWhiteThreat.article`.
+**Responsabilité.** `GET /data` renvoie une page JSON de métadonnées des
+articles positifs : `id`, `source_type`, `scraped_at`. Ni contenu, ni URL
+source, ni IOC, ni détail Mongo ne font partie du contrat. `limit` vaut 25
+par défaut, maximum 100. S’il existe une page suivante, transmettre
+`X-Next-Cursor` dans le paramètre `cursor` de la requête suivante.
 
-**Lancer/tester.**
+**Configurer.** Copier `apps/api/.env.example` vers `apps/api/.env`.
+Avec un compte opérateur MongoDB, créer un utilisateur distinct dans
+`BlueWhiteThreat` avec le rôle `read` de cette base, pas de rôle admin ni
+d’écriture. Renseigner `MONGODB_URI` avec ce compte, le nom de service
+`mongodb` et la base d’authentification correspondante. Encoder dans l’URI
+les caractères réservés des identifiants. Le service ne démarre pas sans URI.
+Le profil `api` n’est pas lancé par défaut.
 
 ```bash
-docker compose up -d api
-curl -fsS http://localhost:8083/data
+docker compose --profile api up -d api
+curl -fsS http://localhost:8083/healthz
+curl -fsS http://localhost:8083/readyz
+curl -fsS -i 'http://localhost:8083/data?limit=25'
 ```
 
-**Modifier.** `apps/api/cmd/main.go`, puis :
+`/healthz` teste le serveur ; `/readyz` vérifie que la lecture Mongo est
+possible. `/metrics` fournit les agrégats. Cette API locale n’a pas
+d’authentification HTTP : ne pas la publier sur une interface externe ni
+derrière un proxy accessible à des tiers. Les en-têtes CORS n’autorisent que le front local sur le port 8080.
 
-```bash
-cd apps/api
-go test ./...
-```
+**Tester.** `(cd apps/api && go test ./...)` ou le
+[scénario isolé complet](validation/2026-11-24-pipeline-smoke.md).
 
-**Limites bloquantes.** L'URI MongoDB est codée en dur, `MONGODB_URI` n'est pas utilisée, et `/data` n'a ni pagination ni limite. L'API ne doit pas être exposée hors du poste local avant correction.
-
-### 8.10 Frontend analyste — `front`
+### 8.9 Frontend analyste — `front`
 
 **Responsabilité.** Afficher les articles et, à terme, les entités, graphes, métriques, sources candidates et alertes.
 
@@ -525,22 +590,32 @@ npm run build
 
 **Limites connues.** La page menaces dépend de `http://localhost:8083/data`. La page graphe appelle actuellement `http://localhost:8080/graph`, alors qu'aucun endpoint hôte correspondant n'est exposé par le Compose actuel. La vue graphe n'est donc pas un critère de réussite tant que le contrat API n'est pas corrigé.
 
-### 8.11 Mongo Express — `mongo-express`
+### 8.10 Inspection locale de MongoDB
 
-**Responsabilité.** Inspection locale de MongoDB, jamais interface analyste.
+Mongo Express et ses identifiants par défaut ont été retirés du Compose.
+Pour une inspection ponctuelle, ouvrir `mongosh` via `docker compose exec
+mongodb mongosh` avec un compte opérateur approprié. Ne pas publier les
+sorties contenant les textes, URL ou données personnelles.
 
-**Lancer.**
+### 8.11 Projection CTI — `parser`
 
-```bash
-docker compose up -d mongo-express
-docker compose logs --tail=50 mongo-express
-```
+Le parser ne traite automatiquement que les documents classés pertinents
+et non marqués pour revue. Ollama local est le chemin par défaut ; Claude
+n’est activé qu’avec `PARSER_ENABLE_REMOTE_FALLBACK=true` et une clé fournie
+au parser. Cette option peut transmettre le texte au fournisseur : laisser
+désactivée pour les données sensibles et la démo hors ligne. Les contextes
+de build excluent les fichiers `.env` et les données ; la configuration
+privée est injectée au lancement, pas copiée dans les images.
 
-**Limite connue.** Le Compose déclare `8082:8082`, alors que le port interne habituel de l'image est 8081. Vérifier les logs et corriger le mapping avant de compter sur `http://localhost:8082`.
+L’extraction est conservée dans `article.entities` et rejetée si le texte
+a changé avant l’écriture. La projection Neo4j peut être rejouée sans
+relancer l’extraction. Les échecs de projection sont journalisés et remis
+en file. Ce rejeu ne supprime pas les anciennes relations après modification
+ou déclassement d’un document : cette réconciliation est un chantier distinct.
 
 ### 8.12 Services planifiés
 
-Les composants suivants ne sont pas présents dans le code : parser CTI, registre des sources, connecteur forums dédié, export STIX/TAXII et alerting. Leur fiche opérationnelle devra être ajoutée lorsque leur premier exécutable et leur contrat de configuration existeront.
+Les composants suivants ne sont pas présents dans le code : registre des sources, connecteurs forums/Telegram dédiés, export STIX/TAXII et alertes CTI. Le profil `alerting` existant ne surveille que la file du crawler ; son webhook facultatif `ALERT_WEBHOOK_URL` accepte uniquement une URL Slack HTTPS, sans redirection. Leur fiche opérationnelle devra être ajoutée lorsque leur premier exécutable et leur contrat de configuration existeront.
 
 Pour chacun, la Definition of Done documentaire minimale sera :
 
@@ -569,12 +644,12 @@ Pour chacun, la Definition of Done documentaire minimale sera :
 | Symptôme | Vérification | Action sûre |
 |---|---|---|
 | Le classifieur redémarre en boucle | logs : modèle absent | générer `model.json` après bootstrap, contrôle sécurité et entraînement |
-| Le scraper ne traite rien | `SCARD urls_crawled`, `SCARD urls_scraped` | vérifier les ensembles Redis et les logs, ne pas vider les données à l'aveugle |
-| Une URL échoue une fois puis disparaît | logs scraper et ensemble `urls_scraped` | documenter l'échec ; le statut persistant est une dette connue |
+| Le scraper ne traite rien | sonde `--check-health`, files `scraper:pending` et `scraper:inflight` | contrôler MongoDB, Redis, Chromium et la progression, sans purge |
+| Une URL est en retard ou échoue | échéance, `scraper:retry_due`, `scraper:dead` et `scraper:blocked` | distinguer retard, échec temporaire, quarantaine et refus |
 | Le frontend affiche zéro article | API `/data`, logs API, MongoDB | vérifier l'API avant le frontend |
 | La vue graphe échoue | requête `/graph` dans le navigateur | endpoint non disponible actuellement ; utiliser Neo4j Browser pour le diagnostic |
 | Mongo Express est inaccessible | logs et mapping de port | corriger le port interne du service avant usage |
-| Le crawler s'arrête | taille `urls_to_crawl` | comportement actuel normal quand la file est vide |
+| Le crawler ne prend plus de tâche | `/ready`, file prête et échéances | une file vide ou future est normale ; diagnostiquer un processus arrêté |
 | Un test Go échoue sur le cache dans un sandbox | permissions du cache Go | définir temporairement un `GOCACHE` dans un répertoire autorisé, sans changer le projet |
 
 ## 11. Checklist avant une démonstration
@@ -618,10 +693,10 @@ docker compose -p bluewhitethreat -f docker-compose.monitoring.yaml up -d
 
 Ouvrir ensuite `http://localhost:3000`, puis le dossier **BlueWhiteThreat**. La procédure complète, les contrôles de santé, les ports, l'arrêt et les limites sont documentés dans `monitoring/README.md`.
 
-Le premier panneau Grafana conserve un inventaire explicite de `crawler`, `scraper`, `api`, `classifier`, `tor1`, `tor2`, `tor3`, `front`, `target`, `mongodb`, `redis`, `neo4j`, `mongo-express` et des composants de monitoring. Les services non démarrés apparaissent **HORS LIGNE** au lieu de disparaître. Les filtres **Service** et **Conteneur** pilotent ensemble les graphes de performance et les logs.
+Le premier panneau Grafana conserve un inventaire explicite de `crawler`, `scraper`, `api`, `classifier`, `tor1`, `tor2`, `tor3`, `front`, `mongodb`, `redis`, `neo4j` et des composants de monitoring. Les services non démarrés apparaissent **HORS LIGNE** au lieu de disparaître. Les filtres **Service** et **Conteneur** pilotent ensemble les graphes de performance et les logs.
 
 Cette visibilité ne constitue pas une autorisation de collecte : ne pas démarrer automatiquement le crawler, le scraper ou les proxies sur des sources réelles. Appliquer d'abord les contrôles de périmètre, d'environnement et de contenu décrits dans ce runbook.
 
 **Persistance.** Un arrêt avec `docker compose down` conserve les volumes. L'option `down -v` les supprime : l'historique Prometheus/Loki, les réglages locaux Grafana et les données MongoDB/Neo4j sont alors perdus. Au prochain `up -d`, Docker recrée des volumes vides et Grafana reprovisionne automatiquement le dashboard et ses sources depuis le dépôt. Utiliser `-v` uniquement pour une remise à zéro volontaire.
 
-Les métriques métier restent une étape suivante : crawler, scraper, classifier et API devront exposer `/metrics` sans inclure de contenu ou d'identifiant sensible.
+Le tableau **Crawler et scraper — files Redis** utilise les métriques agrégées du scraper. La cible Prometheus `bwt-crawl-queues` est disponible lorsque le scraper et le monitoring partagent le réseau d’observation ; aucun port scraper n’est publié sur le poste.

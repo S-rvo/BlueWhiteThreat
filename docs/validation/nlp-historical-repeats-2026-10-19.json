@@ -1,0 +1,18 @@
+{
+  "all_decisions_stable": true,
+  "f1": 0,
+  "false_negatives": 43,
+  "false_positives": 7,
+  "inferences": 1500,
+  "model_sha256": "0c00b06c8f48df847d3ef813ac45d8f1689d49736912746c4862b9c29dbdbb89",
+  "model_version": "2026-10-17T20-52-35",
+  "precision": 0,
+  "recall": 0,
+  "repetitions_per_text": 30,
+  "threshold": 0.5819606191352668,
+  "true_negatives": 0,
+  "true_positives": 0,
+  "unique_texts": 50,
+  "label_provenance": "Historical evaluation mistakes only; deliberately biased diagnostic, not a representative evaluation.",
+  "max_absolute_difference_from_historical_score": 0
+}

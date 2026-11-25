@@ -152,3 +152,37 @@ func TestClassifyArticlePersistsPolicyAndZeroVectorReview(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyArticleSourceUsesStableSourceType(t *testing.T) {
+	m := &model.Model{
+		Vocabulary:       map[string]int{"known": 0},
+		IDF:              []float64{1},
+		Weights:          []float64{0},
+		Bias:             0,
+		Threshold:        .6,
+		SourceThresholds: map[string]float64{"darkweb_page": .4},
+		Version:          "source-aware-test",
+	}
+	c := classify.New(m)
+	known, _ := classifyArticleSource(c, "known", "darkweb_page")
+	unknown, _ := classifyArticleSource(c, "known", "https://example.onion/page")
+	if !known.Relevant || unknown.Relevant {
+		t.Fatalf("stable type relevant=%v; URL fallback relevant=%v", known.Relevant, unknown.Relevant)
+	}
+}
+
+func TestClassifyArticleSourceMapsLegacyDocumentsToDarkwebType(t *testing.T) {
+	m := &model.Model{
+		Vocabulary:       map[string]int{"known": 0},
+		IDF:              []float64{1},
+		Weights:          []float64{0},
+		Bias:             0,
+		Threshold:        .6,
+		SourceThresholds: map[string]float64{"darkweb_page": .4},
+		Version:          "source-aware-test",
+	}
+	r, skip := classifyArticleSource(classify.New(m), "known", "")
+	if skip || !r.Relevant {
+		t.Fatalf("legacy document did not use darkweb source policy: skip=%v relevant=%v", skip, r.Relevant)
+	}
+}

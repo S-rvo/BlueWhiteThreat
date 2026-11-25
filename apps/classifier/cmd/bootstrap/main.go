@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/bootstrap"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/db"
@@ -22,6 +23,8 @@ func main() {
 	keywordsPath := getEnvOrDefault("SEED_KEYWORDS_PATH", "data/seed_keywords.json")
 	reviewedPath := getEnvOrDefault("REVIEWED_LABELS_PATH", "data/reviewed_labels.csv")
 	excludedPath := getEnvOrDefault("EXCLUDED_IDS_PATH", "data/excluded_ids.csv")
+	themeNegativesPath := getEnvOrDefault("THEME_NEGATIVES_PATH", "data/theme_negatives.csv")
+	inScopeThemes := parseThemeSet(os.Getenv("INSCOPE_THEMES"))
 
 	keywords, err := bootstrap.LoadKeywords(keywordsPath)
 	if err != nil {
@@ -45,6 +48,18 @@ func main() {
 		log.Fatalf("failed to load excluded ids: %v", err)
 	}
 	log.Printf("Loaded %d excluded document ids from %s", len(excluded), excludedPath)
+
+	// themeNegatives maps a document id to the out-of-CTI-scope theme it belongs
+	// to (e.g. "geopolitics"). Such a document is forced to label=0 — but only
+	// while its theme is out of scope. Declaring the theme in INSCOPE_THEMES
+	// (comma-separated) lifts the override and lets the document revert to its
+	// natural label, so a theme can be brought into scope later without editing
+	// the store. An explicit reviewed label always wins over this policy default.
+	themeNegatives, err := review.LoadThemeNegatives(themeNegativesPath)
+	if err != nil {
+		log.Fatalf("failed to load theme negatives: %v", err)
+	}
+	log.Printf("Loaded %d theme-negative ids from %s (in-scope themes: %v)", len(themeNegatives), themeNegativesPath, inScopeThemesList(inScopeThemes))
 
 	ctx := context.Background()
 	client, err := db.Connect(ctx)
@@ -72,7 +87,7 @@ func main() {
 		log.Fatalf("failed to write CSV header: %v", err)
 	}
 
-	written, skippedDirectories, skippedExcluded, overridden := 0, 0, 0, 0
+	written, skippedDirectories, skippedGatedLogin, skippedExcluded, overridden, themeForced := 0, 0, 0, 0, 0, 0
 	for _, article := range articles {
 		if article.Content == "" {
 			continue
@@ -81,12 +96,20 @@ func main() {
 			skippedDirectories++
 			continue
 		}
+		if bootstrap.IsGatedLoginPage(article.Content) {
+			skippedGatedLogin++
+			continue
+		}
 		id := review.IDString(article.ID)
 		if excluded[id] {
 			skippedExcluded++
 			continue
 		}
 		label := bootstrap.LabelByKeywords(article.Content, keywords)
+		if theme, ok := themeNegatives[id]; ok && !inScopeThemes[strings.ToLower(theme)] {
+			label = 0
+			themeForced++
+		}
 		if reviewedLabel, ok := reviewed[id]; ok {
 			label = reviewedLabel.Label
 			overridden++
@@ -98,7 +121,29 @@ func main() {
 		written++
 	}
 
-	log.Printf("Wrote %d labeled candidates to %s (skipped %d link-directory pages, %d excluded, %d overridden by human review)", written, outputPath, skippedDirectories, skippedExcluded, overridden)
+	log.Printf("Wrote %d labeled candidates to %s (skipped %d link-directory pages, %d gated login pages, %d excluded, %d forced negative by out-of-scope theme, %d overridden by human review)", written, outputPath, skippedDirectories, skippedGatedLogin, skippedExcluded, themeForced, overridden)
+}
+
+// parseThemeSet turns a comma-separated INSCOPE_THEMES value into a lookup set,
+// trimming whitespace and lowercasing so "Geopolitics, espionage" matches the
+// themes stored in theme_negatives.csv. An empty value yields an empty set, so
+// by default every theme listed in the store is treated as out of scope.
+func parseThemeSet(raw string) map[string]bool {
+	set := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		if t := strings.ToLower(strings.TrimSpace(part)); t != "" {
+			set[t] = true
+		}
+	}
+	return set
+}
+
+func inScopeThemesList(set map[string]bool) []string {
+	themes := make([]string, 0, len(set))
+	for t := range set {
+		themes = append(themes, t)
+	}
+	return themes
 }
 
 func getEnvOrDefault(key, defaultValue string) string {

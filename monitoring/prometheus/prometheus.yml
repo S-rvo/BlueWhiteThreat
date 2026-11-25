@@ -18,3 +18,16 @@ scrape_configs:
   - job_name: alloy
     static_configs:
       - targets: ["alloy:12345"]
+
+  # Optional API profile; the target is DOWN when monitoring runs standalone.
+  # The query deliberately scans the articles collection once per minute.
+  - job_name: bwt-pipeline
+    scrape_interval: 60s
+    scrape_timeout: 5s
+    static_configs:
+      - targets: ["api:8083"]
+
+  # Available when the monitoring and application Compose files are combined.
+  - job_name: bwt-crawl-queues
+    static_configs:
+      - targets: ["scraper:8080"]

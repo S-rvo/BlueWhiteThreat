@@ -1,37 +1,16 @@
-# Utilisation de l'image de base Go
-FROM golang:1.24 AS builder
-
-# Définition du répertoire de travail
-WORKDIR /app
-
-# Copie des fichiers de dépendances
-COPY go.mod go.sum ./
-
-# Téléchargement des dépendances
+FROM golang:1.24-bookworm AS build
+WORKDIR /src/apps/crawler
+COPY pkg/csamfilter /src/pkg/csamfilter
+COPY apps/crawler/go.mod apps/crawler/go.sum ./
 RUN go mod download
+COPY apps/crawler/cmd ./cmd
+COPY apps/crawler/internal ./internal
+COPY apps/crawler/tests ./tests
+RUN go test ./...
+RUN CGO_ENABLED=0 go build -trimpath -o /out/crawler ./cmd
 
-# Copie des dossiers cmd et internal
-COPY cmd ./cmd
-COPY internal ./internal
-
-# Construction de l'application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o crawler .
-
-# Utilisation d'une image de base légère pour l'exécution
-FROM alpine:latest
-
-# Mise à jour des paquets et ajout de certificats SSL nécessaires
-RUN apk --no-cache update && apk --no-cache add ca-certificates && rm -rf /var/cache/apk/*
-
-# Création d'un utilisateur non-root
-RUN adduser -D -g '' crawleruser
-USER crawleruser
-
-# Définition du répertoire de travail
-WORKDIR /home/crawleruser
-
-# Copie du binaire construit depuis l'étape de build
-COPY --from=builder /app/crawler .
-
-# Commande pour exécuter l'application
-CMD ["./crawler"]
+FROM scratch
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /out/crawler /usr/local/bin/crawler
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/crawler"]

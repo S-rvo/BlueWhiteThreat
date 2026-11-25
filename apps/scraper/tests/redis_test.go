@@ -2,23 +2,20 @@ package scraper_tests
 
 import (
 	"context"
-	"os"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/db"
 )
 
 func testRedisClient(t *testing.T) *redis.Client {
-	host := os.Getenv("REDIS_HOST")
-	if host == "" {
-		host = "localhost"
-	}
-	client := redis.NewClient(&redis.Options{Addr: host + ":6379"})
-	if err := client.Ping(context.Background()).Err(); err != nil {
-		t.Skipf("Redis non disponible (%v) — lancer `docker compose up -d redis`", err)
-	}
+	// Create a private fixture, never infer a Redis address from the environment.
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
 	return client
 }
 

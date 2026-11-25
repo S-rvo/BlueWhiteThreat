@@ -20,8 +20,10 @@ const MaxVocabularySize = 5000
 // Fit, or constructed directly (e.g. when loading vocabulary/IDF data
 // deserialized from model.json at inference time).
 type Vectorizer struct {
-	Vocabulary map[string]int // token -> index in the TF-IDF vector
-	IDF        []float64      // idf weight per vocabulary index
+	LegacyCharNgrams  *bool // nil uses the current feature format
+	LegacySublinearTF bool
+	Vocabulary        map[string]int // token -> index in the TF-IDF vector
+	IDF               []float64      // idf weight per vocabulary index
 }
 
 // charNgramSize is the window length for character n-gram features.
@@ -113,6 +115,16 @@ func FitWithWordReserve(documents []string, labels []float64, minimum, reserve i
 	return fit(documents, labels, minimum, reserve), nil
 }
 
+// FitWithFamilyBudgets prevents character fragments from crowding words,
+// phrases and structural indicators out of the shared vocabulary. Unused
+// family capacity is filled by the best remaining terms regardless of family.
+func FitWithFamilyBudgets(documents []string, labels []float64, minimum, words, bigrams, chars, structural int) (*Vectorizer, error) {
+	if minimum < 1 || len(documents) != len(labels) || words < 0 || bigrams < 0 || chars < 0 || structural < 0 || words+bigrams+chars+structural > MaxVocabularySize {
+		return nil, fmt.Errorf("invalid family budgets or documents/labels lengths")
+	}
+	return fitScriptReserve(documents, labels, minimum, 0, 0, 1, []int{words, bigrams, chars, structural}), nil
+}
+
 func selectVocabulary(tokens []string, limit, reserve int) []string {
 	if len(tokens) <= limit {
 		return tokens
@@ -142,7 +154,7 @@ func selectVocabulary(tokens []string, limit, reserve int) []string {
 }
 
 func fit(documents []string, labels []float64, minimum, reserve int) *Vectorizer {
-	return fitScriptReserve(documents, labels, minimum, reserve, 0, 1)
+	return fitScriptReserve(documents, labels, minimum, reserve, 0, 1, nil)
 }
 
 // FitWithScriptReserve is experimental: reserve a bounded number of ranked
@@ -152,7 +164,89 @@ func FitWithScriptReserve(documents []string, labels []float64, minimum, reserve
 	if len(documents) != len(labels) || minimum < 1 || rareMinimum < 1 || rareMinimum > minimum || reserve < 0 || reserve > MaxVocabularySize {
 		return nil, fmt.Errorf("invalid script reserve, frequencies or document/label lengths")
 	}
-	return fitScriptReserve(documents, labels, minimum, 0, reserve, rareMinimum), nil
+	return fitScriptReserve(documents, labels, minimum, 0, reserve, rareMinimum, nil), nil
+}
+
+// FitWithNonLatinMinDF is experimental: lowers the minimum document
+// frequency for non-Latin-letter tokens only, without reserving them a
+// selection budget — they compete for vocabulary slots purely on chi-square
+// rank like any other term. This isolates whether FitWithScriptReserve's
+// effect comes from the lower min-df admitting otherwise-excluded non-Latin
+// terms as chi-square candidates, or from the forced reserve slots
+// themselves overriding chi-square competition.
+func FitWithNonLatinMinDF(documents []string, labels []float64, minimum, rareMinimum int) (*Vectorizer, error) {
+	if len(documents) != len(labels) || minimum < 1 || rareMinimum < 1 || rareMinimum > minimum {
+		return nil, fmt.Errorf("invalid non-Latin minimum, document frequency, or document/label lengths")
+	}
+	return fitNonLatinMinDF(documents, labels, minimum, rareMinimum), nil
+}
+
+func fitNonLatinMinDF(documents []string, labels []float64, minimum, rareMinimum int) *Vectorizer {
+	docFreq := make(map[string]int)
+	posFreq := make(map[string]int)
+	nPos := 0
+	for i, doc := range documents {
+		isPos := labels[i] == 1
+		if isPos {
+			nPos++
+		}
+		seen := make(map[string]struct{})
+		for _, tok := range terms(doc) {
+			seen[tok] = struct{}{}
+		}
+		for tok := range seen {
+			docFreq[tok]++
+			if isPos {
+				posFreq[tok]++
+			}
+		}
+	}
+	nNeg := len(documents) - nPos
+
+	tokens := make([]string, 0, len(docFreq))
+	for tok, count := range docFreq {
+		if count >= minimum || (count >= rareMinimum && hasNonLatinLetters(tok)) {
+			tokens = append(tokens, tok)
+		}
+	}
+
+	chi2 := make(map[string]float64, len(tokens))
+	for _, tok := range tokens {
+		a := float64(posFreq[tok])
+		b := float64(docFreq[tok] - posFreq[tok])
+		c := float64(nPos) - a
+		d := float64(nNeg) - b
+		denom := (a + b) * (c + d) * (a + c) * (b + d)
+		if denom == 0 {
+			chi2[tok] = 0
+			continue
+		}
+		diff := a*d - b*c
+		chi2[tok] = float64(len(documents)) * diff * diff / denom
+	}
+
+	sort.Slice(tokens, func(i, j int) bool {
+		if chi2[tokens[i]] != chi2[tokens[j]] {
+			return chi2[tokens[i]] > chi2[tokens[j]]
+		}
+		if docFreq[tokens[i]] != docFreq[tokens[j]] {
+			return docFreq[tokens[i]] > docFreq[tokens[j]]
+		}
+		return tokens[i] < tokens[j]
+	})
+
+	tokens = selectVocabulary(tokens, MaxVocabularySize, 0)
+
+	n := float64(len(documents))
+	vocabulary := make(map[string]int, len(tokens))
+	idf := make([]float64, len(tokens))
+	for i, tok := range tokens {
+		vocabulary[tok] = i
+		df := float64(docFreq[tok])
+		idf[i] = math.Log((n+1)/(df+1)) + 1
+	}
+
+	return &Vectorizer{Vocabulary: vocabulary, IDF: idf}
 }
 
 func hasNonLatinLetters(term string) bool {
@@ -164,7 +258,7 @@ func hasNonLatinLetters(term string) bool {
 	return false
 }
 
-func fitScriptReserve(documents []string, labels []float64, minimum, reserve, scriptReserve, rareMinimum int) *Vectorizer {
+func fitScriptReserve(documents []string, labels []float64, minimum, reserve, scriptReserve, rareMinimum int, familyBudgets []int) *Vectorizer {
 	docFreq := make(map[string]int)
 	posFreq := make(map[string]int) // docFreq restricted to label==1 docs
 	nPos := 0
@@ -243,6 +337,41 @@ func fitScriptReserve(documents []string, labels []float64, minimum, reserve, sc
 			}
 		}
 		tokens = retained
+	} else if len(familyBudgets) == 4 {
+		selected := map[string]bool{}
+		counts := [4]int{}
+		family := func(term string) int {
+			if strings.HasPrefix(term, "s_") {
+				return 3
+			}
+			if strings.HasPrefix(term, charNgramPrefix) {
+				return 2
+			}
+			if strings.Contains(term, "_") {
+				return 1
+			}
+			return 0
+		}
+		for _, term := range tokens {
+			kind := family(term)
+			if counts[kind] < familyBudgets[kind] {
+				selected[term] = true
+				counts[kind]++
+			}
+		}
+		for _, term := range tokens {
+			if len(selected) >= MaxVocabularySize {
+				break
+			}
+			selected[term] = true
+		}
+		retained := make([]string, 0, len(selected))
+		for _, term := range tokens {
+			if selected[term] {
+				retained = append(retained, term)
+			}
+		}
+		tokens = retained
 	} else {
 		tokens = selectVocabulary(tokens, MaxVocabularySize, reserve)
 	}
@@ -287,7 +416,7 @@ func (v *Vectorizer) TransformSaturated(document string) []float64 {
 
 func (v *Vectorizer) transform(document string, saturated bool) []float64 {
 	counts := make(map[int]int)
-	for _, tok := range terms(document) {
+	for _, tok := range v.inferenceTerms(document) {
 		idx, ok := v.Vocabulary[tok]
 		if !ok {
 			continue
@@ -298,6 +427,12 @@ func (v *Vectorizer) transform(document string, saturated bool) []float64 {
 	vec := make([]float64, len(v.Vocabulary))
 	for idx, count := range counts {
 		weight := math.Log1p(float64(count))
+		if v.LegacyCharNgrams != nil {
+			weight = float64(count)
+			if v.LegacySublinearTF {
+				weight = 1 + math.Log(weight)
+			}
+		}
 		if saturated {
 			weight = float64(count) / (float64(count) + 1)
 		}
@@ -315,4 +450,31 @@ func (v *Vectorizer) transform(document string, saturated bool) []float64 {
 		}
 	}
 	return vec
+}
+
+// inferenceTerms preserves the feature encoding of artifacts exported before
+// the current four-character/log1p vectorizer. New artifacts omit char_ngrams.
+func (v *Vectorizer) inferenceTerms(document string) []string {
+	if v.LegacyCharNgrams == nil {
+		return terms(document)
+	}
+	words := text.Tokenize(document)
+	out := append([]string(nil), words...)
+	for i := 0; i+1 < len(words); i++ {
+		out = append(out, words[i]+"_"+words[i+1])
+	}
+	if *v.LegacyCharNgrams {
+		for _, word := range words {
+			runes := []rune("^" + word + "$")
+			if len(runes) > 34 {
+				continue
+			}
+			for n := 3; n <= 5; n++ {
+				for i := 0; i+n <= len(runes); i++ {
+					out = append(out, "@c:"+string(runes[i:i+n]))
+				}
+			}
+		}
+	}
+	return out
 }

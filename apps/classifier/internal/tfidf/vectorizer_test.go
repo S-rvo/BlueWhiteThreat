@@ -3,11 +3,41 @@ package tfidf
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 )
 
 func zeros(n int) []float64 {
 	return make([]float64, n)
+}
+
+func TestFitWithFamilyBudgetsRetainsEachAvailableFamily(t *testing.T) {
+	docs := []string{
+		"ransomware attack leaked corporate files CVE-2026-1234 10 BTC victim.example.com",
+		"ordinary documentation and account settings without a security incident",
+	}
+	v, err := FitWithFamilyBudgets(docs, []float64{1, 0}, 1, 20, 20, 20, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for term := range v.Vocabulary {
+		switch {
+		case strings.HasPrefix(term, "s_"):
+			seen["structural"] = true
+		case strings.HasPrefix(term, "c_"):
+			seen["char"] = true
+		case strings.Contains(term, "_"):
+			seen["bigram"] = true
+		default:
+			seen["word"] = true
+		}
+	}
+	for _, family := range []string{"word", "bigram", "char", "structural"} {
+		if !seen[family] {
+			t.Fatalf("missing %s feature", family)
+		}
+	}
 }
 
 func TestFitIncludesCharacterNgrams(t *testing.T) {
@@ -194,4 +224,3 @@ func TestTransformIsL2Normalized(t *testing.T) {
 		t.Fatalf("||vec|| = %v, want 1.0", math.Sqrt(sumSq))
 	}
 }
-
