@@ -65,6 +65,19 @@ Un contenu identique conserve son verdict. Une inférence calculée sur un ancie
 texte est rejetée si la page a été modifiée entre la lecture et l'écriture. `RELEVANCE_THRESHOLD`, s'il est défini pour le
 service, remplace le seuil évalué et rend les métriques du rapport inapplicables.
 
+## Simulation de la conservation
+
+Depuis `apps/classifier`, avec `RETENTION_MONGODB_URI` injectée depuis la
+configuration privée d’un compte MongoDB en lecture seule :
+
+```sh
+go run ./cmd/main -retention-report
+```
+
+Ce mode n’exécute pas de cycle de classification. Il compte les verdicts
+existants pour le modèle et la politique actifs, sans lire les textes côté
+client ni modifier la base. Voir le [protocole et le relevé](../../docs/validation/2026-11-24-retention-shadow.md).
+
 ## Validation locale
 
 Depuis `apps/classifier` :

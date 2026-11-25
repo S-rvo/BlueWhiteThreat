@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -17,6 +18,8 @@ import (
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/db"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
 	"github.com/joho/godotenv"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var defaultIntervalMinutes = 10
@@ -25,7 +28,11 @@ const legacyPipelineSourceType = "darkweb_page"
 
 func main() {
 	once := flag.Bool("once", false, "run one classification cycle and exit")
+	retentionReport := flag.Bool("retention-report", false, "report retention decisions from stored verdicts without writing")
 	flag.Parse()
+	if *once && *retentionReport {
+		log.Fatal("-retention-report and -once are mutually exclusive")
+	}
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env found or unreadable, continuing with existing environment.")
 	}
@@ -39,6 +46,12 @@ func main() {
 	classifier, err := loadClassifier(modelPath, thresholdOverride)
 	if err != nil {
 		log.Fatalf("failed to load model from %s: %v (run cmd/train first)", modelPath, err)
+	}
+	if *retentionReport {
+		if err := printRetentionReport(classifier.Version()); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 
 	log.Printf("Classifier service started (model version %s, interval %d min)", classifier.Version(), defaultIntervalMinutes)
@@ -63,6 +76,29 @@ func main() {
 		log.Printf("Using model version %s", classifier.Version())
 		runOnce(classifier)
 	}
+}
+
+func printRetentionReport(modelVersion string) error {
+	uri := os.Getenv("RETENTION_MONGODB_URI")
+	if uri == "" {
+		return fmt.Errorf("RETENTION_MONGODB_URI is required; use a read-only MongoDB account")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri).SetServerSelectionTimeout(5*time.Second))
+	if err != nil {
+		return fmt.Errorf("invalid MongoDB configuration for the retention report")
+	}
+	defer func() {
+		closeCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stop()
+		_ = client.Disconnect(closeCtx)
+	}()
+	report, err := db.BuildRetentionReport(ctx, client, modelVersion)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(report)
 }
 
 func loadClassifier(modelPath, thresholdOverride string) (*classify.Classifier, error) {

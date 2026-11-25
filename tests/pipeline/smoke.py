@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Run the bounded, synthetic pipeline against new disposable Docker databases."""
 
+import argparse
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -9,9 +12,11 @@ import signal
 import subprocess
 import tempfile
 import time
+from urllib import error, request
 
 
 ROOT = Path(__file__).resolve().parents[2]
+OLLAMA_MODEL = "qwen2.5:14b-instruct"
 
 
 def run(*args, **kwargs):
@@ -38,10 +43,21 @@ def wait_db(container, *command):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--real-models", action="store_true",
+                      help="use the checkout classifier and the configured Ollama model on loopback")
+    mode.add_argument("--real-ollama", action="store_true",
+                      help="use the fixed classifier fixture and the configured Ollama model on loopback")
+    parser.add_argument("--ollama-port", type=int, default=11434, help="loopback port (default: 11434)")
+    args = parser.parse_args()
+    if not 1 <= args.ollama_port <= 65535:
+        parser.error("--ollama-port must be between 1 and 65535")
+    real_ollama = args.real_models or args.real_ollama
     # Never reuse ambient credentials, model overrides, or a service workdir.
     env = {
         key: value for key, value in os.environ.items()
-        if not key.startswith(("BWT_", "MONGO_", "MONGODB_", "NEO4J_", "ANTHROPIC_"))
+        if not key.startswith(("BWT_", "MONGO_", "MONGODB_", "NEO4J_", "ANTHROPIC_", "RETENTION_"))
         and key != "RELEVANCE_THRESHOLD"
     }
     container_env = os.environ.copy()
@@ -60,6 +76,29 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="bwt-smoke-") as workdir:
         binary = Path(workdir) / "classifier"
+        model_path = ROOT / "tests/pipeline/model.fixture.json"
+        if args.real_models:
+            model_bytes = (ROOT / "apps/classifier/model.json").read_bytes()
+            model_path = Path(workdir) / "model.json"
+            model_path.write_bytes(model_bytes)
+        if real_ollama:
+            model_bytes = model_path.read_bytes()
+            digest = hashlib.sha256(model_bytes).hexdigest()
+            version = json.loads(model_bytes).get("version") or f"legacy-{digest[:16]}"
+            ollama_host = f"http://127.0.0.1:{args.ollama_port}"
+            opener = request.build_opener(request.ProxyHandler({}))
+            try:
+                with opener.open(f"{ollama_host}/api/tags", timeout=5) as response:
+                    models = json.load(response)["models"]
+            except (error.URLError, TimeoutError, ValueError, KeyError) as exc:
+                parser.error(f"Ollama must answer at {ollama_host}: {exc}")
+            match = next((item for item in models if item["name"] == OLLAMA_MODEL), None)
+            if match is None:
+                parser.error(f"start local Ollama and install {OLLAMA_MODEL} before running this mode")
+            print(f"Classifier {version}, sha256={digest}; Ollama {OLLAMA_MODEL}, "
+                  f"digest={match['digest']}", flush=True)
+            env.update(BWT_SMOKE_CLASSIFIER_VERSION=version, BWT_SMOKE_OLLAMA_MODEL=OLLAMA_MODEL,
+                       BWT_SMOKE_OLLAMA_PORT=str(args.ollama_port))
         run("go", "build", "-o", str(binary), "./cmd/main", cwd=ROOT / "apps/classifier", env=env)
         try:
             for service, options in [
@@ -87,18 +126,21 @@ def main():
                 MONGO_INITDB_ROOT_USERNAME=mongo_user, MONGO_INITDB_ROOT_PASSWORD=mongo_password,
                 MONGODB_URI=mongo_uri, BWT_PARSER_TEST_MONGO_URI=mongo_uri,
                 NEO4J_URI=f"bolt://127.0.0.1:{port(neo, 7687)}", NEO4J_PASSWORD=neo_password,
-                MODEL_PATH=str(ROOT / "tests/pipeline/model.fixture.json"),
+                MODEL_PATH=str(model_path),
             )
             def go_test(module, package, pattern):
-                run("go", "test", "-tags=integration", "-count=1", "-v", "-timeout=90s",
+                run("go", "test", "-tags=integration", "-count=1", "-v", "-timeout=110s",
                     "-run", pattern, package, cwd=ROOT / "apps" / module, env=env)
 
             # This existing projection-retry test cleans up once its assertions finish.
             go_test("parser", "./cmd", "^TestGraphProjectionRetriesPersistedEntities$")
             go_test("scraper", "./internal/sites", "^TestSmokeIngest$")
-            # Run only the scoring entrypoint. Never load the checkout's model or .env.
+            # Run only the scoring entrypoint, using the selected artifact and no checkout .env.
             run(str(binary), "-once", cwd=workdir, env=env)
             go_test("parser", "./cmd", "^TestSmokeExtractAndReplay$")
+            if real_ollama:
+                return  # The separate API contract in CI expects the fixed fixture verdicts.
+            go_test("classifier", "./internal/db", "^TestSmokeRetentionReport$")
             go_test("classifier", "./cmd/export", "^TestSmokeCTIReviewExport$")
             run("docker", "exec", "-e", "BWT_SMOKE_API_PASSWORD", mongo, "sh", "-ec",
                 'mongosh --quiet --username "$MONGO_INITDB_ROOT_USERNAME" '
@@ -110,6 +152,13 @@ def main():
                 f"mongodb://smoke_api:{api_password}@127.0.0.1:{mongo_port}/BlueWhiteThreat"
             )
             go_test("api", "./cmd", "^TestSmokeMongoContract$")
+            env["RETENTION_MONGODB_URI"] = env["MONGODB_URI"]
+            report = json.loads(run(str(binary), "-retention-report", cwd=workdir, env=env,
+                                    capture_output=True).stdout)
+            expected = {"total": 2, "keep": 1, "review": 1, "discard": 0, "pending": 0}
+            if any(report[key] != count for key, count in expected.items()):
+                raise RuntimeError("retention report did not match fixture verdicts")
+            print("Read-only classifier retention report passed", flush=True)
         finally:
             for service in reversed(started):
                 # Only touch containers carrying this invocation's unguessable label.
@@ -126,4 +175,7 @@ if __name__ == "__main__":
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, interrupted)
-    main()
+    try:
+        main()
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(f"Pipeline check failed ({exc.cmd[0]}, exit {exc.returncode}).") from None
