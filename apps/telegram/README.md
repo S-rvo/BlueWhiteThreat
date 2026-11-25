@@ -4,7 +4,27 @@ Service Go autonome : import des listes deepdarkCTI, découverte de canaux publi
 suivi incrémental paginé et stockage du texte. Aucune connexion à un compte,
 aucune adhésion, aucun téléchargement de média. L’intégration NLP/IA reste séparée.
 
-## Démarrer Tor
+## Le parcours d’un message
+
+1. **Importer.** Les deux listes deepdarkCTI servent de points de départ. Le
+   collecteur normalise les URL, fusionne les doublons et conserve les
+   provenances dans ce registre. Une invitation est recensée mais jamais ouverte.
+2. **Découvrir.** Le collecteur vérifie l’aperçu web public `t.me/s/<canal>`
+   d’un candidat et en extrait un échantillon de texte. Un aperçu lisible suffit
+   pour placer le canal dans la file de suivi pour un cycle ultérieur ; cela ne dit
+   rien de sa pertinence CTI.
+3. **Suivre.** Le collecteur parcourt les pages depuis la plus récente vers
+   les plus anciennes jusqu’au dernier curseur validé. Le premier passage
+   rattrape l’historique que l’aperçu expose, par lots. Un texte est stocké
+   avant que sa page ne soit validée.
+4. **Élargir.** Les liens Telegram repérés dans le texte et les transferts
+   alimentent le registre avec le message d’origine. Ils peuvent être vérifiés
+   à un cycle ultérieur, dans les limites de profondeur et de volume.
+5. **Transmettre.** La collecte laisse les textes dans une sortie JSON durable
+   (ou dans MongoDB si demandé). L’analyse NLP peut consommer cette sortie à
+   sa propre cadence.
+
+## Démarrage rapide
 
 Depuis la racine du dépôt :
 
@@ -15,9 +35,23 @@ docker compose -f docker-compose.telegram.yaml logs --tail=30 tor1
 
 Attendre `Bootstrapped 100%`. Le port SOCKS5 publié est `9051`.
 Si un proxy écoute déjà sur ce port, le réutiliser au lieu d’en démarrer un second.
-Toutes les commandes Go suivantes se lancent depuis `apps/telegram`.
+Pour lancer la collecte périodique, continuer depuis la racine :
 
-## Trois modes de travail
+```sh
+cd apps/telegram
+go run ./cmd/telegram -mode all -interval 5m \
+  -max-channels 5 -max-pages 10 -request-timeout 90s \
+  -max-discovery-depth 2 -max-new-candidates 50
+```
+
+La première exécution initialise `data/candidates.json` et vérifie les premiers
+candidats ; le suivi démarre quand des canaux lisibles sont disponibles.
+Pour reprendre une collecte, relancer avec le même registre et la même
+destination de stockage. Voir [l’exécution périodique](#exécution-périodique)
+pour les cadences et le lancement avec Docker. Toutes les autres commandes Go
+se lancent depuis `apps/telegram`.
+
+## Choisir un mode
 
 ```sh
 # Import des deux listes, sans visiter les canaux :
@@ -30,7 +64,9 @@ go run ./cmd/telegram -mode discover -max-channels 30 -request-timeout 90s
 go run ./cmd/telegram -mode follow -max-channels 5 -max-pages 10 -request-timeout 90s
 ```
 
-`-probe` reste un alias de `-mode discover`. Les sources sont
+`all` rafraîchit les listes au début du cycle, exécute le suivi puis la
+découverte avec un budget distinct pour chaque file. `-probe` reste un alias
+de `-mode discover`. Les sources sont
 `telegram_infostealer.md` et `telegram_threat_actors.md`. `-seed-dir /chemin`
 permet de lire ces deux fichiers localement. Le suivi ne relit pas GitHub.
 
@@ -66,9 +102,20 @@ Le suivi écrit par défaut un fichier JSON par message dans :
 data/outbox/<canal>/<message_id>.json
 ```
 
-Une relance remplace atomiquement le fichier du même message. Chaque document
-contient URL, canal, identifiant du message, dates, texte et liens Telegram.
-Cela constitue une boîte de sortie locale utilisable par une future analyse.
+Une relance remplace atomiquement le fichier du même message. La clé de dédoublonnage est le couple `channel` + `message_id` ; deux canaux
+peuvent avoir le même identifiant numérique. Le format à utiliser pour une
+future analyse est :
+
+| Champs JSON | Usage |
+|---|---|
+| `channel`, `message_id`, `url`, `source` | Identifier et retrouver le message ; `source` vaut `telegram`. |
+| `published_at`, `scraped_at` | Distinguer la publication de la dernière collecte de ce fichier. |
+| `content`, `telegram_links` | Lire le texte et les destinations Telegram repérées. |
+
+Pour constituer un corpus d’évaluation, prendre un instantané de l’outbox et
+échantillonner par canal : un canal très actif peut peser lourd dans les
+résultats. Garder `channel`, `message_id` et `url` avec chaque résultat NLP
+pour pouvoir retrouver la source.
 `-outbox-dir /chemin` change son emplacement. La découverte seule, sans
 `-store`, reste un échantillonnage en mémoire et ne conserve pas les textes.
 En mode `all`, une boîte de sortie est disponible pour les deux files.
@@ -110,8 +157,9 @@ l’intervalle jusqu’à l’ancienne borne a été parcouru, ou que l’histor
 par l’aperçu est épuisé. Les publications ne contenant que des médias comptent
 pour la pagination mais ne sont pas téléchargées.
 
-Si `-max-pages` est atteint, `complete=false` est normal : le cycle suivant
-reprend à `before_id`. Les messages arrivés pendant ce rattrapage seront lus
+Si `-max-pages` est atteint, `complete=false` est normal : le prochain
+passage de ce canal reprend à `before_id`, une fois son délai écoulé et
+si le lot a de la place. Les messages arrivés pendant ce rattrapage seront lus
 après sa fin. Une panne de stockage rejoue la page sans sauter de message ; les
 écritures sont idempotentes. Telegram peut fournir à la fois un lien vers les
 messages anciens (`before`) et un lien vers les messages récents (`after`).
@@ -142,6 +190,10 @@ avec un délai exponentiel plafonné à 24 heures. Les sources indisponibles son
 réévaluées après `-discovery-interval` ; les suivis réussis après
 `-follow-interval`. Les sources les moins récemment traitées passent en premier.
 Le budget `-max-channels` s’applique à chacune des deux files en mode `all`.
+`-follow-interval` est un délai minimal, pas une garantie de fréquence :
+avec 100 canaux éligibles et 5 suivis par cycle, il faut 20 cycles pour faire
+un tour, soit environ 1 h 40 pour une pause de 5 minutes, plus le temps des
+requêtes.
 Les canaux nouvellement découverts entrent dans le suivi à partir d’un cycle
 ultérieur. Un rafraîchissement GitHub en erreur n’empêche pas les files existantes
 de travailler en mode `all` ; aucun demi-import n’est enregistré.
@@ -157,8 +209,33 @@ docker compose -f docker-compose.telegram.yaml logs -f telegram
 ```
 
 Docker utilise `socks5h://tor1:9050`, `-mode all -interval 5m`, et le volume
-`telegram_registry` pour le registre et la boîte de sortie. La configuration
+`telegram_registry` pour le registre et la boîte de sortie. Ce volume ne
+réutilise pas le dossier `data/` des commandes Go locales. La configuration
 est autonome et ne requiert pas les `.env` des autres services.
+
+## Lire les résultats et diagnostiquer un cycle
+
+| Indication dans les logs | Comment la lire |
+|---|---|
+| `follow … stored=0 complete=true` | Le suivi s’est terminé ; aucun texte nouveau à écrire au-delà du curseur. |
+| `follow … complete=false before=304`, après 10 pages | Le rattrapage continue à cette borne au prochain passage du canal. `cursor=0` peut encore s’afficher lors du premier rattrapage. |
+| `preview_unavailable … HTTP 302` | La page a renvoyé vers la fiche du canal. Cela ne suffit pas à conclure qu’il est privé. |
+| `check_failed` | Regarder `error` et `next_check_at` dans le registre. Une erreur de pagination reporte ce canal ; une erreur réseau peut interrompre le cycle. |
+| `seed refresh failed; continuing existing queues` | En mode `all`, les listes n’ont pas été rafraîchies, mais le registre existant reste utilisable. |
+| `new_candidates=50 links_skipped_budget=11` | Le plafond a été atteint ; 11 occurrences de liens n’ont pas été mises en file. |
+
+`stored` compte les écritures effectuées, dont les mises à jour d’un fichier
+existant. La découverte puis le suivi peuvent écrire le même message.
+Pour compter les **messages distincts** dans l’outbox et lire les états du
+registre sans afficher de texte ni d’URL :
+
+```sh
+find data/outbox -type f -name '*.json' | wc -l
+jq 'group_by(.state) | map({state: .[0].state, count: length})' data/candidates.json
+```
+
+Les commandes ci-dessus concernent la sortie JSON locale ; `jq` est facultatif.
+Le registre et les messages contenus dans `data/` sont ignorés par Git.
 
 ## Accès, réseau et limites
 
