@@ -24,7 +24,7 @@ import (
 
 const (
 	certEUFeed = "https://cert.europa.eu/publications/threat-intelligence-rss"
-	certFRFeed = "https://www.cert.ssi.gouv.fr/cti/feed/"
+	certFRFeed = "https://cert.cyber.gouv.fr/cti/feed/"
 	cisaFeed   = "https://www.cisa.gov/cybersecurity-advisories/cybersecurity-advisories.xml"
 	sansFeed   = "https://isc.sans.edu/rssfeed_full.xml"
 	kevFeed    = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
@@ -204,11 +204,15 @@ func collectKEV(c *collector, now string, limit int, includeAll bool) ([]documen
 }
 
 func run() error {
+	feedStatus := flag.Bool("feed-status", false, "report only freshness of public sources, without following item links or saving a corpus")
 	outPath := flag.String("out", "../classifier/data/source-audit-2026-10-19/cti-pool.jsonl", "new private unscored JSONL")
 	rssLimit := flag.Int("rss-limit", 10, "maximum documents per RSS source (1..25)")
 	kevLimit := flag.Int("kev-limit", 100, "maximum ransomware-linked KEV records (1..500)")
 	kevAll := flag.Bool("kev-all", false, "include all KEV records, not only ransomware-linked records")
 	flag.Parse()
+	if *feedStatus {
+		return writeFeedStatus(os.Stdout, publicFeeds, time.Now())
+	}
 	if *rssLimit < 1 || *rssLimit > 25 || *kevLimit < 1 || *kevLimit > 500 {
 		return fmt.Errorf("invalid bounded source limits")
 	}

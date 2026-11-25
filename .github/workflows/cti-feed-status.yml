@@ -1,0 +1,32 @@
+name: Suivi des sources CTI publiques
+
+on:
+  schedule:
+    - cron: '27 */12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: apps/scraper/go.sum
+      - name: Vérifier la fraîcheur des sources
+        working-directory: apps/scraper
+        run: |
+          report="$RUNNER_TEMP/cti-feed-status.json"
+          status=0
+          go run ./cmd/collectcti -feed-status > "$report" || status=$?
+          {
+            printf '## Fraîcheur des sources CTI\n\n```json\n'
+            cat "$report"
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"

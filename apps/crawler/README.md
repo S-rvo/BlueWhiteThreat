@@ -48,6 +48,11 @@ visite représente une visite réussie, pas une simple tentative. `/health` est
 une sonde de vie HTTP, pas une sonde de disponibilité Redis/Neo4j.
 Les erreurs de stockage sont journalisées et provoquent une reprise après bail.
 
+Pour mesurer les résultats attribuables à DeepDarkCTI, lancer depuis la racine
+`python3 apps/crawler/scripts/coverage_report.py`. Le rapport lit uniquement
+la télémétrie locale déjà stockée et ne démarre aucune collecte.
+Voir [la méthode et les limites du rapport](../../docs/validation/2026-11-24-deepdarkcti-coverage.md).
+
 Pour rejouer une tâche en échec final : diagnostiquer la cause puis retirer
 uniquement son membre de `crawler:dead`, son compteur dans `crawler:attempts`,
 et la réadmettre avec `AddURLToQueue`. Ne pas purger les bases.
