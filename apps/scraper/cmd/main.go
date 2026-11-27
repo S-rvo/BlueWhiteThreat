@@ -56,6 +56,12 @@ func main() {
 		defer cancel()
 		_ = client.Disconnect(closing)
 	}()
+	indexCtx, cancelIndex := context.WithTimeout(ctx, 30*time.Second)
+	if err := db.EnsureArticleIndexes(indexCtx, client); err != nil {
+		// Doublons hérités probables : à dédupliquer, sans bloquer la collecte.
+		log.Printf("ATTENTION index unique article.url non créé (doublons d'URL ?): %v", err)
+	}
+	cancelIndex()
 
 	redisClient := db.ConnectRedis()
 	defer redisClient.Close()
