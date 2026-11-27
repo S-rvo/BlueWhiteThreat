@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -21,6 +20,11 @@ var defaultIntervalMin = 10
 
 const batchSize = 50
 
+// Après autant d'échecs consécutifs, le cycle d'extraction s'arrête : c'est
+// plus probablement une panne du modèle qu'une série d'articles pathologiques,
+// et il ne faut pas repousser toute la file à cause d'elle.
+const maxConsecutiveExtractionFailures = 3
+
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("Aucun .env trouvé ou problème de lecture.")
@@ -33,6 +37,13 @@ func main() {
 		log.Fatalf("Error initializing Neo4j: %v", err)
 	}
 	defer db.CloseNeo4j()
+	schemaCtx, cancelSchema := context.WithTimeout(context.Background(), 2*time.Minute)
+	if err := db.EnsureGraphSchema(schemaCtx); err != nil {
+		// Le parser reste utile sans contraintes ; l'erreur doit être corrigée
+		// (doublons hérités) mais ne doit pas bloquer l'extraction.
+		log.Printf("Schéma Neo4j incomplet: %v", err)
+	}
+	cancelSchema()
 
 	ollamaHost := getEnvOrDefault("OLLAMA_HOST", "http://localhost:11434")
 	ollamaModel := getEnvOrDefault("OLLAMA_MODEL", "qwen2.5:14b-instruct")
@@ -75,8 +86,15 @@ func runOnce(primary, fallback extractor.Extractor) {
 	}
 	defer client.Disconnect(ctx)
 
+	indexCtx, cancelIndex := context.WithTimeout(ctx, 30*time.Second)
+	if err := db.EnsureIndexes(indexCtx, client); err != nil {
+		log.Printf("Index MongoDB du parser: %v", err)
+	}
+	cancelIndex()
+
 	extractPending(ctx, client, primary, fallback)
-	projectPending(ctx, client, db.SaveEntityGraph)
+	retractStale(ctx, client, db.RetractEntityGraph)
+	projectPending(ctx, client, db.ReplaceEntityGraph)
 }
 
 func extractPending(ctx context.Context, client *mongo.Client, primary, fallback extractor.Extractor) {
@@ -89,12 +107,26 @@ func extractPending(ctx context.Context, client *mongo.Client, primary, fallback
 	}
 	log.Printf("Parser: %d articles à traiter", len(articles))
 
+	consecutiveFailures := 0
 	for _, a := range articles {
 		ents, err := pipeline.ExtractWithFallback(ctx, primary, fallback, a.Content)
 		if err != nil {
-			log.Printf("Erreur extraction article %v: %v", a.ID, err)
+			failCtx, cancelFail := context.WithTimeout(ctx, 10*time.Second)
+			failures, recordErr := db.RecordExtractionFailure(failCtx, client, a, err)
+			cancelFail()
+			log.Printf("Erreur extraction article %v (échec n°%d, prochain essai dans %s): %v",
+				a.ID, failures, db.ExtractionBackoff(failures), err)
+			if recordErr != nil {
+				log.Printf("Erreur enregistrement de l'échec article %v: %v", a.ID, recordErr)
+			}
+			consecutiveFailures++
+			if consecutiveFailures >= maxConsecutiveExtractionFailures {
+				log.Printf("Parser: %d échecs consécutifs, cycle d'extraction interrompu", consecutiveFailures)
+				return
+			}
 			continue
 		}
+		consecutiveFailures = 0
 		saveCtx, cancelSave := context.WithTimeout(ctx, 10*time.Second)
 		err = db.SaveEntities(saveCtx, client, a, ents)
 		cancelSave()
@@ -116,12 +148,11 @@ func projectPending(ctx context.Context, client *mongo.Client, write func(contex
 		if cycleCtx.Err() != nil {
 			return
 		}
-		var err error
-		if !article.Entities.IsEmpty() {
-			graphCtx, cancel := context.WithTimeout(cycleCtx, 30*time.Second)
-			err = write(graphCtx, fmt.Sprint(article.ID), article.Entities)
-			cancel()
-		}
+		// Toujours écrire, même vide : une extraction vide doit retirer les
+		// entités d'une version précédente de l'article.
+		graphCtx, cancel := context.WithTimeout(cycleCtx, 30*time.Second)
+		err := write(graphCtx, db.ArticleKey(article.ID), article.Entities)
+		cancel()
 		statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		if err != nil {
 			log.Printf("Erreur écriture Neo4j article %v: %v", article.ID, err)
@@ -130,6 +161,35 @@ func projectPending(ctx context.Context, client *mongo.Client, write func(contex
 			}
 		} else if err := db.MarkGraphProjected(statusCtx, client, article.ID); err != nil {
 			log.Printf("Erreur validation projection article %v: %v", article.ID, err)
+		}
+		cancel()
+	}
+}
+
+// retractStale retire du graphe les articles qui ne sont plus éligibles. En cas
+// d'échec, l'article reste marqué projeté et sera repris au cycle suivant.
+func retractStale(ctx context.Context, client *mongo.Client, retract func(context.Context, string) error) {
+	cycleCtx, cancelCycle := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelCycle()
+	ids, err := db.FetchRetractableArticles(cycleCtx, client, batchSize)
+	if err != nil {
+		log.Printf("Erreur lecture des rétractations en attente: %v", err)
+		return
+	}
+	for _, id := range ids {
+		if cycleCtx.Err() != nil {
+			return
+		}
+		graphCtx, cancel := context.WithTimeout(cycleCtx, 30*time.Second)
+		err := retract(graphCtx, db.ArticleKey(id))
+		cancel()
+		if err != nil {
+			log.Printf("Erreur rétractation Neo4j article %v: %v", id, err)
+			continue
+		}
+		statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if err := db.MarkGraphRetracted(statusCtx, client, id); err != nil {
+			log.Printf("Erreur validation rétractation article %v: %v", id, err)
 		}
 		cancel()
 	}

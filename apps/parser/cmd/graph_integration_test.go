@@ -78,7 +78,11 @@ func TestGraphProjectionRetriesPersistedEntities(t *testing.T) {
 	fail := true
 	write := func(_ context.Context, id string, got entities.Entities) error {
 		attempts = append(attempts, id)
-		if !reflect.DeepEqual(got.CVEs, ents.CVEs) {
+		if id == empty {
+			if !got.IsEmpty() {
+				t.Errorf("empty article projected with entities %v", got)
+			}
+		} else if !reflect.DeepEqual(got.CVEs, ents.CVEs) {
 			t.Errorf("projected CVEs = %v; want %v", got.CVEs, ents.CVEs)
 		}
 		if fail {
@@ -108,8 +112,10 @@ func TestGraphProjectionRetriesPersistedEntities(t *testing.T) {
 	fail = false
 	projectPending(ctx, client, write)
 	projectPending(ctx, client, write)
-	if want := []string{first, legacy, first}; !reflect.DeepEqual(attempts, want) {
-		t.Fatalf("graph attempts = %v; want %v (legacy, retry, no repeat or empty write)", attempts, want)
+	// Une extraction vide est aussi écrite : elle retire du graphe les entités
+	// d'une révision précédente de l'article.
+	if want := []string{first, legacy, empty, first}; !reflect.DeepEqual(attempts, want) {
+		t.Fatalf("graph attempts = %v; want %v (legacy, empty, retry, no repeat)", attempts, want)
 	}
 	pending, err = db.FetchPendingGraphArticles(ctx, client, batchSize)
 	if err != nil || len(pending) != 0 {
