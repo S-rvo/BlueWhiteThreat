@@ -3,6 +3,7 @@ module github.com/S-rvo/BlueWhiteThreat/apps/crawler
 go 1.24
 
 require (
+	github.com/S-rvo/BlueWhiteThreat/pkg/contract v0.0.0
 	github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter v0.0.0
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/gocolly/colly v1.2.0
@@ -12,6 +13,8 @@ require (
 )
 
 replace github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter => ../../pkg/csamfilter
+
+replace github.com/S-rvo/BlueWhiteThreat/pkg/contract => ../../pkg/contract
 
 // toolchain go1.23.7
 

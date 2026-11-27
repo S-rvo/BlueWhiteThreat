@@ -9,6 +9,7 @@
 | `apps/api`, `apps/front` | API et interface Nuxt. |
 | `apps/proxy`, `monitoring/`, `docker-compose*.yaml` | Services d’infrastructure et d’observabilité. |
 | `pkg/csamfilter` | Module Go partagé par les services qui filtrent les URL. |
+| `pkg/contract` | Contrat de données partagé : schéma de la collection `article` et clés Redis communes au crawler et au scraper. |
 
 Le [runbook](runbook-services.md) documente le démarrage des services. Pour le
 classifier, commencer par le [registre des essais](../apps/classifier/EXPERIMENTS.md),
@@ -20,12 +21,19 @@ Depuis la racine, avec la version Go déclarée par les modules :
 
 ```sh
 set -e
-for module in apps/api apps/crawler apps/parser apps/scraper pkg/csamfilter; do
+for module in apps/api apps/crawler apps/parser apps/scraper pkg/csamfilter pkg/contract; do
   (cd "$module" && go test -mod=readonly ./... && go vet -mod=readonly ./...)
 done
 (cd apps/classifier && go test -mod=readonly ./cmd/... ./internal/... ./experiments/... &&
   go vet -mod=readonly ./cmd/... ./internal/... ./experiments/...)
 ```
+
+Un champ de `article` ou une clé Redis lue par un autre service se déclare dans
+`pkg/contract` avant d’être utilisé. Chaque service a un `contract_test.go`
+(helpers `pkg/contract/contracttest`) qui échoue si ses tags bson ou ses clés
+Redis divergent du contrat, y compris les clés écrites en dur dans les scripts
+Lua. Les services qui importent un module de `pkg/` sont construits depuis la
+racine du dépôt (`context: .`), avec un `Dockerfile.*.dockerignore` par image.
 
 `go.mod`/`go.sum` restent propres à chaque module. Après une modification des
 imports, lancer `go mod tidy` dans le module concerné et relire le diff. Les

@@ -9,17 +9,17 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 	"github.com/redis/go-redis/v9"
 )
 
 const (
-	scrapePending     = "scraper:pending"
-	scrapeInflight    = "scraper:inflight"
+	scrapePending     = contract.KeyScraperPending
+	scrapeInflight    = contract.KeyScraperInflight
 	scrapeTokens      = "scraper:tokens"
 	scrapeClaimScore  = "scraper:claim_scores"
 	scrapeScanCursor  = "scraper:index_cursor"
 	scrapeLeaseLength = 5 * time.Minute
-	priorityStride    = 10_000_000_000 // must match the crawler's success event
 )
 
 type ScrapeClaim struct{ URL, Token string }
@@ -55,14 +55,14 @@ func IndexScrapePending(ctx context.Context, client *redis.Client, pages int) er
 		if err != nil && err != redis.Nil {
 			return err
 		}
-		urls, next, err := client.SScan(ctx, "urls_crawled", old, "", 512).Result()
+		urls, next, err := client.SScan(ctx, contract.KeyURLsCrawled, old, "", 512).Result()
 		if err != nil {
 			return err
 		}
 		args := make([]interface{}, 0, 2+2*len(urls))
 		args = append(args, old, next)
 		for _, u := range urls {
-			args = append(args, u, priorityScore(u)*priorityStride)
+			args = append(args, u, contract.PendingPriorityBase(u))
 		}
 		err = indexScrapeScript.Run(ctx, client, []string{scrapeScanCursor, scrapePending, scrapeInflight}, args...).Err()
 		if err != nil || next == 0 {

@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/utils"
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 )
 
 // Connexion MongoDB centralisée
@@ -29,13 +30,13 @@ func ConnectMongo() (*mongo.Client, error) {
 // sans elle, deux workers concurrents peuvent insérer deux fois la même page.
 // Idempotent ; échoue si la collection contient déjà des doublons.
 func EnsureArticleIndexes(ctx context.Context, client *mongo.Client) error {
-	_, err := client.Database("BlueWhiteThreat").Collection("article").Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys: bson.D{{Key: "url", Value: 1}},
+	_, err := client.Database(contract.Database).Collection(contract.ArticleCollection).Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: contract.FieldURL, Value: 1}},
 		// Partiel : seuls les documents portant une URL sont concernés ; un
 		// document sans url (fixture, import) ne doit pas entrer en collision
 		// avec les autres sur la valeur null.
 		Options: options.Index().SetName("scraper_url_unique").SetUnique(true).
-			SetPartialFilterExpression(bson.M{"url": bson.M{"$type": "string"}}),
+			SetPartialFilterExpression(bson.M{contract.FieldURL: bson.M{"$type": "string"}}),
 	})
 	return err
 }

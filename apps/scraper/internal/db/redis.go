@@ -7,9 +7,9 @@ import (
 	"math"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -34,7 +34,7 @@ func ConnectRedis() *redis.Client {
 // GetUnscrapedURLs renvoie les URLs présentes dans "urls_crawled" (rempli par
 // le crawler) mais absentes de "urls_scraped" (rempli par ce scraper).
 func GetUnscrapedURLs(ctx context.Context, client *redis.Client) ([]string, error) {
-	urls, err := client.SDiff(ctx, "urls_crawled", "urls_scraped").Result()
+	urls, err := client.SDiff(ctx, contract.KeyURLsCrawled, contract.KeyURLsScraped).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func crawlTimestamps(ctx context.Context, client *redis.Client, urls []string) (
 	if len(urls) == 0 {
 		return nil, nil
 	}
-	scores, err := client.ZMScore(ctx, "urls_crawled_at", urls...).Result()
+	scores, err := client.ZMScore(ctx, contract.KeyURLsCrawledAt, urls...).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -79,33 +79,9 @@ func crawlTimestamps(ctx context.Context, client *redis.Client, urls []string) (
 }
 
 // priorityScore only schedules collection; it never admits or rejects a URL.
-// Strong CTI expressions are processed first. Ambiguous words need a second
-// independent CTI signal, limiting the generic "access"/"database" noise that
-// previously occupied entire scraper cycles. Hash-only URLs remain eligible.
+// The scoring rules are shared with the crawler through pkg/contract.
 func priorityScore(rawURL string) int {
-	low := strings.ToLower(rawURL)
-	strong := []string{
-		"initial-access", "access-broker", "ransomware", "infostealer",
-		"credential-dump", "data-breach", "zero-day", "0day", "botnet",
-	}
-	for _, term := range strong {
-		if strings.Contains(low, term) {
-			return 2
-		}
-	}
-	ambiguous := []string{"access", "leak", "database", "dump", "credential"}
-	corroborating := []string{"broker", "breach", "ransom", "malware", "stealer", "exploit", "victim", "corporate", "rdp", "vpn"}
-	hasAmbiguous, hasCorroborating := false, false
-	for _, term := range ambiguous {
-		hasAmbiguous = hasAmbiguous || strings.Contains(low, term)
-	}
-	for _, term := range corroborating {
-		hasCorroborating = hasCorroborating || strings.Contains(low, term)
-	}
-	if hasAmbiguous && hasCorroborating {
-		return 1
-	}
-	return 0
+	return contract.URLPriority(rawURL)
 }
 
 // prioritizeURLs ordonne les candidates par pertinence CTI (priorityScore)
@@ -154,7 +130,7 @@ func prioritizeURLs(urls []string, freshness map[string]float64, limit int) []st
 // MarkURLScraped marque une URL comme traitée pour ne pas la retraiter au tick suivant.
 func MarkURLScraped(ctx context.Context, client *redis.Client, url string) error {
 	pipe := client.TxPipeline()
-	pipe.SAdd(ctx, "urls_scraped", url)
+	pipe.SAdd(ctx, contract.KeyURLsScraped, url)
 	pipe.ZRem(ctx, "urls_scrape_failed_at", url)
 	pipe.ZRem(ctx, "scraper:retry_due", url)
 	pipe.ZAdd(ctx, "urls_scraped_at", redis.Z{Score: float64(time.Now().Unix()), Member: url})
@@ -178,7 +154,7 @@ func RequeueStaleScrapedURLs(ctx context.Context, client *redis.Client, maxAge t
 // transitoire ne doit pas être traité comme un succès ni hériter de son délai.
 func MarkURLScrapeFailed(ctx context.Context, client *redis.Client, url string) error {
 	pipe := client.TxPipeline()
-	pipe.SAdd(ctx, "urls_scraped", url)
+	pipe.SAdd(ctx, contract.KeyURLsScraped, url)
 	pipe.ZRem(ctx, "urls_scraped_at", url)
 	pipe.ZRem(ctx, "scraper:retry_due", url)
 	pipe.ZAdd(ctx, "urls_scrape_failed_at", redis.Z{Score: float64(time.Now().Unix()), Member: url})
@@ -230,7 +206,7 @@ func requeueStaleFromSortedSet(ctx context.Context, client *redis.Client, sorted
 	args := make([]interface{}, 0, 3+2*len(stale))
 	args = append(args, cutoff, offset, limit)
 	for _, u := range stale {
-		args = append(args, u, priorityScore(u)*priorityStride)
+		args = append(args, u, contract.PendingPriorityBase(u))
 	}
 	return requeueScrapeScript.Run(ctx, client, []string{sortedSetKey, scrapePending}, args...).Int64()
 }

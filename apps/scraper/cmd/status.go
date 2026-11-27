@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
@@ -44,19 +45,19 @@ func serviceHandler(rdb *redis.Client, mongoClient *mongo.Client) http.Handler {
 func queueMetrics(ctx context.Context, rdb *redis.Client, now int64) (string, error) {
 	pipe := rdb.Pipeline()
 	dueAt := strconv.FormatInt(now, 10)
-	crawlerReady := pipe.SCard(ctx, "urls_to_crawl")
-	crawlerDue := pipe.ZCount(ctx, "crawler:scheduled", "-inf", dueAt)
-	crawlerFuture := pipe.ZCount(ctx, "crawler:scheduled", "("+dueAt, "+inf")
-	crawlerOldest := pipe.ZRangeWithScores(ctx, "crawler:scheduled", 0, 0)
-	crawlerInFlight := pipe.ZCard(ctx, "crawler:inflight")
-	scraperPending := pipe.ZCard(ctx, "scraper:pending")
-	scraperLeases := pipe.ZCard(ctx, "scraper:inflight")
+	crawlerReady := pipe.SCard(ctx, contract.KeyURLsToCrawl)
+	crawlerDue := pipe.ZCount(ctx, contract.KeyCrawlerScheduled, "-inf", dueAt)
+	crawlerFuture := pipe.ZCount(ctx, contract.KeyCrawlerScheduled, "("+dueAt, "+inf")
+	crawlerOldest := pipe.ZRangeWithScores(ctx, contract.KeyCrawlerScheduled, 0, 0)
+	crawlerInFlight := pipe.ZCard(ctx, contract.KeyCrawlerInflight)
+	scraperPending := pipe.ZCard(ctx, contract.KeyScraperPending)
+	scraperLeases := pipe.ZCard(ctx, contract.KeyScraperInflight)
 	scraperRetry := pipe.ZCard(ctx, "scraper:retry_due")
 	scraperDue := pipe.ZCount(ctx, "scraper:retry_due", "-inf", dueAt)
 	scraperDead := pipe.ZCard(ctx, "scraper:dead")
-	crawlerFields := []string{"urls_queued", "deferred_total", "budget_deferred_total", "scheduled_promoted_total", "fetch_success_total", "fetch_failure_total", "infrastructure_retry_total"}
+	crawlerFields := []string{contract.KeyURLsQueued, "deferred_total", "budget_deferred_total", "scheduled_promoted_total", "fetch_success_total", "fetch_failure_total", "infrastructure_retry_total"}
 	scraperFields := []string{"claimed", "recovered", "released", "success", "transient", "permanent", "blocked", "infrastructure", "deferred"}
-	crawlerStats := pipe.HMGet(ctx, "crawler:stats", crawlerFields...)
+	crawlerStats := pipe.HMGet(ctx, contract.KeyCrawlerStats, crawlerFields...)
 	scraperStats := pipe.HMGet(ctx, "scraper:stats", scraperFields...)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return "", err

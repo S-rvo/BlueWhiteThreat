@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/db"
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 	"github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -19,7 +20,8 @@ import (
 var ErrBlockedContent = errors.New("contenu bloqué")
 
 // ScrapedPage est le contenu brut d'une page .onion récupérée par le scraper,
-// avec sa source conservée pour vérification par un analyste CTI.
+// avec sa source conservée pour vérification par un analyste CTI. Ses tags
+// bson suivent pkg/contract (vérifié par TestScrapedPageMatchesContract).
 type ScrapedPage struct {
 	URL        string    `bson:"url"`
 	Source     string    `bson:"source"`
@@ -29,8 +31,8 @@ type ScrapedPage struct {
 }
 
 const (
-	SourceTypeDarkwebPage = "darkweb_page"
-	SourceTypeUnknown     = "unknown"
+	SourceTypeDarkwebPage = contract.SourceTypeDarkwebPage
+	SourceTypeUnknown     = contract.SourceTypeUnknown
 )
 
 // SaveScrapedPage upsert une page scrapée dans MongoDB.article, par URL unique.
@@ -41,14 +43,7 @@ func SaveScrapedPage(page ScrapedPage) (int, error) {
 
 // contentDerivedFields are computed downstream from the article text
 // (classifier, parser) and become stale as soon as that text changes.
-var contentDerivedFields = []string{
-	"relevance",
-	"entities",
-	"graph_projection_queued_at",
-	"extraction_failures",
-	"extraction_retry_at",
-	"extraction_last_error",
-}
+var contentDerivedFields = contract.ContentDerivedFields()
 
 // A production cycle shares one Mongo client across all workers.
 func saveScrapedPage(parent context.Context, client *mongo.Client, page ScrapedPage) (int, error) {
@@ -82,19 +77,19 @@ func saveScrapedPage(parent context.Context, client *mongo.Client, page ScrapedP
 	// graph_projected_at is deliberately kept: it tells the parser the graph
 	// still holds this article, so it can retract or replace it.
 	set := bson.M{
-		"url":         bson.M{"$literal": page.URL},
-		"source":      bson.M{"$literal": page.Source},
-		"source_type": bson.M{"$literal": page.SourceType},
-		"scraped_at":  page.ScrapedAt,
-		"content":     bson.M{"$literal": page.Content},
+		contract.FieldURL:        bson.M{"$literal": page.URL},
+		contract.FieldSource:     bson.M{"$literal": page.Source},
+		contract.FieldSourceType: bson.M{"$literal": page.SourceType},
+		contract.FieldScrapedAt:  page.ScrapedAt,
+		contract.FieldContent:    bson.M{"$literal": page.Content},
 	}
-	sameContent := bson.M{"$eq": bson.A{"$content", bson.M{"$literal": page.Content}}}
+	sameContent := bson.M{"$eq": bson.A{"$" + contract.FieldContent, bson.M{"$literal": page.Content}}}
 	for _, field := range contentDerivedFields {
 		set[field] = bson.M{"$cond": bson.A{sameContent, "$" + field, "$$REMOVE"}}
 	}
 	update := mongo.Pipeline{bson.D{{Key: "$set", Value: set}}}
-	result, err := client.Database("BlueWhiteThreat").Collection("article").UpdateOne(
-		ctx, bson.M{"url": page.URL}, update, options.Update().SetUpsert(true))
+	result, err := client.Database(contract.Database).Collection(contract.ArticleCollection).UpdateOne(
+		ctx, bson.M{contract.FieldURL: page.URL}, update, options.Update().SetUpsert(true))
 	if err != nil {
 		return 0, err
 	}

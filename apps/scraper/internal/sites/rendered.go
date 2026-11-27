@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/db"
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 	"time"
 )
 
@@ -58,5 +59,5 @@ func publishRenderedLinks(ctx context.Context, source string, links []string) er
 	// Atomic all-or-nothing admission, including in-flight claims. Replaying a
 	// completed page is harmless: URL admission and graph MERGE are idempotent.
 	return client.Eval(c, `if redis.call('LLEN',KEYS[1])+redis.call('HLEN','crawler:rendered_inflight')+redis.call('ZCARD','crawler:rendered_retry')+#ARGV>512 then return redis.error_reply('rendered handoff full') end
-for _,v in ipairs(ARGV) do redis.call('RPUSH',KEYS[1],v) end return #ARGV`, []string{"crawler:rendered_links"}, args...).Err()
+for _,v in ipairs(ARGV) do redis.call('RPUSH',KEYS[1],v) end return #ARGV`, []string{contract.KeyCrawlerRenderedLinks}, args...).Err()
 }

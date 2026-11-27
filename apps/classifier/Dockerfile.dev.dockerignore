@@ -1,0 +1,8 @@
+**
+!pkg/contract/go.mod
+!pkg/contract/**/*.go
+!apps/classifier/go.mod
+!apps/classifier/go.sum
+!apps/classifier/cmd/**/*.go
+!apps/classifier/internal/**/*.go
+!apps/classifier/data/seed_keywords.json

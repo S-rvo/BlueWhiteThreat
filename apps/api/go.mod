@@ -2,7 +2,10 @@ module github.com/BlueWhiteThreat/api
 
 go 1.24.4
 
-require go.mongodb.org/mongo-driver v1.17.4
+require (
+	github.com/S-rvo/BlueWhiteThreat/pkg/contract v0.0.0
+	go.mongodb.org/mongo-driver v1.17.4
+)
 
 require (
 	github.com/golang/snappy v0.0.4 // indirect
@@ -17,3 +20,5 @@ require (
 	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
 )
+
+replace github.com/S-rvo/BlueWhiteThreat/pkg/contract => ../../pkg/contract

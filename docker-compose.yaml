@@ -196,11 +196,12 @@ services:
 
   classifier:
     build:
-      context: ./apps/classifier
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: apps/classifier/Dockerfile.dev
     container_name: classifier_service
     volumes:
-      - ./apps/classifier:/app
+      - ./apps/classifier:/app/apps/classifier
+      - ./pkg/contract:/app/pkg/contract:ro
     depends_on:
       - mongodb
     env_file:
@@ -210,8 +211,8 @@ services:
   # visible. The service reloads MODEL_PATH every CLASSIFIER_INTERVAL_MIN.
   classifier-prd:
     build:
-      context: ./apps/classifier
-      dockerfile: Dockerfile.prd
+      context: .
+      dockerfile: apps/classifier/Dockerfile.prd
     container_name: classifier_prd_service
     volumes:
       - ./apps/classifier:/data:ro
@@ -238,13 +239,14 @@ services:
 
   api:
     build:
-      context: ./apps/api
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: apps/api/Dockerfile.dev
     container_name: api_service
     depends_on:
       - mongodb
     volumes:
-      - ./apps/api:/app
+      - ./apps/api:/app/apps/api
+      - ./pkg/contract:/app/pkg/contract:ro
     ports:
       - "127.0.0.1:8083:8083"
     profiles: ["api"]
@@ -286,11 +288,12 @@ services:
 
   parser:
     build:
-      context: ./apps/parser
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: apps/parser/Dockerfile.dev
     container_name: parser_service
     volumes:
-      - ./apps/parser:/app
+      - ./apps/parser:/app/apps/parser
+      - ./pkg/contract:/app/pkg/contract:ro
     depends_on:
       - mongodb
       - neo4j

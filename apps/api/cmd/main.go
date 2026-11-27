@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 	"log"
 	"net/http"
 	"os"
@@ -21,7 +22,7 @@ func main() {
 	}
 	db := os.Getenv("MONGO_DB")
 	if db == "" {
-		db = "BlueWhiteThreat"
+		db = contract.Database
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -41,7 +42,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":8083",
-		Handler:           newHandler(mongoStore{client.Database(db).Collection("article")}),
+		Handler:           newHandler(mongoStore{client.Database(db).Collection(contract.ArticleCollection)}),
 		ReadHeaderTimeout: 3 * time.Second,
 		ReadTimeout:       5 * time.Second,
 		WriteTimeout:      8 * time.Second,
