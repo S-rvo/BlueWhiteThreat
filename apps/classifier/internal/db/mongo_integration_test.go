@@ -92,3 +92,59 @@ func TestHistoricalVectorizerResultsAreReclassified(t *testing.T) {
 		t.Fatal("current policy result was unnecessarily selected again")
 	}
 }
+
+func TestFetchNeedingClassificationPagesPastSkippedArticles(t *testing.T) {
+	if os.Getenv("BWT_PIPELINE_TEST") != "1" {
+		t.Skip("opt-in MongoDB integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	client, err := Connect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Disconnect(context.Background())
+	coll := articleCollection(client)
+	const model = "paging-integration-model"
+	// Un article sans contenu n'est jamais classé : il reste éligible et ne doit
+	// pas bloquer la pagination.
+	docs := []any{
+		bson.M{"content": "", "entities": bson.M{"cves": bson.A{"CVE-2024-0001"}}},
+		bson.M{"content": "second"},
+		bson.M{"content": "third"},
+	}
+	res, err := coll.InsertMany(ctx, docs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer coll.DeleteMany(context.Background(), bson.M{"_id": bson.M{"$in": res.InsertedIDs}})
+	mine := map[interface{}]bool{}
+	for _, id := range res.InsertedIDs {
+		mine[id] = true
+	}
+
+	var seen []interface{}
+	var after interface{}
+	for i := 0; i < 10_000; i++ {
+		batch, err := FetchNeedingClassification(ctx, client, model, after, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+		if len(batch) > 1 {
+			t.Fatalf("limit ignored: %d articles", len(batch))
+		}
+		if mine[batch[0].ID] {
+			seen = append(seen, batch[0].ID)
+		}
+		after = batch[0].ID
+	}
+	if len(seen) != len(res.InsertedIDs) {
+		t.Fatalf("paged over %d of %d fixtures: %v", len(seen), len(res.InsertedIDs), seen)
+	}
+	if _, err := FetchNeedingClassification(ctx, client, model, nil, 0); err == nil {
+		t.Fatal("unbounded fetch accepted")
+	}
+}

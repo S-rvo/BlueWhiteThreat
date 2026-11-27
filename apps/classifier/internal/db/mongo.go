@@ -330,15 +330,38 @@ func classificationFilter(modelVersion string) bson.M {
 	}}
 }
 
-// FetchNeedingClassification returns articles that have not been scored by
-// modelVersion and the current policy. Existing results matching both versions
-// are left untouched; missing and stale results are recalculated.
-func FetchNeedingClassification(ctx context.Context, client *mongo.Client, modelVersion string) ([]ArticleContent, error) {
+// ClassificationBatchSize bounds how many articles one fetch loads in memory.
+const ClassificationBatchSize int64 = 200
+
+// classificationProjection keeps only the fields ArticleContent decodes, so a
+// batch does not drag entities or other bulky downstream fields along.
+var classificationProjection = bson.M{
+	"url": 1, "source": 1, "source_type": 1, "scraped_at": 1, "content": 1, "relevance": 1,
+}
+
+// FetchNeedingClassification returns at most limit articles that have not been
+// scored by modelVersion and the current policy, in _id order, starting after
+// the _id `after` (nil for the first batch). Existing results matching both
+// versions are left untouched; missing and stale results are recalculated.
+//
+// Paging on _id rather than re-running the filter guarantees progress even
+// for articles the caller skips (empty content), which stay matching.
+func FetchNeedingClassification(ctx context.Context, client *mongo.Client, modelVersion string, after interface{}, limit int64) ([]ArticleContent, error) {
 	if modelVersion == "" {
 		return nil, fmt.Errorf("db: model version is required to fetch articles for classification")
 	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("db: a positive batch limit is required to fetch articles for classification")
+	}
 	filter := classificationFilter(modelVersion)
-	cursor, err := articleCollection(client).Find(ctx, filter)
+	if after != nil {
+		filter = bson.M{"$and": bson.A{filter, bson.M{"_id": bson.M{"$gt": after}}}}
+	}
+	opts := options.Find().
+		SetSort(bson.D{{Key: "_id", Value: 1}}).
+		SetLimit(limit).
+		SetProjection(classificationProjection)
+	cursor, err := articleCollection(client).Find(ctx, filter, opts)
 	if err != nil {
 		return nil, fmt.Errorf("db: fetch articles for model %q: %w", modelVersion, err)
 	}
