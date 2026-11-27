@@ -47,7 +47,7 @@ rotation de leur clé de chiffrement.
 | `scraper` | `apps/scraper` | Continu, Chromium cloisonné | aucun (8080 interne) | Redis, MongoDB, Tor | Rendu et sauvegarde des pages |
 | `redis-backup` | `apps/crawler/scripts/redis-backup.sh` | Existant | aucun | Redis, emplacement de sauvegarde | Export RDB et rotation locale |
 | `classifier` | `apps/classifier` | Existant, modèle requis | aucun | MongoDB, `model.json` | Pertinence CTI et boucle de revue humaine |
-| `api` | `apps/api` | Profil facultatif `api` | `8083` | MongoDB | Métadonnées pertinentes paginées et métriques agrégées |
+| `api` | `apps/api` | Profil facultatif `api` | `8083` | MongoDB, Neo4j (facultatif) | Métadonnées pertinentes paginées, graphe CTI borné et métriques agrégées |
 | `front` | `apps/front` | Existant, partiel | `8080` | API, futur graphe | Interface Nuxt analyste |
 | `parser` | `apps/parser` | Existant | aucun | MongoDB, Ollama, Neo4j | Extraction d'entités et projection dans le graphe |
 | registre des sources | à définir | **Planifié** | à définir | API, base de données | Validation analyste des sources candidates |
@@ -213,6 +213,7 @@ Ne pas utiliser `docker compose down -v` dans le workflow normal : cette option 
 |---|---|---|
 | Interface analyste Nuxt | `http://localhost:8080` | Partielle |
 | API articles | `http://localhost:8083/data?limit=25` | Métadonnées uniquement ; curseur dans les en-têtes |
+| API graphe | `http://localhost:8083/graph?limit=100` | Entités CTI et identifiants d'articles ; 503 sans Neo4j |
 | Neo4j Browser | `http://localhost:7474` | Fonctionnel |
 | Mongo Express | `http://localhost:8082` | À vérifier avant usage |
 
@@ -542,12 +543,25 @@ source, ni IOC, ni détail Mongo ne font partie du contrat. `limit` vaut 25
 par défaut, maximum 100. S’il existe une page suivante, transmettre
 `X-Next-Cursor` dans le paramètre `cursor` de la requête suivante.
 
+`GET /graph` renvoie `{nodes, edges}` : le graphe CTI projeté par le parser,
+soit les entités (`IP`, `Domain`, `Hash`, `CVE`, `Malware`, `ThreatActor`,
+`Infrastructure`) reliées aux articles les plus récents qui les mentionnent.
+Un noeud a un `id` stable (`<Kind>:<valeur>`, `Article:<ObjectID>`), un
+`kind` et un `label`. Une arête va de l'entité vers l'article. `limit` compte
+les articles : 100 par défaut, maximum 200, et 10 entités au plus par article.
+Le graphe d'URL du crawler et les IOC de type URL (`URLIndicator`) ne sont pas
+exposés, pour la même raison que l'URL source dans `/data`.
+
 **Configurer.** Copier `apps/api/.env.example` vers `apps/api/.env`.
 Avec un compte opérateur MongoDB, créer un utilisateur distinct dans
 `BlueWhiteThreat` avec le rôle `read` de cette base, pas de rôle admin ni
 d’écriture. Renseigner `MONGODB_URI` avec ce compte, le nom de service
 `mongodb` et la base d’authentification correspondante. Encoder dans l’URI
-les caractères réservés des identifiants. Le service ne démarre pas sans URI.
+les caractères réservés des identifiants. Le service ne démarre pas sans URI. `NEO4J_URI`, `NEO4J_USER` et
+`NEO4J_PASSWORD` sont fournis par le Compose (mot de passe du `.env` racine) ;
+sans `NEO4J_URI`, `/graph` répond 503 et le reste de l'API fonctionne. L'API
+n'ouvre que des sessions Neo4j en lecture ; Neo4j Community n'ayant pas de
+rôles, le compte reste celui de l'instance.
 Le profil `api` n’est pas lancé par défaut.
 
 ```bash
@@ -555,6 +569,7 @@ docker compose --profile api up -d api
 curl -fsS http://localhost:8083/healthz
 curl -fsS http://localhost:8083/readyz
 curl -fsS -i 'http://localhost:8083/data?limit=25'
+curl -fsS 'http://localhost:8083/graph?limit=50'
 ```
 
 `/healthz` teste le serveur ; `/readyz` vérifie que la lecture Mongo est
@@ -588,7 +603,7 @@ npm run build
 
 **Fichiers principaux.** `pages/menaces.vue`, `pages/datamap.vue`, `pages/ioc.vue`, `components`.
 
-**Limites connues.** La page menaces dépend de `http://localhost:8083/data`. La page graphe appelle actuellement `http://localhost:8080/graph`, alors qu'aucun endpoint hôte correspondant n'est exposé par le Compose actuel. La vue graphe n'est donc pas un critère de réussite tant que le contrat API n'est pas corrigé.
+**Limites connues.** Les pages menaces et graphe appellent l'API `/data` et `/graph` à l'adresse `runtimeConfig.public.apiBase` (`http://localhost:8083` par défaut, surchargeable via `NUXT_PUBLIC_API_BASE`). La page graphe exige le profil `api` et Neo4j ; à défaut elle affiche « Graphe indisponible ».
 
 ### 8.10 Inspection locale de MongoDB
 
@@ -647,7 +662,7 @@ Pour chacun, la Definition of Done documentaire minimale sera :
 | Le scraper ne traite rien | sonde `--check-health`, files `scraper:pending` et `scraper:inflight` | contrôler MongoDB, Redis, Chromium et la progression, sans purge |
 | Une URL est en retard ou échoue | échéance, `scraper:retry_due`, `scraper:dead` et `scraper:blocked` | distinguer retard, échec temporaire, quarantaine et refus |
 | Le frontend affiche zéro article | API `/data`, logs API, MongoDB | vérifier l'API avant le frontend |
-| La vue graphe échoue | requête `/graph` dans le navigateur | endpoint non disponible actuellement ; utiliser Neo4j Browser pour le diagnostic |
+| La vue graphe échoue | `curl -i http://localhost:8083/graph`, logs API | 503 : vérifier `NEO4J_URI`/`NEO4J_PASSWORD` et Neo4j ; graphe vide : aucune projection parser encore |
 | Mongo Express est inaccessible | logs et mapping de port | corriger le port interne du service avant usage |
 | Le crawler ne prend plus de tâche | `/ready`, file prête et échéances | une file vide ou future est normale ; diagnostiquer un processus arrêté |
 | Un test Go échoue sur le cache dans un sandbox | permissions du cache Go | définir temporairement un `GOCACHE` dans un répertoire autorisé, sans changer le projet |

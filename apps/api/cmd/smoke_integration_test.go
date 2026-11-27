@@ -36,7 +36,7 @@ func TestSmokeMongoContract(t *testing.T) {
 	if !errors.As(err, &commandErr) || !commandErr.HasErrorCode(13) {
 		t.Fatal("API credentials not verifiably read-only")
 	}
-	handler := newHandler(mongoStore{articles})
+	handler := newHandler(mongoStore{articles}, unavailableGraph{})
 	request := func(path string, status int) string {
 		t.Helper()
 		w := httptest.NewRecorder()

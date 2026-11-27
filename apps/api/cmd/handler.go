@@ -25,7 +25,20 @@ type apiStore interface {
 	metrics(context.Context) (pipelineMetrics, error)
 }
 
-func newHandler(store apiStore) http.Handler {
+// allowFrontend autorise le frontend local à lire la réponse.
+func allowFrontend(w http.ResponseWriter, r *http.Request, expose string) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Add("Vary", "Origin")
+	switch origin := r.Header.Get("Origin"); origin {
+	case "http://localhost:8080", "http://127.0.0.1:8080":
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		if expose != "" {
+			w.Header().Set("Access-Control-Expose-Headers", expose)
+		}
+	}
+}
+
+func newHandler(store apiStore, graph graphStore) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -51,13 +64,7 @@ func newHandler(store apiStore) http.Handler {
 		_, _ = io.WriteString(w, metrics.render())
 	})
 	mux.HandleFunc("GET /data", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Add("Vary", "Origin")
-		switch origin := r.Header.Get("Origin"); origin {
-		case "http://localhost:8080", "http://127.0.0.1:8080":
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Expose-Headers", "X-Next-Cursor")
-		}
+		allowFrontend(w, r, "X-Next-Cursor")
 		limit, cursor, ok := pagination(r.URL.RawQuery)
 		if !ok {
 			http.Error(w, "invalid limit or cursor", http.StatusBadRequest)
@@ -79,6 +86,23 @@ func newHandler(store apiStore) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(rows)
+	})
+	mux.HandleFunc("GET /graph", func(w http.ResponseWriter, r *http.Request) {
+		allowFrontend(w, r, "")
+		limit, ok := graphLimit(r.URL.RawQuery)
+		if !ok {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+		defer cancel()
+		rows, err := graph.articles(ctx, limit)
+		if err != nil {
+			http.Error(w, "graph unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(buildGraph(rows, limit))
 	})
 	return mux
 }

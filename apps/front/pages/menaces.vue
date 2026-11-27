@@ -18,10 +18,11 @@
 import { ref, onMounted } from "vue";
 
 const articles = ref([]);
+const { public: { apiBase } } = useRuntimeConfig();
 
 const fetchArticles = async () => {
   try {
-    const response = await fetch("http://localhost:8083/data");
+    const response = await fetch(`${apiBase}/data`);
     if (!response.ok)
       throw new Error("Erreur lors de la récupération des articles");
     const data = await response.json();

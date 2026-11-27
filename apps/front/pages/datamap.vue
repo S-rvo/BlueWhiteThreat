@@ -1,6 +1,7 @@
 <template>
   <div class="h-screen w-screen flex flex-col bg-gray-900">
     <h1 class="text-3xl font-bold text-white m-0 p-0 leading-none">Data Map</h1>
+    <p v-if="status" class="text-gray-300 p-2">{{ status }}</p>
     <div ref="networkContainer" class="flex-1 bg-gray-900 overflow-hidden network-container"></div>
   </div>
 </template>
@@ -9,55 +10,24 @@
 import { ref, onMounted, nextTick } from 'vue'
 import { Network } from 'vis-network/standalone/esm/vis-network'
 
+// Graphe CTI : entités (IOC, CVE, malware…) -> articles qui les mentionnent.
+// Les bornes (articles, entités par article) sont appliquées par l'API.
 const networkContainer = ref(null)
+const status = ref('Chargement du graphe…')
+const { public: { apiBase } } = useRuntimeConfig()
 
-onMounted(async () => {
-  await nextTick()
+const colors = {
+  Article: { background: '#94a3b8', border: '#64748b' },
+  IP: { background: '#38bdf8', border: '#0ea5e9' },
+  Domain: { background: '#34d399', border: '#10b981' },
+  Hash: { background: '#a78bfa', border: '#8b5cf6' },
+  CVE: { background: '#f87171', border: '#ef4444' },
+  Malware: { background: '#fb923c', border: '#f97316' },
+  ThreatActor: { background: '#facc15', border: '#eab308' },
+  Infrastructure: { background: '#f472b6', border: '#ec4899' }
+}
 
-  if (!networkContainer.value) {
-    console.error("Network container not found")
-    return
-  }
-
-  const res = await fetch('http://localhost:8080/graph')
-  const data = await res.json()
-
-  console.log('Data API:', data)
-
-  const nodesSet = new Set()
-  const edges = []
-
-  // Limiter à 200 sources
-  const limitedData = data.slice(0, 200)
-
-  limitedData.forEach(link => {
-    nodesSet.add(link.source)
-
-    // Limiter à 5 targets par source
-    const limitedTargets = link.targets.slice(0, 5)
-
-    limitedTargets.forEach(target => {
-      nodesSet.add(target)
-
-      // Ne pas créer de lien source ➔ source
-      if (link.source !== target) {
-        edges.push({ from: link.source, to: target })
-      }
-    })
-  })
-
-  const nodes = Array.from(nodesSet).map(url => ({
-    id: url,
-    label: url,
-    shape: 'dot',
-    size: 8,
-    font: { size: 12, color: '#ffffff' },
-    color: { background: '#38bdf8', border: '#0ea5e9' }
-  }))
-
-  const visData = { nodes, edges }
-
-  const options = {
+const options = {
   nodes: { shape: 'dot' },
   edges: {
     arrows: { to: { enabled: true, scaleFactor: 0.4 } },
@@ -91,16 +61,47 @@ onMounted(async () => {
   }
 }
 
+onMounted(async () => {
+  await nextTick()
+  if (!networkContainer.value) {
+    return
+  }
 
-  setTimeout(() => {
-    const networkInstance = new Network(networkContainer.value, visData, options)
-    networkInstance.once('stabilizationIterationsDone', () => {
-      networkInstance.setOptions({ physics: false })
-      networkInstance.fit({
-        animation: { duration: 500, easingFunction: 'easeInOutQuad' }
-      })
+  let graph
+  try {
+    const res = await fetch(`${apiBase}/graph`)
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`)
+    }
+    graph = await res.json()
+  } catch (error) {
+    console.error(error)
+    status.value = 'Graphe indisponible : vérifier l\'API et Neo4j.'
+    return
+  }
+  if (!graph.nodes?.length) {
+    status.value = 'Aucune entité projetée pour le moment.'
+    return
+  }
+  status.value = ''
+
+  const nodes = graph.nodes.map(node => ({
+    id: node.id,
+    label: node.kind === 'Article' ? `article ${node.label.slice(-6)}` : node.label,
+    title: `${node.kind} : ${node.label}`,
+    shape: 'dot',
+    size: node.kind === 'Article' ? 6 : 10,
+    font: { size: 12, color: '#ffffff' },
+    color: colors[node.kind] || colors.Article
+  }))
+
+  const networkInstance = new Network(networkContainer.value, { nodes, edges: graph.edges }, options)
+  networkInstance.once('stabilizationIterationsDone', () => {
+    networkInstance.setOptions({ physics: false })
+    networkInstance.fit({
+      animation: { duration: 500, easingFunction: 'easeInOutQuad' }
     })
-  }, 100)
+  })
 })
 </script>
 
