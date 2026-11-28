@@ -16,4 +16,6 @@ ENV NODE_ENV=production NITRO_HOST=0.0.0.0 NITRO_PORT=8080
 COPY --chown=node:node --from=builder /app/.output ./.output
 USER node
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1
 CMD ["node", ".output/server/index.mjs"]

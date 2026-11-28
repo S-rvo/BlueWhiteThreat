@@ -1,10 +1,11 @@
 <template>
-  <footer
-    class="bg-black text-white flex justify-center items-center py-4 border-t border-gray-800"
-  >
-    <span class="text-blue-500">Blue</span>
-    <span class="text-white mx-1">White</span>
-    <span class="text-red-500">Threat</span>
-    <span class="ml-2 text-xs text-gray-400">© 2024 CTI France</span>
+  <footer class="border-t border-line/70">
+    <div class="mx-auto flex max-w-7xl flex-col gap-2 px-4 py-6 text-xs text-muted sm:flex-row sm:items-center sm:justify-between sm:px-6">
+      <span class="flex items-center gap-3">
+        <span class="tricolore h-1 w-8 rounded-full" aria-hidden="true" />
+        BlueWhiteThreat — projet académique de Cyber Threat Intelligence
+      </span>
+      <span class="font-mono">Données issues de sources publiques, à vérifier avant usage opérationnel.</span>
+    </div>
   </footer>
 </template>

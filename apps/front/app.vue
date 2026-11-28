@@ -1,35 +1,12 @@
 <template>
-  <div class="app-container">
+  <div class="flex min-h-dvh flex-col">
+    <a href="#contenu" class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 btn-primary">
+      Aller au contenu
+    </a>
     <HeaderBar />
-    <main class="main-content">
+    <main id="contenu" class="mx-auto w-full max-w-7xl flex-1 px-4 py-10 sm:px-6">
       <NuxtPage />
     </main>
     <FooterBar />
   </div>
 </template>
-
-<script setup>
-import HeaderBar from "~/components/HeaderBar.vue";
-import FooterBar from "~/components/FooterBar.vue";
-</script>
-
-<style scoped>
-.app-container {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background-color: #101014;
-}
-
-.main-content {
-  flex: 1 1 auto;
-  min-height: 0;
-  /* Pour forcer la hauteur exacte : */
-  height: calc(
-    100vh - 64px - 56px
-  ); /* Adapter les valeurs à la hauteur réelle du header/footer */
-  overflow-y: auto;
-}
-
-/* Si besoin, tu peux ajuster les hauteurs ci-dessus selon la taille réelle de tes barres */
-</style>
