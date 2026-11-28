@@ -39,6 +39,17 @@ func SaveScrapedPage(page ScrapedPage) (int, error) {
 	return saveScrapedPage(context.Background(), nil, page)
 }
 
+// contentDerivedFields are computed downstream from the article text
+// (classifier, parser) and become stale as soon as that text changes.
+var contentDerivedFields = []string{
+	"relevance",
+	"entities",
+	"graph_projection_queued_at",
+	"extraction_failures",
+	"extraction_retry_at",
+	"extraction_last_error",
+}
+
 // A production cycle shares one Mongo client across all workers.
 func saveScrapedPage(parent context.Context, client *mongo.Client, page ScrapedPage) (int, error) {
 	if page.SourceType == "" {
@@ -66,18 +77,22 @@ func saveScrapedPage(parent context.Context, client *mongo.Client, page ScrapedP
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	// Evaluate against the old content in the same atomic update. A new text
-	// must not inherit the previous version's verdict; an unchanged page keeps it.
-	update := mongo.Pipeline{bson.D{{Key: "$set", Value: bson.M{
+	// must not inherit anything derived from the previous version (verdict,
+	// entities, extraction retries); an unchanged page keeps it all.
+	// graph_projected_at is deliberately kept: it tells the parser the graph
+	// still holds this article, so it can retract or replace it.
+	set := bson.M{
 		"url":         bson.M{"$literal": page.URL},
 		"source":      bson.M{"$literal": page.Source},
 		"source_type": bson.M{"$literal": page.SourceType},
 		"scraped_at":  page.ScrapedAt,
 		"content":     bson.M{"$literal": page.Content},
-		"relevance": bson.M{"$cond": bson.A{
-			bson.M{"$eq": bson.A{"$content", bson.M{"$literal": page.Content}}},
-			"$relevance", "$$REMOVE",
-		}},
-	}}}}
+	}
+	sameContent := bson.M{"$eq": bson.A{"$content", bson.M{"$literal": page.Content}}}
+	for _, field := range contentDerivedFields {
+		set[field] = bson.M{"$cond": bson.A{sameContent, "$" + field, "$$REMOVE"}}
+	}
+	update := mongo.Pipeline{bson.D{{Key: "$set", Value: set}}}
 	result, err := client.Database("BlueWhiteThreat").Collection("article").UpdateOne(
 		ctx, bson.M{"url": page.URL}, update, options.Update().SetUpsert(true))
 	if err != nil {

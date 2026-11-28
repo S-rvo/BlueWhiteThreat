@@ -17,6 +17,7 @@ import (
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/db"
 	"github.com/S-rvo/BlueWhiteThreat/apps/classifier/internal/model"
 	"github.com/joho/godotenv"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 var defaultIntervalMinutes = 10
@@ -103,38 +104,76 @@ func applyThresholdOverride(m *model.Model, raw string) bool {
 	return true
 }
 
+// runOnce classifies every pending article in bounded batches. Each batch has
+// its own deadline, so a large backlog (new model or policy version) is worked
+// through over one run instead of timing out on a single unbounded fetch.
 func runOnce(classifier *classify.Classifier) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	client, err := db.Connect(ctx)
+	connectCtx, cancelConnect := context.WithTimeout(context.Background(), 30*time.Second)
+	client, err := db.Connect(connectCtx)
+	cancelConnect()
 	if err != nil {
 		log.Printf("failed to connect to MongoDB, will retry next tick: %v", err)
 		return err
 	}
-	defer client.Disconnect(ctx)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = client.Disconnect(ctx)
+	}()
 
-	articles, err := db.FetchNeedingClassification(ctx, client, classifier.Version())
-	if err != nil {
-		log.Printf("failed to fetch articles needing classification, will retry next tick: %v", err)
-		return err
+	var (
+		writeErr error
+		after    interface{}
+		total    int
+	)
+	for {
+		n, last, err := classifyBatch(classifier, client, after)
+		total += n
+		if err != nil {
+			log.Printf("failed to fetch articles needing classification, will retry next tick: %v", err)
+			return err
+		}
+		if last.err != nil {
+			writeErr = last.err
+		}
+		if n < int(db.ClassificationBatchSize) {
+			break
+		}
+		after = last.id
 	}
-	log.Printf("Found %d articles needing classification by model %s", len(articles), classifier.Version())
+	log.Printf("Processed %d articles needing classification by model %s", total, classifier.Version())
+	return writeErr
+}
 
-	var writeErr error
+type batchCursor struct {
+	id  interface{}
+	err error
+}
+
+// classifyBatch fetches and scores one batch after the given _id. It returns
+// the batch size, the last _id seen and the last write error, if any.
+func classifyBatch(classifier *classify.Classifier, client *mongo.Client, after interface{}) (int, batchCursor, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	articles, err := db.FetchNeedingClassification(ctx, client, classifier.Version(), after, db.ClassificationBatchSize)
+	if err != nil {
+		return 0, batchCursor{}, err
+	}
+	var cur batchCursor
 	for _, article := range articles {
+		cur.id = article.ID
 		relevance, skip := classifyArticleSource(classifier, article.Content, article.SourceType)
 		if skip {
 			log.Printf("skipping article %v: empty content", article.ID)
 			continue
 		}
-
 		if err := db.UpdateRelevance(ctx, client, article, relevance); err != nil {
 			log.Printf("failed to update relevance for article %v: %v", article.ID, err)
-			writeErr = err
+			cur.err = err
 		}
 	}
-	return writeErr
+	return len(articles), cur, nil
 }
 
 // classifyArticle decides the relevance record for one article's content.

@@ -14,6 +14,7 @@ import (
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/scraper/internal/db"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // Run only against a dedicated Redis instance, never the crawler's live sets.
@@ -213,7 +214,16 @@ func TestPipelineContentUpdateInvalidatesRelevance(t *testing.T) {
 	coll := m.Database("BlueWhiteThreat").Collection("article")
 	u := fmt.Sprintf("http://pipeline-test.invalid/update-%d", time.Now().UnixNano())
 	defer coll.DeleteOne(ctx, bson.M{"url": u})
-	if _, err := coll.InsertOne(ctx, bson.M{"url": u, "content": "old text", "relevance": bson.M{"relevant": true, "model_version": "test-version", "policy_version": "test-policy"}}); err != nil {
+	projectedAt := time.Now().UTC().Truncate(time.Millisecond)
+	if _, err := coll.InsertOne(ctx, bson.M{"url": u, "content": "old text",
+		"relevance":                  bson.M{"relevant": true, "model_version": "test-version", "policy_version": "test-policy"},
+		"entities":                   bson.M{"cves": bson.A{"CVE-2024-0001"}},
+		"graph_projection_queued_at": projectedAt,
+		"graph_projected_at":         projectedAt,
+		"extraction_failures":        2,
+		"extraction_retry_at":        projectedAt,
+		"extraction_last_error":      "timeout",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	// Identical content preserves the verdict even with a newer scrape date.
@@ -224,8 +234,10 @@ func TestPipelineContentUpdateInvalidatesRelevance(t *testing.T) {
 	if err := coll.FindOne(ctx, bson.M{"url": u}).Decode(&unchanged); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := unchanged["relevance"]; !ok {
-		t.Fatal("unchanged content lost its verdict")
+	for _, field := range append(contentDerivedFields, "graph_projected_at") {
+		if _, ok := unchanged[field]; !ok {
+			t.Fatalf("unchanged content lost %s", field)
+		}
 	}
 	if _, err := SaveScrapedPage(ScrapedPage{URL: u, Source: u, Content: "$literal-looking new article text", ScrapedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
@@ -240,4 +252,45 @@ func TestPipelineContentUpdateInvalidatesRelevance(t *testing.T) {
 	if _, exists := result["relevance"]; exists {
 		t.Error("content changed but old NLP relevance remains: the same model/policy will not reclassify this version")
 	}
+	for _, field := range contentDerivedFields {
+		if _, exists := result[field]; exists {
+			t.Errorf("content changed but stale %s remains", field)
+		}
+	}
+	// Kept so the parser can retract or replace the previous graph projection.
+	if _, exists := result["graph_projected_at"]; !exists {
+		t.Error("graph_projected_at dropped: the old graph projection would never be retracted")
+	}
+}
+
+func TestArticleURLIndexRejectsDuplicates(t *testing.T) {
+	if os.Getenv("BWT_PIPELINE_TEST") != "1" {
+		t.Skip("opt-in integration test")
+	}
+	ctx := context.Background()
+	m, err := db.ConnectMongo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Disconnect(ctx)
+	for i := 0; i < 2; i++ { // idempotent au redémarrage
+		if err := db.EnsureArticleIndexes(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	coll := m.Database("BlueWhiteThreat").Collection("article")
+	u := fmt.Sprintf("http://pipeline-test.invalid/dup-%d", time.Now().UnixNano())
+	defer coll.DeleteMany(ctx, bson.M{"url": u})
+	if _, err := coll.InsertOne(ctx, bson.M{"url": u}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coll.InsertOne(ctx, bson.M{"url": u}); !mongo.IsDuplicateKeyError(err) {
+		t.Fatalf("second insert of the same URL: err = %v; want duplicate key", err)
+	}
+	// Les documents sans URL restent hors du périmètre de l'index.
+	res, err := coll.InsertMany(ctx, []any{bson.M{"content": "no url 1"}, bson.M{"content": "no url 2"}})
+	if err != nil {
+		t.Fatalf("documents without url rejected: %v", err)
+	}
+	defer coll.DeleteMany(ctx, bson.M{"_id": bson.M{"$in": res.InsertedIDs}})
 }

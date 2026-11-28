@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
@@ -22,4 +23,19 @@ func ConnectMongo() (*mongo.Client, error) {
 	defer cancel()
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	return client, err
+}
+
+// EnsureArticleIndexes garantit l'unicité de l'URL, clé de l'upsert du scraper :
+// sans elle, deux workers concurrents peuvent insérer deux fois la même page.
+// Idempotent ; échoue si la collection contient déjà des doublons.
+func EnsureArticleIndexes(ctx context.Context, client *mongo.Client) error {
+	_, err := client.Database("BlueWhiteThreat").Collection("article").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "url", Value: 1}},
+		// Partiel : seuls les documents portant une URL sont concernés ; un
+		// document sans url (fixture, import) ne doit pas entrer en collision
+		// avec les autres sur la valeur null.
+		Options: options.Index().SetName("scraper_url_unique").SetUnique(true).
+			SetPartialFilterExpression(bson.M{"url": bson.M{"$type": "string"}}),
+	})
+	return err
 }
