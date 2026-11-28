@@ -24,7 +24,7 @@ func TestExtractWithFallback_UsesPrimaryWhenSuccessful(t *testing.T) {
 	primary.result.CVEs = []string{"CVE-2024-1234"}
 	fallback := &fakeExtractor{}
 
-	out, err := ExtractWithFallback(context.Background(), primary, fallback, "text")
+	out, err := ExtractWithFallback(context.Background(), primary, fallback, "advisory CVE-2024-1234")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -83,5 +83,20 @@ func TestExtractWithoutRemoteFallback(t *testing.T) {
 	primary.err = errors.New("ollama down")
 	if _, err := ExtractWithFallback(context.Background(), primary, nil, "synthetic"); !errors.Is(err, primary.err) {
 		t.Fatalf("should surface local failure: %v", err)
+	}
+}
+
+func TestExtractWithFallback_EscalatesWhenPrimaryIsUngrounded(t *testing.T) {
+	primary := &fakeExtractor{}
+	primary.result.IOCs.URLs = []string{"https://invented.example"}
+	fallback := &fakeExtractor{}
+	fallback.result.CVEs = []string{"CVE-2024-9999"}
+
+	out, err := ExtractWithFallback(context.Background(), primary, fallback, "text mentioning CVE-2024-9999")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out.IOCs.URLs) != 0 || len(out.CVEs) != 1 || fallback.calls != 1 {
+		t.Fatalf("invented URL should be dropped and fallback used, got out=%v calls=%d", out, fallback.calls)
 	}
 }

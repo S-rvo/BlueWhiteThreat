@@ -14,7 +14,7 @@ import (
 func ExtractWithFallback(ctx context.Context, primary, fallback extractor.Extractor, text string) (entities.Entities, error) {
 	result, err := primary.Extract(ctx, text)
 	if err == nil {
-		cleaned := entities.ValidateAndClean(result)
+		cleaned := clean(result, text)
 		if !cleaned.IsEmpty() || fallback == nil {
 			return cleaned, nil
 		}
@@ -28,5 +28,11 @@ func ExtractWithFallback(ctx context.Context, primary, fallback extractor.Extrac
 	if fbErr != nil {
 		return entities.Entities{}, fmt.Errorf("primary and fallback both failed: primary_err=%v fallback_err=%w", err, fbErr)
 	}
-	return entities.ValidateAndClean(fbResult), nil
+	return clean(fbResult, text), nil
+}
+
+// clean applique la validation de format puis retire les indicateurs absents
+// du texte source.
+func clean(e entities.Entities, text string) entities.Entities {
+	return entities.KeepGrounded(entities.ValidateAndClean(e), text)
 }
