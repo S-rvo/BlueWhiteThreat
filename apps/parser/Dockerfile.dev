@@ -1,11 +1,12 @@
-# Dockerfile.dev
+# Dockerfile.dev — build context: repository root (shared module pkg/contract).
 FROM golang:1.24
 
-WORKDIR /app
+WORKDIR /app/apps/parser
 
-COPY go.mod go.sum ./
+COPY pkg/contract /app/pkg/contract
+COPY apps/parser/go.mod apps/parser/go.sum ./
 RUN go mod download
 
-COPY . .
+COPY apps/parser/. .
 
 CMD ["go", "run", "./cmd"]

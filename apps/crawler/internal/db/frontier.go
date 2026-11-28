@@ -8,6 +8,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -202,7 +203,7 @@ func finishClaim(ctx context.Context, u, token string, success, infra bool, dela
  else redis.call('HINCRBY','crawler:stats','fetch_failure_total',1) end
  if ARGV[3]=='0' and redis.call('HINCRBY','crawler:attempts',ARGV[1],1)>=10 then
  redis.call('ZADD','crawler:dead',ARGV[4],ARGV[1]); return 1 end
- scheduleURL(KEYS[3],ARGV[1],ARGV[5]); return 1`, []string{"crawler:tokens", "crawler:inflight", "crawler:scheduled"}, u, token, boolInt(success), time.Now().Unix(), time.Now().Add(delay).Unix(), code, host, boolInt(infra), int64(queuePriority(u))*10_000_000_000).Int()
+ scheduleURL(KEYS[3],ARGV[1],ARGV[5]); return 1`, []string{"crawler:tokens", "crawler:inflight", "crawler:scheduled"}, u, token, boolInt(success), time.Now().Unix(), time.Now().Add(delay).Unix(), code, host, boolInt(infra), contract.PendingPriorityBase(u)).Int()
 	if err == nil && v == 0 {
 		return fmt.Errorf("expired or superseded lease")
 	}

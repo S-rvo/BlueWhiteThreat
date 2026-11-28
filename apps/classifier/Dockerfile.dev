@@ -1,14 +1,15 @@
-# apps/classifier/Dockerfile.dev
+# apps/classifier/Dockerfile.dev — build context: repository root (shared module pkg/contract).
 FROM golang:1.24
 
-WORKDIR /app
+WORKDIR /app/apps/classifier
 
-COPY go.mod go.sum ./
+COPY pkg/contract /app/pkg/contract
+COPY apps/classifier/go.mod apps/classifier/go.sum ./
 RUN go mod download
 
-COPY cmd ./cmd
-COPY internal ./internal
-COPY data/seed_keywords.json ./data/seed_keywords.json
+COPY apps/classifier/cmd ./cmd
+COPY apps/classifier/internal ./internal
+COPY apps/classifier/data/seed_keywords.json ./data/seed_keywords.json
 
 # Test code packages (local experiment output is not part of the build context).
 RUN go test ./cmd/... ./internal/...

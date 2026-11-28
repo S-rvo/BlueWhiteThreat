@@ -5,6 +5,7 @@ go 1.24
 toolchain go1.24.4
 
 require (
+	github.com/S-rvo/BlueWhiteThreat/pkg/contract v0.0.0
 	github.com/anthropics/anthropic-sdk-go v1.80.0
 	github.com/joho/godotenv v1.5.1
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.5
@@ -33,3 +34,5 @@ require (
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/text v0.27.0 // indirect
 )
+
+replace github.com/S-rvo/BlueWhiteThreat/pkg/contract => ../../pkg/contract

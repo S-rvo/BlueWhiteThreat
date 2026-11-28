@@ -11,6 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/S-rvo/BlueWhiteThreat/apps/parser/internal/entities"
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 )
 
 func getEnvOrDefault(key, def string) string {
@@ -46,20 +47,20 @@ type PendingGraphArticle struct {
 }
 
 func articleCollection(client *mongo.Client) *mongo.Collection {
-	return client.Database("BlueWhiteThreat").Collection("article")
+	return client.Database(contract.Database).Collection(contract.ArticleCollection)
 }
 
 // A positive verdict flagged as uncertain stays out of automatic extraction/projection.
 func eligibleArticles() bson.M {
-	return bson.M{"relevance.relevant": true, "relevance.needs_review": bson.M{"$ne": true}}
+	return bson.M{contract.PathRelevanceRelevant: true, contract.PathRelevanceNeedsReview: bson.M{"$ne": true}}
 }
 
 // Champs de suivi des échecs d'extraction. Le scraper les efface quand le
 // contenu d'une page change : un nouveau texte repart sans historique.
 const (
-	extractionFailuresField  = "extraction_failures"
-	extractionRetryAtField   = "extraction_retry_at"
-	extractionLastErrorField = "extraction_last_error"
+	extractionFailuresField  = contract.FieldExtractionFailures
+	extractionRetryAtField   = contract.FieldExtractionRetryAt
+	extractionLastErrorField = contract.FieldExtractionLastError
 )
 
 // Backoff exponentiel des extractions en échec : 10 min, 20 min, … plafonné à
@@ -86,17 +87,17 @@ func ExtractionBackoff(failures int) time.Duration {
 func EnsureIndexes(ctx context.Context, client *mongo.Client) error {
 	_, err := articleCollection(client).Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{
-			Keys:    bson.D{{Key: "relevance.relevant", Value: 1}, {Key: "_id", Value: 1}},
+			Keys:    bson.D{{Key: contract.PathRelevanceRelevant, Value: 1}, {Key: contract.FieldID, Value: 1}},
 			Options: options.Index().SetName("parser_extraction_queue"),
 		},
 		{
-			Keys:    bson.D{{Key: "relevance.relevant", Value: 1}, {Key: "graph_projection_queued_at", Value: 1}, {Key: "_id", Value: 1}},
+			Keys:    bson.D{{Key: contract.PathRelevanceRelevant, Value: 1}, {Key: contract.FieldGraphProjectionQueuedAt, Value: 1}, {Key: contract.FieldID, Value: 1}},
 			Options: options.Index().SetName("parser_projection_queue"),
 		},
 		{
-			Keys: bson.D{{Key: "graph_projected_at", Value: 1}},
+			Keys: bson.D{{Key: contract.FieldGraphProjectedAt, Value: 1}},
 			Options: options.Index().SetName("parser_graph_projected").
-				SetPartialFilterExpression(bson.M{"graph_projected_at": bson.M{"$exists": true}}),
+				SetPartialFilterExpression(bson.M{contract.FieldGraphProjectedAt: bson.M{"$exists": true}}),
 		},
 	})
 	if err != nil {
@@ -109,12 +110,12 @@ func EnsureIndexes(ctx context.Context, client *mongo.Client) error {
 // hors articles en attente de backoff après un échec.
 func FetchUnparsedArticles(ctx context.Context, client *mongo.Client, limit int64) ([]UnparsedArticle, error) {
 	filter := eligibleArticles()
-	filter["entities"] = bson.M{"$exists": false}
+	filter[contract.FieldEntities] = bson.M{"$exists": false}
 	filter["$or"] = bson.A{
 		bson.M{extractionRetryAtField: bson.M{"$exists": false}},
 		bson.M{extractionRetryAtField: bson.M{"$lte": time.Now()}},
 	}
-	cur, err := articleCollection(client).Find(ctx, filter, options.Find().SetLimit(limit).SetProjection(bson.M{"content": 1}).SetSort(bson.D{{Key: "_id", Value: 1}}))
+	cur, err := articleCollection(client).Find(ctx, filter, options.Find().SetLimit(limit).SetProjection(bson.M{contract.FieldContent: 1}).SetSort(bson.D{{Key: contract.FieldID, Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -133,16 +134,16 @@ func FetchUnparsedArticles(ctx context.Context, client *mongo.Client, limit int6
 // avait déjà été projeté : le graphe doit refléter cette nouvelle extraction.
 func SaveEntities(ctx context.Context, client *mongo.Client, article UnparsedArticle, ents entities.Entities) error {
 	filter := eligibleArticles()
-	filter["_id"], filter["content"], filter["entities"] = article.ID, article.Content, bson.M{"$exists": false}
+	filter[contract.FieldID], filter[contract.FieldContent], filter[contract.FieldEntities] = article.ID, article.Content, bson.M{"$exists": false}
 	_, err := articleCollection(client).UpdateOne(ctx, filter,
 		bson.M{
-			"$set":         bson.M{"entities": ents},
-			"$currentDate": bson.M{"graph_projection_queued_at": true},
+			"$set":         bson.M{contract.FieldEntities: ents},
+			"$currentDate": bson.M{contract.FieldGraphProjectionQueuedAt: true},
 			"$unset": bson.M{
-				"graph_projected_at":     "",
-				extractionFailuresField:  "",
-				extractionRetryAtField:   "",
-				extractionLastErrorField: "",
+				contract.FieldGraphProjectedAt: "",
+				extractionFailuresField:        "",
+				extractionRetryAtField:         "",
+				extractionLastErrorField:       "",
 			},
 		},
 	)
@@ -153,7 +154,7 @@ func SaveEntities(ctx context.Context, client *mongo.Client, article UnparsedArt
 // pour qu'un article qui échoue toujours ne bloque pas la tête de file. Sans
 // effet si le contenu a changé entre-temps.
 func RecordExtractionFailure(ctx context.Context, client *mongo.Client, article UnparsedArticle, cause error) (int, error) {
-	filter := bson.M{"_id": article.ID, "content": article.Content, "entities": bson.M{"$exists": false}}
+	filter := bson.M{contract.FieldID: article.ID, contract.FieldContent: article.Content, contract.FieldEntities: bson.M{"$exists": false}}
 	message := cause.Error()
 	if len(message) > 500 {
 		message = message[:500]
@@ -181,12 +182,12 @@ func RecordExtractionFailure(ctx context.Context, client *mongo.Client, article 
 // broken article does not block the batch and retries get their turn.
 func FetchPendingGraphArticles(ctx context.Context, client *mongo.Client, limit int64) ([]PendingGraphArticle, error) {
 	filter := eligibleArticles()
-	filter["entities"] = bson.M{"$exists": true}
-	filter["graph_projected_at"] = bson.M{"$exists": false}
+	filter[contract.FieldEntities] = bson.M{"$exists": true}
+	filter[contract.FieldGraphProjectedAt] = bson.M{"$exists": false}
 	opts := options.Find().
 		SetLimit(limit).
-		SetProjection(bson.M{"entities": 1}).
-		SetSort(bson.D{{Key: "graph_projection_queued_at", Value: 1}, {Key: "_id", Value: 1}})
+		SetProjection(bson.M{contract.FieldEntities: 1}).
+		SetSort(bson.D{{Key: contract.FieldGraphProjectionQueuedAt, Value: 1}, {Key: contract.FieldID, Value: 1}})
 	cur, err := articleCollection(client).Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
@@ -201,17 +202,17 @@ func FetchPendingGraphArticles(ctx context.Context, client *mongo.Client, limit 
 }
 
 func MarkGraphProjected(ctx context.Context, client *mongo.Client, articleID any) error {
-	_, err := articleCollection(client).UpdateOne(ctx, bson.M{"_id": articleID}, bson.M{
-		"$currentDate": bson.M{"graph_projected_at": true},
-		"$unset":       bson.M{"graph_projection_queued_at": ""},
+	_, err := articleCollection(client).UpdateOne(ctx, bson.M{contract.FieldID: articleID}, bson.M{
+		"$currentDate": bson.M{contract.FieldGraphProjectedAt: true},
+		"$unset":       bson.M{contract.FieldGraphProjectionQueuedAt: ""},
 	})
 	return err
 }
 
 func RequeueGraphProjection(ctx context.Context, client *mongo.Client, articleID any) error {
-	filter := bson.M{"_id": articleID, "graph_projected_at": bson.M{"$exists": false}}
+	filter := bson.M{contract.FieldID: articleID, contract.FieldGraphProjectedAt: bson.M{"$exists": false}}
 	_, err := articleCollection(client).UpdateOne(ctx, filter, bson.M{
-		"$currentDate": bson.M{"graph_projection_queued_at": true},
+		"$currentDate": bson.M{contract.FieldGraphProjectionQueuedAt: true},
 	})
 	return err
 }
@@ -221,10 +222,10 @@ func RequeueGraphProjection(ctx context.Context, client *mongo.Client, articleID
 // revue, ou dont le contenu a changé et attend une nouvelle classification.
 func FetchRetractableArticles(ctx context.Context, client *mongo.Client, limit int64) ([]any, error) {
 	filter := bson.M{
-		"graph_projected_at": bson.M{"$exists": true},
-		"$nor":               bson.A{eligibleArticles()},
+		contract.FieldGraphProjectedAt: bson.M{"$exists": true},
+		"$nor":                         bson.A{eligibleArticles()},
 	}
-	cur, err := articleCollection(client).Find(ctx, filter, options.Find().SetLimit(limit).SetProjection(bson.M{"_id": 1}).SetSort(bson.D{{Key: "_id", Value: 1}}))
+	cur, err := articleCollection(client).Find(ctx, filter, options.Find().SetLimit(limit).SetProjection(bson.M{contract.FieldID: 1}).SetSort(bson.D{{Key: contract.FieldID, Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -246,8 +247,8 @@ func FetchRetractableArticles(ctx context.Context, client *mongo.Client, limit i
 // MarkGraphRetracted enregistre que l'article n'est plus dans le graphe. S'il
 // est redevenu éligible entre-temps, il sera simplement reprojeté.
 func MarkGraphRetracted(ctx context.Context, client *mongo.Client, articleID any) error {
-	_, err := articleCollection(client).UpdateOne(ctx, bson.M{"_id": articleID}, bson.M{
-		"$unset": bson.M{"graph_projected_at": "", "graph_projection_queued_at": ""},
+	_, err := articleCollection(client).UpdateOne(ctx, bson.M{contract.FieldID: articleID}, bson.M{
+		"$unset": bson.M{contract.FieldGraphProjectedAt: "", contract.FieldGraphProjectionQueuedAt: ""},
 	})
 	return err
 }

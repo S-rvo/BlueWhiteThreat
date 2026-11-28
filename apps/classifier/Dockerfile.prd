@@ -1,11 +1,12 @@
-# apps/classifier/Dockerfile.prd
+# apps/classifier/Dockerfile.prd — build context: repository root (shared module pkg/contract).
 FROM golang:1.24 AS builder
 
-WORKDIR /app
-COPY go.mod go.sum ./
+WORKDIR /src/apps/classifier
+COPY pkg/contract /src/pkg/contract
+COPY apps/classifier/go.mod apps/classifier/go.sum ./
 RUN go mod download
-COPY cmd ./cmd
-COPY internal ./internal
+COPY apps/classifier/cmd ./cmd
+COPY apps/classifier/internal ./internal
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o classifier ./cmd/main
 
 FROM alpine:latest
@@ -14,7 +15,7 @@ RUN adduser -D -g '' classifieruser
 USER classifieruser
 WORKDIR /home/classifieruser
 
-COPY --from=builder /app/classifier .
+COPY --from=builder /src/apps/classifier/classifier .
 
 # The model directory is mounted read-only at runtime (see docker-compose.yaml).
 # The classifier reloads MODEL_PATH each cycle without rebuilding the image.
