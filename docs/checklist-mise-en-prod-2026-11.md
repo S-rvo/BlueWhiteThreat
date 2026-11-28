@@ -170,6 +170,6 @@ un graphe incohérent.
 
 | Étape | Fait par | Date | Remarques |
 | --- | --- | --- | --- |
-| Avant déploiement | | | |
-| Déploiement | | | |
-| Après déploiement | | | |
+| Avant déploiement | Claude Code | 2026-11-28 | Dumps dans `db/backups/2026-11-28-pre-188de22/` : MongoDB 23 Mo (restauration d'essai : 17 879 articles), Neo4j 313 Mo. Aucun doublon : URL, `Article.id`, valeurs des 8 labels, `URL` → `URLIndicator`. Aucune migration à appliquer. |
+| Déploiement | Claude Code | 2026-11-28 | Images taguées `release-20261128`, construites depuis un worktree propre sur `188de22` et déclarées dans `docker-compose.override.yaml` : scraper, crawler, classifier-prd, api, parser. Anciennes images conservées. Front non déployé. |
+| Après déploiement | Claude Code | 2026-11-28 | Pas d'alerte d'index. Index MongoDB `scraper_url_unique`, `parser_extraction_queue`, `parser_projection_queue` et `parser_graph_projected` présents. 9 contraintes Neo4j `parser_*` présentes. Classifier : modèle `2026-10-17T20-52-35`, 405 articles traités. API : `/healthz` et `/readyz` en 204, `/data` avec `X-Next-Cursor`. **Bloquant** : Ollama hors délai (60 s) sur ce poste. 18 Go de RAM ne suffisent pas pour `qwen2.5:14b-instruct` avec un contexte de 32k. Le modèle charge 35 Go, dont 65 % sur CPU. Parser arrêté, aucune entité projetée, `/graph` renvoie un graphe vide. Front non vérifié. |
