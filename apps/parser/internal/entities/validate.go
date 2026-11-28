@@ -48,7 +48,7 @@ func ValidateAndClean(in Entities) Entities {
 	out.IOCs.Hashes = filter(in.IOCs.Hashes, reHash.MatchString)
 	out.IOCs.Domains = filter(in.IOCs.Domains, reDomain.MatchString)
 	out.CVEs = filter(in.CVEs, reCVE.MatchString)
-	// Malware / ThreatActors / Infrastructure : pas de format vérifiable,
-	// on les garde tels quels (validation sémantique hors scope regex).
+	out.ThreatActors = KeepPlausibleActors(in.ThreatActors)
+	// Malware / Infrastructure : pas de format vérifiable, gardés tels quels.
 	return out
 }
