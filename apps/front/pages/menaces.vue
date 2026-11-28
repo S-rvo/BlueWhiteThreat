@@ -1,89 +1,92 @@
+<script setup lang="ts">
+useHead({ title: "Menaces" });
+
+const { items, pending, error, done, load } = useArticles();
+onMounted(() => {
+  if (!items.value.length) load();
+});
+
+const dateFmt = new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium", timeStyle: "short" });
+const formatDate = (iso?: string) => (iso ? dateFmt.format(new Date(iso)) : "Date inconnue");
+
+const sources = computed(() => {
+  const counts = new Map<string, number>();
+  for (const a of items.value) {
+    const key = a.source_type || "inconnue";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+});
+const filter = ref<string | null>(null);
+const visible = computed(() =>
+  filter.value ? items.value.filter((a) => (a.source_type || "inconnue") === filter.value) : items.value,
+);
+</script>
+
 <template>
-  <div class="articles-cards">
-    <div v-for="article in articles" :key="article.id" class="card group">
-      <div class="card-content">
-        <h2 class="card-title">
-          <span>Document pertinent</span>
-        </h2>
-        <p class="card-description">{{ article.source_type || "Source non renseignée" }}</p>
-        <time v-if="article.scraped_at" :datetime="article.scraped_at">
-          {{ new Date(article.scraped_at).toLocaleString("fr-FR") }}
-        </time>
-      </div>
+  <div>
+    <PageHeader
+      eyebrow="Flux qualifié"
+      title="Menaces"
+      lead="Documents classés pertinents et validés. L'API n'expose ni le contenu brut ni l'URL source."
+    >
+      <template #actions>
+        <button type="button" class="btn-ghost" :disabled="pending" @click="load(true)">
+          <AppIcon name="refresh" :size="16" /> Actualiser
+        </button>
+      </template>
+    </PageHeader>
+
+    <div v-if="sources.length > 1" class="mb-6 flex flex-wrap gap-2" role="group" aria-label="Filtrer par source">
+      <button type="button" class="chip" :aria-pressed="filter === null" @click="filter = null">
+        Toutes <span class="text-muted">{{ items.length }}</span>
+      </button>
+      <button
+        v-for="[name, count] in sources"
+        :key="name"
+        type="button"
+        class="chip"
+        :aria-pressed="filter === name"
+        @click="filter = name"
+      >
+        {{ name }} <span class="text-muted">{{ count }}</span>
+      </button>
+    </div>
+
+    <StatusNote v-if="error && !items.length" tone="error">{{ error }}</StatusNote>
+    <StatusNote v-else-if="pending && !items.length" tone="loading">Chargement des documents…</StatusNote>
+    <StatusNote v-else-if="!items.length" tone="empty">Aucun document pertinent pour le moment.</StatusNote>
+
+    <ul v-else class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <li v-for="article in visible" :key="article.id" class="panel group p-4 transition hover:border-muted/60">
+        <div class="flex items-center justify-between gap-3">
+          <span class="rounded-md border border-line bg-ink/60 px-2 py-0.5 font-mono text-[0.7rem] uppercase tracking-wider text-bleu">
+            {{ article.source_type || "source inconnue" }}
+          </span>
+          <time v-if="article.scraped_at" :datetime="article.scraped_at" class="text-xs text-muted">
+            {{ formatDate(article.scraped_at) }}
+          </time>
+        </div>
+        <p class="mt-4 font-display text-base">Document pertinent</p>
+        <p class="mt-1 truncate font-mono text-xs text-muted" :title="article.id">ID {{ article.id }}</p>
+      </li>
+    </ul>
+
+    <div v-if="items.length" class="mt-8 flex flex-col items-center gap-2">
+      <p v-if="error" class="text-sm text-rouge" role="alert">{{ error }}</p>
+      <button v-if="!done" type="button" class="btn-ghost" :disabled="pending" @click="load()">
+        {{ pending ? "Chargement…" : "Charger plus" }}
+      </button>
+      <p v-else class="text-xs text-muted">Fin du flux · {{ items.length }} documents</p>
     </div>
   </div>
 </template>
 
-<script setup>
-import { ref, onMounted } from "vue";
-
-const articles = ref([]);
-const { public: { apiBase } } = useRuntimeConfig();
-
-const fetchArticles = async () => {
-  try {
-    const response = await fetch(`${apiBase}/data`);
-    if (!response.ok)
-      throw new Error("Erreur lors de la récupération des articles");
-    const data = await response.json();
-    articles.value = data;
-  } catch (error) {
-    console.error(error);
-  }
-};
-
-onMounted(fetchArticles);
-</script>
-
 <style scoped>
-.articles-cards {
-  display: flex;
-  gap: 2rem;
-  flex-wrap: wrap;
-  justify-content: center;
-  padding: 1rem;
+.chip {
+  @apply inline-flex items-center gap-2 rounded-full border border-line px-3 py-1 text-sm text-fg transition hover:border-muted;
 }
-
-.card {
-  background: #181818;
-  border-radius: 16px;
-  border: 2px solid #222;
-  box-shadow: 0 4px 24px 0 #000a;
-  overflow: hidden;
-  width: 100%;
-  max-width: 400px;
-  display: flex;
-  flex-direction: column;
-  transition: box-shadow 0.2s, border 0.2s, transform 0.2s;
-}
-.card:hover {
-  box-shadow: 0 8px 32px 0 #2563eb55, 0 0 0 4px #ef444455;
-  transform: translateY(-4px) scale(1.03);
-}
-.card-image {
-  width: 100%;
-  height: 180px;
-  object-fit: cover;
-}
-.card-content {
-  padding: 1rem;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-.card-title {
-  font-size: 1.25rem;
-  font-weight: bold;
-  margin: 0 0 0.5rem 0;
-  color: white;
-  letter-spacing: 1px;
-}
-.card-title span {
-  text-shadow: 0 0 6px #2563eb33, 0 0 2px #ef444433;
-}
-.card-description {
-  flex: 1;
-  color: #47e0ff;
-  margin-bottom: 1rem;
+.chip[aria-pressed="true"] {
+  @apply border-bleu bg-bleu/15;
 }
 </style>

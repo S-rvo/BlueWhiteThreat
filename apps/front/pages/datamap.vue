@@ -1,125 +1,164 @@
-<template>
-  <div class="h-screen w-screen flex flex-col bg-gray-900">
-    <h1 class="text-3xl font-bold text-white m-0 p-0 leading-none">Data Map</h1>
-    <p v-if="status" class="text-gray-300 p-2">{{ status }}</p>
-    <div ref="networkContainer" class="flex-1 bg-gray-900 overflow-hidden network-container"></div>
-  </div>
-</template>
+<script setup lang="ts">
+import "vis-network/styles/vis-network.min.css";
+import { ENTITY_KINDS, KINDS, countByKind, type EntityKind, type Graph } from "~/utils/entities";
+import type { Network } from "vis-network/peer/esm/vis-network";
 
-<script setup>
-import { ref, onMounted, nextTick } from 'vue'
-import { Network } from 'vis-network/standalone/esm/vis-network'
+useHead({ title: "DataMap" });
 
-// Graphe CTI : entités (IOC, CVE, malware…) -> articles qui les mentionnent.
-// Les bornes (articles, entités par article) sont appliquées par l'API.
-const networkContainer = ref(null)
-const status = ref('Chargement du graphe…')
-const { public: { apiBase } } = useRuntimeConfig()
+const { data: graph, status, refresh } = useGraph();
+const container = ref<HTMLElement | null>(null);
+const hidden = ref<Set<EntityKind>>(new Set());
+const selected = ref<{ kind: EntityKind; label: string; degree: number } | null>(null);
+const counts = computed(() => countByKind(graph.value?.nodes ?? []));
+let network: Network | null = null;
 
-const colors = {
-  Article: { background: '#94a3b8', border: '#64748b' },
-  IP: { background: '#38bdf8', border: '#0ea5e9' },
-  Domain: { background: '#34d399', border: '#10b981' },
-  Hash: { background: '#a78bfa', border: '#8b5cf6' },
-  CVE: { background: '#f87171', border: '#ef4444' },
-  Malware: { background: '#fb923c', border: '#f97316' },
-  ThreatActor: { background: '#facc15', border: '#eab308' },
-  Infrastructure: { background: '#f472b6', border: '#ec4899' }
+function label(kind: EntityKind, text: string) {
+  if (kind === "Article") return `article ${text.slice(-6)}`;
+  return text.length > 28 ? `${text.slice(0, 27)}…` : text;
 }
 
-const options = {
-  nodes: { shape: 'dot' },
-  edges: {
-    arrows: { to: { enabled: true, scaleFactor: 0.4 } },
-    color: '#cccccc',
-    smooth: true
-  },
-  physics: {
-    enabled: true,
-    solver: 'forceAtlas2Based',
-    forceAtlas2Based: {
-      gravitationalConstant: -50,
-      centralGravity: 0.005,
-      springLength: 230,
-      springConstant: 0.18,
-      damping: 0.4,
-      avoidOverlap: 1
+async function render(g: Graph | null | undefined) {
+  if (!container.value || !g) return;
+  // Import différé : vis-network (~500 ko) n'est chargé que sur cette page.
+  const [{ Network }, { DataSet }] = await Promise.all([
+    import("vis-network/peer/esm/vis-network"),
+    import("vis-data/peer/esm/vis-data"),
+  ]);
+  const visible = g.nodes.filter((n) => n.kind === "Article" || !hidden.value.has(n.kind));
+  const ids = new Set(visible.map((n) => n.id));
+  const degree = new Map<string, number>();
+  for (const e of g.edges) {
+    degree.set(e.from, (degree.get(e.from) ?? 0) + 1);
+    degree.set(e.to, (degree.get(e.to) ?? 0) + 1);
+  }
+  const nodes = new DataSet(
+    visible.map((n) => ({
+      id: n.id,
+      label: label(n.kind, n.label),
+      shape: "dot",
+      size: n.kind === "Article" ? 6 : 8 + Math.min(14, (degree.get(n.id) ?? 1) * 2),
+      color: {
+        background: KINDS[n.kind].color,
+        border: KINDS[n.kind].color,
+        highlight: { background: "#ffffff", border: KINDS[n.kind].color },
+        hover: { background: KINDS[n.kind].color, border: "#ffffff" },
+      },
+      font: { color: n.kind === "Article" ? "#5f6b82" : "#e8ecf3", size: n.kind === "Article" ? 9 : 12, face: "IBM Plex Mono, monospace" },
+    })),
+  );
+  const edges = new DataSet(
+    g.edges
+      .filter((e) => ids.has(e.from) && ids.has(e.to))
+      .map((e, i) => ({ id: i, from: e.from, to: e.to })),
+  );
+
+  network?.destroy();
+  network = new Network(
+    container.value,
+    { nodes, edges },
+    {
+      autoResize: true,
+      interaction: { hover: true, tooltipDelay: 120, navigationButtons: false, keyboard: false },
+      edges: { color: { color: "rgba(139,151,173,0.22)", highlight: "#4880ff", hover: "#8b97ad" }, width: 1, smooth: false },
+      physics: {
+        solver: "forceAtlas2Based",
+        forceAtlas2Based: { gravitationalConstant: -40, springLength: 80, avoidOverlap: 0.4 },
+        stabilization: { iterations: 200, updateInterval: 50 },
+      },
     },
-    stabilization: {
-      iterations: 200,
-      fit: true
-    }
-  },
-  layout: {
-    improvedLayout: true
-  },
-  interaction: {
-    dragView: true,
-    zoomView: true,
-    navigationButtons: true,
-    keyboard: true
-  }
+  );
+  network.once("stabilizationIterationsDone", () => {
+    network?.setOptions({ physics: false });
+    network?.fit({ animation: { duration: 400, easingFunction: "easeInOutQuad" } });
+  });
+  network.on("click", (params: { nodes: string[] }) => {
+    const id = params.nodes[0];
+    const node = id ? g.nodes.find((n) => n.id === id) : undefined;
+    selected.value = node ? { kind: node.kind, label: node.label, degree: degree.get(node.id) ?? 0 } : null;
+  });
 }
 
-onMounted(async () => {
-  await nextTick()
-  if (!networkContainer.value) {
-    return
-  }
+function toggle(kind: EntityKind) {
+  const next = new Set(hidden.value);
+  if (next.has(kind)) next.delete(kind);
+  else next.add(kind);
+  hidden.value = next;
+}
 
-  let graph
-  try {
-    const res = await fetch(`${apiBase}/graph`)
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`)
-    }
-    graph = await res.json()
-  } catch (error) {
-    console.error(error)
-    status.value = 'Graphe indisponible : vérifier l\'API et Neo4j.'
-    return
-  }
-  if (!graph.nodes?.length) {
-    status.value = 'Aucune entité projetée pour le moment.'
-    return
-  }
-  status.value = ''
+const fit = () => network?.fit({ animation: { duration: 400, easingFunction: "easeInOutQuad" } });
 
-  const nodes = graph.nodes.map(node => ({
-    id: node.id,
-    label: node.kind === 'Article' ? `article ${node.label.slice(-6)}` : node.label,
-    title: `${node.kind} : ${node.label}`,
-    shape: 'dot',
-    size: node.kind === 'Article' ? 6 : 10,
-    font: { size: 12, color: '#ffffff' },
-    color: colors[node.kind] || colors.Article
-  }))
-
-  const networkInstance = new Network(networkContainer.value, { nodes, edges: graph.edges }, options)
-  networkInstance.once('stabilizationIterationsDone', () => {
-    networkInstance.setOptions({ physics: false })
-    networkInstance.fit({
-      animation: { duration: 500, easingFunction: 'easeInOutQuad' }
-    })
-  })
-})
+onMounted(() => {
+  watch([graph, hidden], () => render(graph.value), { immediate: true });
+});
+onBeforeUnmount(() => {
+  network?.destroy();
+  network = null;
+});
 </script>
 
-<style scoped>
-.h-screen {
-  height: 100vh;
-}
-.w-screen {
-  width: 100vw;
-}
-.flex-1 {
-  flex: 1 1 auto;
-}
-.bg-gray-900 {
-  background-color: #111827;
-}
-.network-container {
-  min-height: 0;
-  height: 100%;
-}
-</style>
+<template>
+  <div>
+    <PageHeader
+      eyebrow="Graphe d'entités"
+      title="DataMap"
+      lead="Chaque entité est reliée aux articles qui la citent. Cliquez un nœud pour le détail, filtrez par type dans la légende."
+    >
+      <template #actions>
+        <button type="button" class="btn-ghost" @click="fit"><AppIcon name="fit" :size="16" /> Recadrer</button>
+        <button type="button" class="btn-ghost" :disabled="status === 'pending'" @click="() => refresh()">
+          <AppIcon name="refresh" :size="16" /> Actualiser
+        </button>
+      </template>
+    </PageHeader>
+
+    <div class="grid gap-4 lg:grid-cols-[1fr_16rem]">
+      <div class="panel relative h-[65vh] min-h-[420px] overflow-hidden">
+        <div ref="container" class="absolute inset-0" role="img" aria-label="Graphe des entités et des articles qui les mentionnent" />
+        <div v-if="!graph && status !== 'error'" class="absolute inset-0 grid place-items-center text-sm text-muted">
+          <StatusNote tone="loading">Chargement du graphe…</StatusNote>
+        </div>
+        <div v-else-if="status === 'error'" class="absolute inset-0 grid place-items-center p-6">
+          <StatusNote tone="error">Graphe indisponible : vérifier l'API et Neo4j.</StatusNote>
+        </div>
+        <div v-else-if="graph && !graph.nodes.length" class="absolute inset-0 grid place-items-center p-6">
+          <StatusNote tone="empty">Aucune entité projetée pour le moment.</StatusNote>
+        </div>
+      </div>
+
+      <aside class="space-y-4">
+        <div class="panel p-4">
+          <h2 class="text-sm font-medium">Légende</h2>
+          <ul class="mt-3 space-y-1">
+            <li v-for="kind in ENTITY_KINDS" :key="kind">
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition hover:bg-raised"
+                :class="hidden.has(kind) ? 'opacity-40' : ''"
+                :aria-pressed="!hidden.has(kind)"
+                @click="toggle(kind)"
+              >
+                <span class="h-2.5 w-2.5 rounded-full" :style="{ backgroundColor: KINDS[kind].color }" aria-hidden="true" />
+                {{ KINDS[kind].plural }}
+                <span class="ml-auto font-mono text-xs tabular-nums text-muted">{{ counts[kind] }}</span>
+              </button>
+            </li>
+            <li class="flex items-center gap-2 px-2 py-1.5 text-sm text-muted">
+              <span class="h-2 w-2 rounded-full" :style="{ backgroundColor: KINDS.Article.color }" aria-hidden="true" />
+              Articles
+              <span class="ml-auto font-mono text-xs tabular-nums">{{ counts.Article }}</span>
+            </li>
+          </ul>
+        </div>
+        <div class="panel p-4" aria-live="polite">
+          <h2 class="text-sm font-medium">Sélection</h2>
+          <div v-if="selected" class="mt-3 space-y-2">
+            <KindBadge :kind="selected.kind" />
+            <p class="break-all font-mono text-sm">{{ selected.label }}</p>
+            <p class="text-xs text-muted">{{ selected.degree }} lien(s) dans ce graphe</p>
+          </div>
+          <p v-else class="mt-3 text-xs text-muted">Aucun nœud sélectionné.</p>
+        </div>
+      </aside>
+    </div>
+  </div>
+</template>
