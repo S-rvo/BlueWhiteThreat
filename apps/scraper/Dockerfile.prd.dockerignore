@@ -7,3 +7,5 @@
 !apps/scraper/scripts/chromium-sanitized.sh
 !pkg/csamfilter/go.mod
 !pkg/csamfilter/*.go
+!pkg/contract/go.mod
+!pkg/contract/**/*.go

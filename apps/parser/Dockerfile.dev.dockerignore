@@ -1,0 +1,7 @@
+**
+!pkg/contract/go.mod
+!pkg/contract/**/*.go
+!apps/parser/go.mod
+!apps/parser/go.sum
+!apps/parser/cmd/**/*.go
+!apps/parser/internal/**/*.go

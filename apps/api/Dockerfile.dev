@@ -1,11 +1,13 @@
+# Build context: repository root (shared module pkg/contract).
 FROM golang:1.24
 
-WORKDIR /app
+WORKDIR /app/apps/api
 
-COPY go.mod go.sum ./
+COPY pkg/contract /app/pkg/contract
+COPY apps/api/go.mod apps/api/go.sum ./
 RUN go mod download
 
-COPY . .
+COPY apps/api/. .
 
 EXPOSE 8083
 

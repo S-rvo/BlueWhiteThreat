@@ -1,6 +1,7 @@
 FROM golang:1.24-bookworm AS build
 WORKDIR /src/apps/crawler
 COPY pkg/csamfilter /src/pkg/csamfilter
+COPY pkg/contract /src/pkg/contract
 COPY apps/crawler/go.mod apps/crawler/go.sum ./
 RUN go mod download
 COPY apps/crawler/cmd ./cmd

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/config"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -23,7 +24,7 @@ func main() {
 	}
 	db := os.Getenv("MONGO_DB")
 	if db == "" {
-		db = "BlueWhiteThreat"
+		db = contract.Database
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -67,7 +68,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":8083",
-		Handler:           newHandler(mongoStore{client.Database(db).Collection("article")}, graph),
+		Handler:           newHandler(mongoStore{client.Database(db).Collection(contract.ArticleCollection)}, graph),
 		ReadHeaderTimeout: 3 * time.Second,
 		ReadTimeout:       5 * time.Second,
 		WriteTimeout:      8 * time.Second,

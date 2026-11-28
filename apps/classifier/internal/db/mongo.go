@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -50,17 +51,17 @@ type ArticleContent struct {
 }
 
 func articleCollection(client *mongo.Client) *mongo.Collection {
-	dbName := getEnvOrDefault("MONGO_DB", "BlueWhiteThreat")
-	return client.Database(dbName).Collection("article")
+	dbName := getEnvOrDefault("MONGO_DB", contract.Database)
+	return client.Database(dbName).Collection(contract.ArticleCollection)
 }
 
 func focusMatchCollection(client *mongo.Client) *mongo.Collection {
-	dbName := getEnvOrDefault("MONGO_DB", "BlueWhiteThreat")
+	dbName := getEnvOrDefault("MONGO_DB", contract.Database)
 	return client.Database(dbName).Collection("focus_match")
 }
 
 func focusRunCollection(client *mongo.Client) *mongo.Collection {
-	dbName := getEnvOrDefault("MONGO_DB", "BlueWhiteThreat")
+	dbName := getEnvOrDefault("MONGO_DB", contract.Database)
 	return client.Database(dbName).Collection("focus_profile_run")
 }
 
@@ -171,7 +172,7 @@ func FetchFocusProfileRuns(ctx context.Context, client *mongo.Client, limit int6
 func ForEachMatchedFocusArticle(ctx context.Context, client *mongo.Client, runID string, visit func(FocusArticle) error) error {
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"run_id": runID, "matched": true}}},
-		{{Key: "$lookup", Value: bson.M{"from": "article", "localField": "article_id", "foreignField": "_id", "as": "article"}}},
+		{{Key: "$lookup", Value: bson.M{"from": contract.ArticleCollection, "localField": "article_id", "foreignField": "_id", "as": "article"}}},
 		{{Key: "$unwind", Value: "$article"}},
 		{{Key: "$project", Value: bson.M{
 			"run_id": 1, "article_id": 1, "profile_id": 1, "profile_hash": 1, "score": 1,
@@ -295,7 +296,7 @@ func FetchAllContent(ctx context.Context, client *mongo.Client) ([]ArticleConten
 // ForEachArticleContent visits article ids and content through a Mongo cursor,
 // keeping memory use bounded for corpus-wide processing.
 func ForEachArticleContent(ctx context.Context, client *mongo.Client, visit func(ArticleContent) error) error {
-	cursor, err := articleCollection(client).Find(ctx, bson.M{}, options.Find().SetProjection(bson.M{"_id": 1, "url": 1, "source": 1, "source_type": 1, "scraped_at": 1, "content": 1, "relevance": 1}))
+	cursor, err := articleCollection(client).Find(ctx, bson.M{}, options.Find().SetProjection(bson.M{contract.FieldID: 1, contract.FieldURL: 1, contract.FieldSource: 1, contract.FieldSourceType: 1, contract.FieldScrapedAt: 1, contract.FieldContent: 1, contract.FieldRelevance: 1}))
 	if err != nil {
 		return fmt.Errorf("db: fetch all content: %w", err)
 	}
@@ -324,21 +325,44 @@ const ClassificationPolicyVersion = "source-type-v4"
 // where the nested field is absent, which includes legacy relevance records.
 func classificationFilter(modelVersion string) bson.M {
 	return bson.M{"$or": bson.A{
-		bson.M{"relevance": bson.M{"$exists": false}},
-		bson.M{"relevance.model_version": bson.M{"$ne": modelVersion}},
-		bson.M{"relevance.policy_version": bson.M{"$ne": ClassificationPolicyVersion}},
+		bson.M{contract.FieldRelevance: bson.M{"$exists": false}},
+		bson.M{contract.PathRelevanceModelVersion: bson.M{"$ne": modelVersion}},
+		bson.M{contract.PathRelevancePolicyVersion: bson.M{"$ne": ClassificationPolicyVersion}},
 	}}
 }
 
-// FetchNeedingClassification returns articles that have not been scored by
-// modelVersion and the current policy. Existing results matching both versions
-// are left untouched; missing and stale results are recalculated.
-func FetchNeedingClassification(ctx context.Context, client *mongo.Client, modelVersion string) ([]ArticleContent, error) {
+// ClassificationBatchSize bounds how many articles one fetch loads in memory.
+const ClassificationBatchSize int64 = 200
+
+// classificationProjection keeps only the fields ArticleContent decodes, so a
+// batch does not drag entities or other bulky downstream fields along.
+var classificationProjection = bson.M{
+	contract.FieldURL: 1, contract.FieldSource: 1, contract.FieldSourceType: 1, contract.FieldScrapedAt: 1, contract.FieldContent: 1, contract.FieldRelevance: 1,
+}
+
+// FetchNeedingClassification returns at most limit articles that have not been
+// scored by modelVersion and the current policy, in _id order, starting after
+// the _id `after` (nil for the first batch). Existing results matching both
+// versions are left untouched; missing and stale results are recalculated.
+//
+// Paging on _id rather than re-running the filter guarantees progress even
+// for articles the caller skips (empty content), which stay matching.
+func FetchNeedingClassification(ctx context.Context, client *mongo.Client, modelVersion string, after interface{}, limit int64) ([]ArticleContent, error) {
 	if modelVersion == "" {
 		return nil, fmt.Errorf("db: model version is required to fetch articles for classification")
 	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("db: a positive batch limit is required to fetch articles for classification")
+	}
 	filter := classificationFilter(modelVersion)
-	cursor, err := articleCollection(client).Find(ctx, filter)
+	if after != nil {
+		filter = bson.M{"$and": bson.A{filter, bson.M{contract.FieldID: bson.M{"$gt": after}}}}
+	}
+	opts := options.Find().
+		SetSort(bson.D{{Key: contract.FieldID, Value: 1}}).
+		SetLimit(limit).
+		SetProjection(classificationProjection)
+	cursor, err := articleCollection(client).Find(ctx, filter, opts)
 	if err != nil {
 		return nil, fmt.Errorf("db: fetch articles for model %q: %w", modelVersion, err)
 	}
@@ -365,7 +389,7 @@ type Relevance struct {
 // relevanceUpdateFilter prevents a delayed inference from attaching a verdict
 // to a different version of the text than the one actually scored.
 func relevanceUpdateFilter(article ArticleContent) bson.M {
-	return bson.M{"_id": article.ID, "content": article.Content}
+	return bson.M{contract.FieldID: article.ID, contract.FieldContent: article.Content}
 }
 
 // UpdateRelevance writes only if the scored content is still current.
@@ -373,7 +397,7 @@ func UpdateRelevance(ctx context.Context, client *mongo.Client, article ArticleC
 	result, err := articleCollection(client).UpdateOne(
 		ctx,
 		relevanceUpdateFilter(article),
-		bson.M{"$set": bson.M{"relevance": r}},
+		bson.M{"$set": bson.M{contract.FieldRelevance: r}},
 	)
 	if err != nil {
 		return fmt.Errorf("db: update relevance for %v: %w", article.ID, err)

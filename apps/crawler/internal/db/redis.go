@@ -7,9 +7,9 @@ import (
 	"log"
 	"os"
 	"sort"
-	"strings"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 	"github.com/S-rvo/BlueWhiteThreat/pkg/csamfilter"
 	"github.com/redis/go-redis/v9"
 )
@@ -253,24 +253,10 @@ func AddURLToQueue(ctx context.Context, url string) (string, error) {
 
 }
 
+// queuePriority only orders the frontier; the rules are shared with the
+// scraper through pkg/contract.
 func queuePriority(rawURL string) int {
-	low := strings.ToLower(rawURL)
-	for _, term := range []string{"initial-access", "access-broker", "ransomware", "infostealer", "credential-dump", "data-breach", "zero-day", "0day", "botnet"} {
-		if strings.Contains(low, term) {
-			return 2
-		}
-	}
-	hasAmbiguous, hasCorroborating := false, false
-	for _, term := range []string{"access", "leak", "database", "dump", "credential"} {
-		hasAmbiguous = hasAmbiguous || strings.Contains(low, term)
-	}
-	for _, term := range []string{"broker", "breach", "ransom", "malware", "stealer", "exploit", "victim", "corporate", "rdp", "vpn"} {
-		hasCorroborating = hasCorroborating || strings.Contains(low, term)
-	}
-	if hasAmbiguous && hasCorroborating {
-		return 1
-	}
-	return 0
+	return contract.URLPriority(rawURL)
 }
 
 func selectPriorityURL(urls []string) string {

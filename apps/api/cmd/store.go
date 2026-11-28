@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/S-rvo/BlueWhiteThreat/pkg/contract"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -19,9 +20,9 @@ func (s mongoStore) list(ctx context.Context, after primitive.ObjectID, limit in
 	if !after.IsZero() {
 		id["$lt"] = after
 	}
-	cursor, err := s.articles.Find(ctx, bson.M{"_id": id, "relevance.relevant": true},
-		options.Find().SetSort(bson.D{{Key: "_id", Value: -1}}).SetLimit(limit).SetMaxTime(3*time.Second).
-			SetProjection(bson.M{"_id": 1, "source_type": 1, "scraped_at": 1}))
+	cursor, err := s.articles.Find(ctx, bson.M{contract.FieldID: id, contract.PathRelevanceRelevant: true},
+		options.Find().SetSort(bson.D{{Key: contract.FieldID, Value: -1}}).SetLimit(limit).SetMaxTime(3*time.Second).
+			SetProjection(bson.M{contract.FieldID: 1, contract.FieldSourceType: 1, contract.FieldScrapedAt: 1}))
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +33,7 @@ func (s mongoStore) list(ctx context.Context, after primitive.ObjectID, limit in
 
 func (s mongoStore) ready(ctx context.Context) error {
 	// Verify collection read permission as well as connectivity, without returning any data.
-	err := s.articles.FindOne(ctx, bson.M{}, options.FindOne().SetProjection(bson.M{"_id": 1}).SetMaxTime(2*time.Second)).Err()
+	err := s.articles.FindOne(ctx, bson.M{}, options.FindOne().SetProjection(bson.M{contract.FieldID: 1}).SetMaxTime(2*time.Second)).Err()
 	if err == mongo.ErrNoDocuments {
 		return nil
 	}
@@ -52,19 +53,19 @@ type pipelineMetrics struct {
 func (s mongoStore) metrics(ctx context.Context) (pipelineMetrics, error) {
 	sum := func(condition any) bson.M { return bson.M{"$sum": bson.M{"$cond": bson.A{condition, 1, 0}}} }
 	isType := func(field, kind string) bson.M { return bson.M{"$eq": bson.A{bson.M{"$type": field}, kind}} }
-	relevant := bson.M{"$eq": bson.A{"$relevance.relevant", true}}
-	review := bson.M{"$eq": bson.A{bson.M{"$ifNull": bson.A{"$relevance.needs_review", false}}, true}}
+	relevant := bson.M{"$eq": bson.A{"$" + contract.PathRelevanceRelevant, true}}
+	review := bson.M{"$eq": bson.A{bson.M{"$ifNull": bson.A{"$" + contract.PathRelevanceNeedsReview, false}}, true}}
 	eligible := bson.M{"$and": bson.A{relevant, bson.M{"$not": bson.A{review}}}}
-	parsed := isType("$entities", "object")
+	parsed := isType("$"+contract.FieldEntities, "object")
 	cursor, err := s.articles.Aggregate(ctx, mongo.Pipeline{{{Key: "$group", Value: bson.M{
 		"_id":                nil,
 		"articles":           bson.M{"$sum": 1},
-		"classified":         sum(isType("$relevance.relevant", "bool")),
+		"classified":         sum(isType("$"+contract.PathRelevanceRelevant, "bool")),
 		"relevant":           sum(relevant),
 		"review_pending":     sum(review),
-		"extraction_pending": sum(bson.M{"$and": bson.A{eligible, isType("$entities", "missing")}}),
-		"projection_pending": sum(bson.M{"$and": bson.A{eligible, parsed, isType("$graph_projected_at", "missing")}}),
-		"latest_scrape":      bson.M{"$max": bson.M{"$cond": bson.A{isType("$scraped_at", "date"), "$scraped_at", nil}}},
+		"extraction_pending": sum(bson.M{"$and": bson.A{eligible, isType("$"+contract.FieldEntities, "missing")}}),
+		"projection_pending": sum(bson.M{"$and": bson.A{eligible, parsed, isType("$"+contract.FieldGraphProjectedAt, "missing")}}),
+		"latest_scrape":      bson.M{"$max": bson.M{"$cond": bson.A{isType("$"+contract.FieldScrapedAt, "date"), "$" + contract.FieldScrapedAt, nil}}},
 	}}}}, options.Aggregate().SetMaxTime(3*time.Second))
 	if err != nil {
 		return pipelineMetrics{}, err

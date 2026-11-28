@@ -3,6 +3,7 @@ module github.com/S-rvo/BlueWhiteThreat/apps/classifier
 go 1.24
 
 require (
+	github.com/S-rvo/BlueWhiteThreat/pkg/contract v0.0.0
 	github.com/joho/godotenv v1.5.1
 	go.mongodb.org/mongo-driver v1.17.4
 )
@@ -19,3 +20,5 @@ require (
 	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/text v0.17.0 // indirect
 )
+
+replace github.com/S-rvo/BlueWhiteThreat/pkg/contract => ../../pkg/contract

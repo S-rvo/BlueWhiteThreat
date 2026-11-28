@@ -40,6 +40,12 @@ func TestSmokeExtractAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.CloseNeo4j()
+	if err := db.EnsureGraphSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.EnsureIndexes(ctx, client); err != nil {
+		t.Fatal(err)
+	}
 	graph, err := neo4j.NewDriverWithContext(uri, neo4j.BasicAuth("neo4j", password, ""))
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +102,7 @@ func TestSmokeExtractAndReplay(t *testing.T) {
 	if len(doc.Entities.IOCs.IPs) != 1 || doc.Entities.IOCs.IPs[0] != "192.0.2.42" {
 		t.Fatalf("validated IOC missing: %v", doc.Entities.IOCs.IPs)
 	}
-	projectPending(ctx, client, db.SaveEntityGraph)
+	projectPending(ctx, client, db.ReplaceEntityGraph)
 	if n, err := coll.CountDocuments(ctx, bson.M{"_id": doc.ID, "graph_projected_at": bson.M{"$type": "date"}}); err != nil || n != 1 {
 		t.Fatalf("first projection did not complete: count=%d err=%v", n, err)
 	}
@@ -104,7 +110,7 @@ func TestSmokeExtractAndReplay(t *testing.T) {
 	if _, err := coll.UpdateByID(ctx, doc.ID, bson.M{"$unset": bson.M{"graph_projected_at": ""}}); err != nil {
 		t.Fatal(err)
 	}
-	projectPending(ctx, client, db.SaveEntityGraph)
+	projectPending(ctx, client, db.ReplaceEntityGraph)
 	extractPending(ctx, client, primary, nil)
 	if calls.Load() != 1 {
 		t.Fatalf("unexpected extraction calls: %d", calls.Load())
@@ -118,7 +124,40 @@ func TestSmokeExtractAndReplay(t *testing.T) {
 	}
 	row := result.Records[0].AsMap()
 	if row["edges"] != int64(1) || fmt.Sprint(row["values"]) != "[192.0.2.42]" ||
-		fmt.Sprint(row["articles"]) != "["+fmt.Sprint(doc.ID)+"]" {
+		fmt.Sprint(row["articles"]) != "["+doc.ID.Hex()+"]" {
 		t.Fatalf("incorrect graph provenance or duplicate after replay: %v", row)
+	}
+
+	// Rétractation : un second article partage l'IOC puis perd son éligibilité.
+	// Son noeud Article doit disparaître, l'IOC partagé doit rester rattaché au
+	// premier article. Le document est supprimé ensuite pour ne pas perturber
+	// les étapes suivantes du smoke.
+	sibling := primitive.NewObjectID()
+	if _, err := coll.InsertOne(ctx, bson.M{"_id": sibling, "url": "https://pipeline.invalid/retracted",
+		"content": "Sibling article mentioning 192.0.2.42.", "relevance": bson.M{"relevant": true}}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = coll.DeleteOne(context.Background(), bson.M{"_id": sibling}) }()
+	extractPending(ctx, client, primary, nil)
+	projectPending(ctx, client, db.ReplaceEntityGraph)
+	if _, err := coll.UpdateByID(ctx, sibling, bson.M{"$set": bson.M{"relevance.relevant": false}}); err != nil {
+		t.Fatal(err)
+	}
+	retractStale(ctx, client, db.RetractEntityGraph)
+	if n, err := coll.CountDocuments(ctx, bson.M{"_id": sibling, "graph_projected_at": bson.M{"$exists": true}}); err != nil || n != 0 {
+		t.Fatalf("retraction not acknowledged in Mongo: count=%d err=%v", n, err)
+	}
+	result, err = neo4j.ExecuteQuery(ctx, graph, `
+		OPTIONAL MATCH (gone:Article {id: $sibling})
+		WITH count(gone) AS gone
+		MATCH (ip:IP {value: '192.0.2.42'})-[:MENTIONED_IN]->(a:Article)
+		RETURN gone, collect(a.id) AS articles`,
+		map[string]any{"sibling": sibling.Hex()}, neo4j.EagerResultTransformer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row = result.Records[0].AsMap()
+	if row["gone"] != int64(0) || fmt.Sprint(row["articles"]) != "["+doc.ID.Hex()+"]" {
+		t.Fatalf("retraction removed too much or too little: %v", row)
 	}
 }
