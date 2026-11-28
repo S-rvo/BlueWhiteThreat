@@ -29,8 +29,28 @@ func TestKeepGrounded_DropsIndicatorsAbsentFromText(t *testing.T) {
 	check("domains", out.IOCs.Domains, []string{"market.onion"})
 	check("urls", out.IOCs.URLs, []string{"http://abc.onion"})
 	check("cves", out.CVEs, []string{"CVE-2024-1234"})
-	check("malware", out.Malware, []string{"NotInText"})
-	check("threat_actors", out.ThreatActors, []string{"Some Group"})
+	check("malware", out.Malware, []string{})
+	check("threat_actors", out.ThreatActors, []string{})
+}
+
+func TestKeepGrounded_DropsNamesAbsentFromText(t *testing.T) {
+	text := "Le groupe APT 28 (Fancy-Bear) diffuse LockBit 3.0 via un serveur Cobalt Strike hébergé chez Bulletproof Host."
+	in := Entities{}
+	in.Malware = []string{"lockbit-3.0", "Emotet", "  ", "!!"}
+	in.ThreatActors = []string{"APT28", "Fancy Bear", "Lazarus Group"}
+	in.Infrastructure = []string{"Cobalt Strike", "bulletproof host", "AWS"}
+
+	out := KeepGrounded(in, text)
+
+	for name, pair := range map[string][2][]string{
+		"malware":        {out.Malware, {"lockbit-3.0"}},
+		"threat_actors":  {out.ThreatActors, {"APT28", "Fancy Bear"}},
+		"infrastructure": {out.Infrastructure, {"Cobalt Strike", "bulletproof host"}},
+	} {
+		if !reflect.DeepEqual(pair[0], pair[1]) {
+			t.Errorf("%s: got %v, want %v", name, pair[0], pair[1])
+		}
+	}
 }
 
 func TestLooksLikeURL(t *testing.T) {
