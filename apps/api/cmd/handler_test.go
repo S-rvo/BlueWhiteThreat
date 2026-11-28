@@ -33,7 +33,7 @@ func (s *fakeStore) metrics(context.Context) (pipelineMetrics, error) {
 func TestBoundedDataAndCORS(t *testing.T) {
 	first, second, cursor := primitive.NewObjectID(), primitive.NewObjectID(), primitive.NewObjectID()
 	store := &fakeStore{rows: []summary{{ID: first}, {ID: second}}}
-	handler := newHandler(store)
+	handler := newHandler(store, unavailableGraph{})
 	req := httptest.NewRequest(http.MethodGet, "/data?limit=1&cursor="+cursor.Hex(), nil)
 	req.Header.Set("Origin", "http://localhost:8080")
 	w := httptest.NewRecorder()
@@ -69,7 +69,7 @@ func TestBoundedDataAndCORS(t *testing.T) {
 
 func TestHealthAndErrors(t *testing.T) {
 	store := &fakeStore{failure: errors.New("driver decision: secret details")}
-	handler := newHandler(store)
+	handler := newHandler(store, unavailableGraph{})
 	for path, expected := range map[string]int{"/data": 503, "/readyz": 503, "/metrics": 503, "/healthz": 204} {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))

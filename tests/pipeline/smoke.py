@@ -110,6 +110,7 @@ def main():
                 f"mongodb://smoke_api:{api_password}@127.0.0.1:{mongo_port}/BlueWhiteThreat"
             )
             go_test("api", "./cmd", "^TestSmokeMongoContract$")
+            go_test("api", "./cmd", "^TestSmokeGraphContract$")
         finally:
             for service in reversed(started):
                 # Only touch containers carrying this invocation's unguessable label.

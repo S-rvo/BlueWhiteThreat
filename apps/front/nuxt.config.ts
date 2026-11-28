@@ -10,6 +10,13 @@ export default defineNuxtConfig({
 
   modules: ["@nuxt/eslint", "@nuxt/fonts", "@nuxt/icon"],
 
+  // URL de l'API vue par le navigateur ; surchargeable via NUXT_PUBLIC_API_BASE.
+  runtimeConfig: {
+    public: {
+      apiBase: "http://localhost:8083",
+    },
+  },
+
   devServer: {
     host: "0.0.0.0", // Écoute sur toutes les interfaces
     port: 8080,

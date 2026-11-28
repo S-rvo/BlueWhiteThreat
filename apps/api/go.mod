@@ -4,6 +4,7 @@ go 1.24.4
 
 require (
 	github.com/S-rvo/BlueWhiteThreat/pkg/contract v0.0.0
+	github.com/neo4j/neo4j-go-driver/v5 v5.28.5
 	go.mongodb.org/mongo-driver v1.17.4
 )
 
