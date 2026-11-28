@@ -1,12 +1,17 @@
 package entities
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // KeepGrounded retire les indicateurs (IP, hash, domaine, URL, CVE) absents du
 // texte source. Un LLM local invente parfois des URL plausibles ou recopie des
 // fragments de JSON ; ces valeurs ne doivent pas entrer dans le graphe.
 // La comparaison ignore la casse et un éventuel « / » final. Malware, acteurs
-// et infrastructure sont des noms libres, laissés tels quels.
+// et infrastructure sont des noms libres : ils sont comparés sur leurs seules
+// lettres et chiffres, pour accepter « APT 28 » face à « APT28 » ou
+// « LockBit-3.0 » face à « LockBit 3.0 ».
 func KeepGrounded(in Entities, text string) Entities {
 	lower := strings.ToLower(text)
 	inText := func(v string) bool {
@@ -26,7 +31,27 @@ func KeepGrounded(in Entities, text string) Entities {
 	out.IOCs.Domains = filter(in.IOCs.Domains, inText)
 	out.IOCs.URLs = filter(in.IOCs.URLs, func(v string) bool { return looksLikeURL(v) && inText(v) })
 	out.CVEs = filter(in.CVEs, inText)
+	compact := alnum(text)
+	nameInText := func(v string) bool {
+		v = alnum(v)
+		return v != "" && strings.Contains(compact, v)
+	}
+	out.Malware = filter(in.Malware, nameInText)
+	out.ThreatActors = filter(in.ThreatActors, nameInText)
+	out.Infrastructure = filter(in.Infrastructure, nameInText)
 	return out
+}
+
+// alnum ne garde que les lettres (en minuscules) et les chiffres.
+func alnum(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
 }
 
 // looksLikeURL écarte les adresses e-mail et les fragments sans hôte

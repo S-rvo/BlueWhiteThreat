@@ -41,7 +41,7 @@ func TestExtractWithFallback_EscalatesOnPrimaryError(t *testing.T) {
 	fallback := &fakeExtractor{}
 	fallback.result.Malware = []string{"Emotet"}
 
-	out, err := ExtractWithFallback(context.Background(), primary, fallback, "text")
+	out, err := ExtractWithFallback(context.Background(), primary, fallback, "campagne Emotet")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
